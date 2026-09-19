@@ -83,6 +83,49 @@
   color: var(--error-text);
 }
 
+.list-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  font-size: 14px;
+}
+
+.list-controls label {
+  color: var(--text-h);
+}
+
+.list-controls input,
+.list-controls select,
+.list-controls button {
+  font: inherit;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+}
+
+.list-controls input {
+  min-width: 200px;
+}
+
+.list-controls button {
+  cursor: pointer;
+}
+
+.list-controls button:disabled {
+  color: var(--text);
+  cursor: default;
+  opacity: 0.6;
+}
+
+.result-count {
+  margin-top: 12px;
+  font-size: 14px;
+}
+
 .table-wrapper {
   margin-top: 16px;
   overflow-x: auto;

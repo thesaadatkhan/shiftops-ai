@@ -14,6 +14,7 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 - A FastAPI backend with two read-only endpoints: `GET /api/health` and `GET /api/employees`.
 - Frontend/backend integration: when the Dashboard opens it calls `GET /api/health` once and displays the resulting connection status (loading, connected, or unavailable); the Employees section loads the workforce from `GET /api/employees` with the same loading and error handling. CORS is configured on the backend for the local frontend origin.
 - An Employees view listing one summary row per worker: employee ID, name, student type, course count, class-meeting count, weekly class hours, weekly hour limit, and a count of approved leave periods. The individual class meetings, shift preferences and leave periods behind those figures are stored in the database but are not yet displayed anywhere in the interface.
+- Search and sorting on the Employees list: case-insensitive search across worker name and employee ID, sorting by employee ID, name or student type in either direction, a count of matching workers, a no-results message, and a Reset control. Search and sorting combine. Both run in the browser over the already-loaded list, so they do not query the backend.
 - A SQLite database holding the synthetic dataset, created and populated by scripts in `backend/` so it can be rebuilt from scratch at any time. It stores employees, courses, class meetings, shifts, shift preferences, approved leave, and assignments.
 - Synthetic data for the five residence halls: 30 student workers with class schedules, shift preferences and approved leave records, plus the 99 required weekly shifts derived from the halls' operating hours. The derivation is checked by a script that confirms the 489 weekly student-coverage hours with no gaps and no double coverage.
 
@@ -24,7 +25,7 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 - Workforce capacity analytics
 - The natural-language AI assistant
 - Cloud deployment
-- Employee search and sorting, active/inactive filters, and add/edit/deactivate/reactivate/delete controls. These are planned for Phase 5B, not implemented. Deactivation preserves history; permanent deletion will be restricted to workers without assignments.
+- The rest of employee management: active/inactive filtering and add/edit/deactivate/reactivate/delete controls. These are planned for Phase 5B, not implemented — only its search and sorting have shipped so far. The application currently has no endpoints that change data. Deactivation will preserve history; permanent deletion will be restricted to workers without assignments.
 
 ## Running Locally
 
