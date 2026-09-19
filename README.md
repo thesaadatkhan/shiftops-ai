@@ -10,12 +10,12 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 
 **Implemented:**
 
-- A static React application shell (Vite + JavaScript) with sidebar navigation covering all planned sections (Dashboard, Employees, Schedule, Coverage, Generate Schedule, Workforce Planning, AI Assistant). Each section currently shows placeholder content only.
+- A static React application shell (Vite + JavaScript) with sidebar navigation covering all planned sections (Dashboard, Employees, Schedule, Coverage, Generate Schedule, Workforce Planning, AI Assistant). Every section except Dashboard currently shows placeholder content only.
 - A FastAPI backend with a single working endpoint, `GET /api/health`, used to verify the backend runs correctly.
+- Basic frontend/backend integration: when the Dashboard opens, it calls `GET /api/health` once and displays the resulting backend connection status (loading, connected, or unavailable), with CORS configured on the backend for the local frontend origin.
 
 **Not yet implemented:**
 
-- Frontend/backend integration (the React app does not call the backend yet)
 - A structured database and synthetic workforce data
 - Coverage and shift-eligibility logic
 - Constraint-based schedule optimization
@@ -42,7 +42,7 @@ The following are goals for the finished application; none are implemented yet.
 
 - **Frontend:** React, JavaScript, Vite
 - **Backend:** Python, FastAPI, Uvicorn
-- **API:** REST/JSON (implemented on the backend; not yet consumed by the frontend)
+- **API:** REST/JSON (the frontend calls the backend's health endpoint; no data-bearing routes yet)
 - **Version Control:** Git and GitHub
 
 **Planned:**

@@ -59,3 +59,26 @@
     padding: 20px;
   }
 }
+
+.backend-status {
+  display: inline-block;
+  margin-top: 16px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.backend-status-loading {
+  background: var(--code-bg);
+  color: var(--text);
+}
+
+.backend-status-success {
+  background: var(--success-bg);
+  color: var(--success-text);
+}
+
+.backend-status-error {
+  background: var(--error-bg);
+  color: var(--error-text);
+}

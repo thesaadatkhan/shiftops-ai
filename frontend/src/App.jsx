@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import './App.css'
+import BackendStatus from './BackendStatus.jsx'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -73,6 +74,7 @@ function App() {
       <main className="main-content">
         <h2>{content.title}</h2>
         <p>{content.description}</p>
+        {activeSection === 'dashboard' && <BackendStatus />}
       </main>
     </>
   )
