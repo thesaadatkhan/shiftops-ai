@@ -4,6 +4,10 @@ __pycache__/
 .venv/
 venv/
 
+# Generated SQLite database (recreate with: python database.py && python seed.py)
+*.db
+*.db-journal
+
 # Environment variables / secrets
 .env
 .env.*

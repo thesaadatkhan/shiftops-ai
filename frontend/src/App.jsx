@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import './App.css'
 import BackendStatus from './BackendStatus.jsx'
+import EmployeeList from './EmployeeList.jsx'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -19,7 +20,7 @@ const SECTION_CONTENT = {
   },
   employees: {
     title: 'Employees',
-    description: 'Worker details will appear here.',
+    description: 'Synthetic student workers, their course loads, and approved leave.',
   },
   schedule: {
     title: 'Schedule',
@@ -75,6 +76,7 @@ function App() {
         <h2>{content.title}</h2>
         <p>{content.description}</p>
         {activeSection === 'dashboard' && <BackendStatus />}
+        {activeSection === 'employees' && <EmployeeList />}
       </main>
     </>
   )

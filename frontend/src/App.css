@@ -82,3 +82,26 @@
   background: var(--error-bg);
   color: var(--error-text);
 }
+
+.table-wrapper {
+  margin-top: 16px;
+  overflow-x: auto;
+}
+
+.data-table {
+  border-collapse: collapse;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.data-table th,
+.data-table td {
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.data-table th {
+  color: var(--text-h);
+  font-weight: 600;
+}
