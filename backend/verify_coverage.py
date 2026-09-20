@@ -7,8 +7,8 @@ Checks, per hall and overall:
 3. Shifts leave no gap inside a required student-coverage period.
 4. No shift covers a period that is not required (professional hours or
    hours when the desk is closed).
-5. Every shift requires exactly one worker, and none crosses midnight
-   without carrying the correct end date.
+5. Every shift requires exactly one worker, lasts a positive whole number
+   of hours, and carries the correct end date when it crosses midnight.
 
 Run with:  python verify_coverage.py
 Exits non-zero if any check fails.
@@ -18,6 +18,7 @@ import sys
 from datetime import datetime
 
 from database import get_connection
+from reporting import InvalidWorkDuration, shift_duration_hours
 from synthetic_data import (
     ALL_HALLS,
     hall_open_periods,
@@ -96,8 +97,11 @@ def main():
         for start, end, required_staff in shifts:
             if required_staff != 1:
                 failures.append(f"{hall}: shift at {start} requires {required_staff} workers")
-            if end <= start:
-                failures.append(f"{hall}: shift at {start} ends before it starts")
+            try:
+                # Work shifts must be a positive whole number of hours.
+                shift_duration_hours(start, end, label=f"at {hall}")
+            except InvalidWorkDuration as error:
+                failures.append(f"{hall}: {error}")
 
         crossing = sum(1 for start, end, _ in shifts if start.date() != end.date())
         print(

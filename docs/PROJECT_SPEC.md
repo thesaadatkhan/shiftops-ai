@@ -113,6 +113,14 @@ Store class schedules, shift preferences, and approved leave separately. Being o
 
 Shift preferences and approved leave periods are stored. A request/approval interface, automated enforcement of the notice rule, pending-request tracking, and shift-change workflows are not implemented and are not required by the current data model. These are fictional rules, not claims about an actual institution's policies.
 
+### Work Shift Durations
+
+Every work shift must last a positive whole number of hours. Zero-length, negative, and fractional durations are invalid stored data. The system must reject them rather than rounding or truncating them into valid-looking values, because a silently corrected duration produces a capacity figure that is wrong without appearing wrong.
+
+Because individual shifts are whole hours, each worker's assigned hours and remaining weekly capacity are also whole hours.
+
+This rule governs **work** only. Class meetings are not work and legitimately last 75 minutes (undergraduate) or 165 minutes (master's). The workforce-wide figure of 16.3 hours per worker per week remains valid: it is an average across 30 workers, not an individual shift or assignment length.
+
 ### Assignment Conflicts
 
 A worker cannot be assigned to overlapping shifts.
@@ -177,6 +185,8 @@ Potential metrics include:
 - Unfilled shifts
 - Coverage percentage
 
+When week selection is implemented, weekly dashboard metrics should use the same reporting week as Employees and Schedule. This alignment is planned for Phase 8.
+
 ### Employees
 
 Allow supervisors to view synthetic workers and relevant scheduling information, including:
@@ -188,18 +198,25 @@ Allow supervisors to view synthetic workers and relevant scheduling information,
 - Class schedules
 - Existing assignments
 
-Employee management is planned scope (Phase 5B), not yet implemented:
+Implemented list controls (Phase 5B):
 
 - Search by employee name or employee code, ignoring letter case.
-- Sort by name, employee code, or student type, ascending or descending, with a stable employee-code tie-breaker.
+- Sort by name, employee code, student type, course count, weekly class hours, or remaining weekly capacity, ascending or descending, with a stable employee-code tie-breaker. Numeric columns sort by value, so 10 follows 9 rather than preceding it.
+- Filter by Active, Inactive, or All, showing active workers by default. Filtering changes only which rows are displayed; it does not alter status, eligibility, or records.
+- Show the number of matching workers, a message when nothing matches, and a control that resets every list control at once.
+
+Remaining employee management is planned scope (Phase 5B), not yet implemented:
+
 - Add and edit worker details through forms backed by REST endpoints and SQLite. Keep the employee's internal identity stable when editing details and validate required fields and unique employee codes on the backend.
 - Deactivate workers without deleting their classes, preferences, leave, or assignment history. Inactive workers must be excluded from new assignments and future schedule generation. Existing assignments must never silently disappear; if future assignments exist, block deactivation until they are explicitly resolved.
-- Allow reactivation. Show active workers by default with an Active/Inactive/All filter so inactive records remain discoverable. Filtering hides rows from the view; it does not change eligibility or delete records.
+- Allow reactivation. (The Active/Inactive/All filter itself is implemented; the actions that change a worker's status are not.)
 - Permanently delete an employee only after explicit confirmation and only when no assignment references that employee. Remove dependent class, preference, and leave records transactionally; preserve shared shifts. Workers with assignment history should be deactivated instead.
 
 The database is the source of truth after explicit demo initialization. Normal startup must not seed or overwrite workers, and later seeding must not resurrect intentionally deleted demo employees. Provide an empty-workforce path for entering fictional workers through the interface. The 30-worker count, student-type mix, and course-load conventions constrain demo generation, not user-created records. The synthetic-only data policy and 20-hour weekly limit remain unchanged.
 
 Phase 5B initially covers list controls and worker identity/status management. Editing class schedules, shift preferences, and approved leave through the interface is a separate follow-up; no leave approval workflow is implied.
+
+Employees is a worker-management and summary view, not a full shift calendar. A simple reporting-week selector (previous/next week or a date picker) is planned alongside the Schedule interface in Phase 7. It will update assigned hours and remaining weekly capacity for the selected week; it must not change stored worker identity, student type, active status, or records. The currently displayed fixed sample week is sufficient for Phase 5B.
 
 ### Schedule
 
@@ -209,6 +226,8 @@ Display generated or existing assignments by:
 - Date
 - Time
 - Employee
+
+The full shift calendar/timetable belongs in Schedule, showing assignments and uncovered shifts for the selected week. Employees and Schedule should share one reporting-week selection so moving between them preserves the reporting period. Backend requests must use that same week and return clear reporting dates, retaining D025's start-week accounting for cross-midnight assignments. Week selection changes the view and calculations; it does not create shifts, generate assignments, or edit data. Implement this in Phase 7, not during Phase 5B.
 
 ### Coverage
 
@@ -240,6 +259,18 @@ The application should distinguish between:
 2. Actual staffing feasibility under class schedules, approved leave, and other hard scheduling constraints
 
 For example, `ceil(required_hours / weekly_hour_limit)` provides a theoretical lower bound, but does not prove that a feasible schedule exists.
+
+#### Remaining Weekly Capacity
+
+Remaining weekly capacity for a worker is defined as:
+
+`max(0, weekly_hour_limit - assigned hours for the selected week)`
+
+Assigned hours are calculated from stored assignments and the start/end date-times of the shifts they reference. Because work shifts are whole-hour blocks, assigned hours and remaining capacity are whole hours; invalid stored durations cause a controlled API error rather than an approximate figure. A shift counts entirely towards the week containing its start, so a shift running from Sunday night into Monday morning contributes all of its hours to the week the Sunday belongs to, and none to the following week. Hours are never split across two weeks.
+
+This figure is theoretical unused capacity only. It is explicitly **not** shift eligibility and **not** personal availability. Class hours and approved leave are **not** subtracted from the weekly limit, because neither consumes any part of a worker's 20 scheduled work hours. A worker may show remaining capacity and still be ineligible for a particular shift because of a class conflict, approved leave, an assignment conflict, or the weekly hour limit itself.
+
+Active status is a separate concept from capacity. An inactive worker may still show remaining capacity; excluding inactive workers from scheduling is a matter of their status, not their capacity.
 
 ### AI Assistant
 

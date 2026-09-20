@@ -1,7 +1,16 @@
-from fastapi import FastAPI
+from datetime import timedelta
+
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import ensure_schema, get_connection
+from reporting import (
+    InvalidWorkDuration,
+    assigned_hours_by_employee,
+    minutes_between,
+    remaining_capacity_hours,
+)
+from synthetic_data import WEEK_START, WEEK_END
 
 app = FastAPI()
 
@@ -15,12 +24,6 @@ app.add_middleware(
 )
 
 ensure_schema()
-
-
-def minutes_between(start_time, end_time):
-    start_hour, start_minute = (int(part) for part in start_time.split(":"))
-    end_hour, end_minute = (int(part) for part in end_time.split(":"))
-    return (end_hour * 60 + end_minute) - (start_hour * 60 + start_minute)
 
 
 @app.get("/api/health")
@@ -40,6 +43,7 @@ def list_employees():
                 e.full_name,
                 e.student_type,
                 e.weekly_hour_limit,
+                e.is_active,
                 (SELECT COUNT(*) FROM courses c
                   WHERE c.employee_id = e.id) AS course_count,
                 (SELECT COUNT(*) FROM approved_leave l
@@ -56,6 +60,16 @@ def list_employees():
             JOIN courses c ON c.id = m.course_id
             """
         ).fetchall()
+
+        try:
+            assigned_hours = assigned_hours_by_employee(connection)
+        except InvalidWorkDuration as error:
+            # Stored shift data violates the whole-hour work rule. Report it
+            # instead of returning a capacity figure derived from bad data.
+            raise HTTPException(
+                status_code=500,
+                detail=f"Stored shift data is invalid: {error}",
+            ) from error
     finally:
         connection.close()
 
@@ -68,16 +82,33 @@ def list_employees():
             meeting["start_time"], meeting["end_time"]
         )
 
-    return [
-        {
+    def employee_payload(employee):
+        assigned = assigned_hours.get(employee["id"], 0)
+        # Theoretical unused work capacity only. Class hours and approved
+        # leave are NOT subtracted: this is not an eligibility calculation.
+        remaining = remaining_capacity_hours(employee["weekly_hour_limit"], assigned)
+        return {
             "employee_code": employee["employee_code"],
             "full_name": employee["full_name"],
             "student_type": employee["student_type"],
+            "is_active": bool(employee["is_active"]),
             "weekly_hour_limit": employee["weekly_hour_limit"],
             "course_count": employee["course_count"],
             "class_meeting_count": meeting_counts.get(employee["id"], 0),
             "weekly_class_hours": round(class_minutes.get(employee["id"], 0) / 60, 2),
             "approved_leave_count": employee["approved_leave_count"],
+            # Whole hours: work shifts are whole-hour blocks, so these
+            # totals never need rounding.
+            "assigned_hours": assigned,
+            "remaining_capacity_hours": remaining,
         }
-        for employee in employees
-    ]
+
+    return {
+        # The reporting week the capacity figures describe. Fixed to the
+        # sample week for now; it becomes a request parameter once schedules
+        # span more than one week.
+        "week_start": WEEK_START.strftime("%Y-%m-%d"),
+        # WEEK_END is the exclusive Monday boundary; show the Sunday instead.
+        "week_end": (WEEK_END - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "employees": [employee_payload(employee) for employee in employees],
+    }

@@ -14,7 +14,8 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 - A FastAPI backend with two read-only endpoints: `GET /api/health` and `GET /api/employees`.
 - Frontend/backend integration: when the Dashboard opens it calls `GET /api/health` once and displays the resulting connection status (loading, connected, or unavailable); the Employees section loads the workforce from `GET /api/employees` with the same loading and error handling. CORS is configured on the backend for the local frontend origin.
 - An Employees view listing one summary row per worker: employee ID, name, student type, course count, class-meeting count, weekly class hours, weekly hour limit, and a count of approved leave periods. The individual class meetings, shift preferences and leave periods behind those figures are stored in the database but are not yet displayed anywhere in the interface.
-- Search and sorting on the Employees list: case-insensitive search across worker name and employee ID, sorting by employee ID, name or student type in either direction, a count of matching workers, a no-results message, and a Reset control. Search and sorting combine. Both run in the browser over the already-loaded list, so they do not query the backend.
+- List controls on the Employees view: case-insensitive search across worker name and employee ID; sorting by employee ID, name, student type, course count, weekly class hours or remaining capacity, in either direction, with numeric columns sorted by value; an Active / Inactive / All status filter defaulting to Active; a count of matching workers; a no-results message; and a Reset control. Search, filtering and sorting all combine. They run in the browser over the already-loaded list rather than querying the backend.
+- Remaining weekly capacity per worker, calculated in the backend as `max(0, weekly hour limit - assigned hours for the reporting week)`. Work shifts must be a positive whole number of hours, so assigned hours and remaining capacity are whole hours; a stored shift that breaks that rule produces a clear API error instead of an approximate figure. (Class meetings are not work and keep their 75- and 165-minute lengths.) A shift counts entirely towards the week containing its start, so a Sunday-night-into-Monday shift is not split across two weeks. This is theoretical unused capacity, not shift eligibility or availability: class hours and approved leave are deliberately not subtracted. With no assignments stored yet, every worker shows the full 20 hours.
 - A SQLite database holding the synthetic dataset, created and populated by scripts in `backend/` so it can be rebuilt from scratch at any time. It stores employees, courses, class meetings, shifts, shift preferences, approved leave, and assignments.
 - Synthetic data for the five residence halls: 30 student workers with class schedules, shift preferences and approved leave records, plus the 99 required weekly shifts derived from the halls' operating hours. The derivation is checked by a script that confirms the 489 weekly student-coverage hours with no gaps and no double coverage.
 
@@ -25,7 +26,7 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 - Workforce capacity analytics
 - The natural-language AI assistant
 - Cloud deployment
-- The rest of employee management: active/inactive filtering and add/edit/deactivate/reactivate/delete controls. These are planned for Phase 5B, not implemented — only its search and sorting have shipped so far. The application currently has no endpoints that change data. Deactivation will preserve history; permanent deletion will be restricted to workers without assignments.
+- The rest of employee management: add/edit forms and deactivate/reactivate/delete actions. These are planned for Phase 5B, not implemented — its list controls (search, sorting, status filtering) and the active-status column have shipped, but nothing can yet change a worker's status or details. The application still has no endpoints that modify data. Deactivation will preserve history; permanent deletion will be restricted to workers without assignments.
 
 ## Running Locally
 
@@ -50,9 +51,19 @@ npm run dev
 
 Then open `http://localhost:5173/`. The backend's interactive API documentation is at `http://127.0.0.1:8000/docs`.
 
+If uvicorn reports that port 8000 is already in use, an earlier backend is still running. Find and stop that one rather than picking a different port, because the frontend calls `http://127.0.0.1:8000` directly:
+
+```powershell
+Get-NetTCPConnection -LocalPort 8000 -State Listen |
+  ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" } |
+  Select-Object ProcessId, CommandLine
+```
+
+Confirm the command line is this project's `uvicorn main:app`, then stop it with `Stop-Process -Id <ProcessId> -Force`. When it was started with `--reload` there are two processes: a reloader parent and a worker child. Stopping only the child makes the parent immediately respawn it, so stop the **parent**, or press Ctrl+C in the terminal running it.
+
 ### About the demo data
 
-The synthetic workforce is **seeded explicitly, never automatically**. Starting the backend only creates any missing tables; it does not generate or regenerate workers. Records live in a SQLite file (`backend/shiftops.db`) and persist across restarts. That file is deliberately not committed, so a fresh clone starts empty until you run the seed script.
+The synthetic workforce is **seeded explicitly, never automatically**. Starting the backend creates any missing tables and applies additive schema migrations — for example adding a new column to an existing table, which `CREATE TABLE IF NOT EXISTS` cannot do. Migrations only ever add; they never drop a table, delete a row, or rewrite existing values, and they never generate or regenerate workers. Records live in a SQLite file (`backend/shiftops.db`) and persist across restarts. That file is deliberately not committed, so a fresh clone starts empty until you run the seed script.
 
 ```
 python seed.py            # ordinary seeding - safe to run at any time
@@ -71,6 +82,8 @@ Run from `backend/` with the virtual environment active:
 python verify_coverage.py      # 99 shifts totalling 489 student-coverage hours, no gaps or double coverage
 python verify_preferences.py   # shift preferences match whole shifts, checked against independently listed expectations
 python verify_seeding.py       # seeding safety, run against a temporary in-memory database
+python verify_migration.py     # schema migrations add columns without losing existing records
+python verify_capacity.py      # assigned hours and remaining capacity, including week boundaries
 ```
 
 ## Planned Capabilities

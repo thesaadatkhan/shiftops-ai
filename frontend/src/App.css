@@ -126,6 +126,13 @@
   font-size: 14px;
 }
 
+.table-note {
+  margin-top: 8px;
+  max-width: 70ch;
+  font-size: 13px;
+  line-height: 145%;
+}
+
 .table-wrapper {
   margin-top: 16px;
   overflow-x: auto;
