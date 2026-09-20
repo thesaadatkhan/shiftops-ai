@@ -63,10 +63,22 @@ def fixture():
 
 
 def add_worker(connection, code="SW-001", name="Fixture Worker"):
-    return create_employee(
-        connection,
-        {"employee_code": code, "full_name": name, "student_type": "undergraduate"},
+    """Create a worker through the real path and confirm the code issued.
+
+    Employee codes are allocated by the backend now (D034), so `code` is what
+    this fixture EXPECTS rather than what it supplies. On a fresh fixture the
+    sequence starts at SW-001, so the expectation is deterministic - and if
+    allocation ever stopped behaving that way, these checks would say so
+    instead of silently testing a different worker.
+    """
+    created = create_employee(
+        connection, {"full_name": name, "student_type": "undergraduate"}
     )
+    if created["employee_code"] != code:
+        raise AssertionError(
+            f"fixture expected {code} to be issued, got {created['employee_code']}"
+        )
+    return created
 
 
 def assign(connection, employee_id, start, end, hall="Capella"):

@@ -218,23 +218,89 @@ Implemented list controls (Phase 5B):
 
 - Add and edit worker details through forms backed by REST endpoints and SQLite. The backend validates required fields, rejects whitespace-only values, accepts only supported student types, and rejects an employee code already used by another worker (compared without regard to letter case). New workers start active with the 20-hour weekly limit and receive no generated classes, preferences, leave, or assignments. A worker can be added to an empty database without seeding.
 - An existing employee code cannot be edited. The Edit interface displays the stored code read-only, and the update operation rejects any submitted code that differs from it, including a change of letter case only, returning the standard validation error with an explanation. An unknown code in the request path is still reported as not found rather than as an immutability failure. Editing a worker's name or student type preserves their employee code, internal database identity, active status, courses, class meetings, shift preferences, approved leave and assignments. There is no rename workflow, and editing never retires a code; retirement applies to permanent deletion only.
-- Manual employee-code entry remains available when adding a worker, as a temporary measure until Phase 5C allocates codes on the backend. While codes are entered by hand they may contain only letters, digits, hyphens and underscores, because the code is used to address the worker in the edit request. Codes already stored are left unchanged.
+- Employee codes are assigned by the backend when a worker is created. The create request carries the worker's name and student type only; a request that supplies a code is rejected with a validation error explaining that codes are assigned automatically, rather than having the supplied value silently ignored. The response reports the code that was issued.
+- Codes follow a single sequence: `SW-` and at least three digits, zero-padded, continuing to more digits when the sequence passes 999. A database that has never issued a code starts at SW-001. Otherwise the sequence continues above the highest number already reserved by a live or retired code, and never fills a gap left by a deletion. Allocation progress is stored, so it survives restarts and the deletion of the highest-numbered worker.
+- Codes are allocated and the worker created in one transaction, serialized by the database's own write locking, so simultaneous creates cannot receive the same code and a failure leaves neither a partially created worker nor an advanced counter.
+- A stored code counts towards the sequence when it is `SW-` followed entirely by digits, regardless of letter case or zero padding. Any other stored code is preserved and never interpreted as a sequence value. No existing worker is ever renumbered, and no stored code is rewritten.
+- Demo initialization reserves the numbers its codes occupy, so a worker added afterwards continues above them. A database in which codes have already been issued counts as in use, and initialization refuses, even if every worker has since been deleted.
 
 - While a permanent-deletion confirmation is open it is the only employee action available. Adding, editing, deactivating, reactivating and deleting any other worker are all unavailable until the supervisor cancels or the request resolves, enforced in the application's own action handlers and not only by disabling controls. Cancelling remains available throughout. Searching, sorting and status filtering stay usable, because they change only what is displayed.
-- Deactivate and reactivate workers, one control per row, backed by REST endpoints. Deactivating changes only the active flag: the worker's internal identity, classes, shift preferences, approved leave and assignment history are all preserved, and reactivation restores the same record rather than creating a replacement. Deactivation is blocked while the worker holds an assigned shift that has not finished — a shift already in progress counts, not only shifts whose start is still ahead — and the refusal names those shifts and states that deactivating would not have cancelled them. Nothing is deleted, cancelled or reassigned. Shifts that have already ended are history and never block. "Has not finished" is judged against the project's single local simulation clock (section 5.1), comparing the shift's end datetime with the reference time; the reference time is injectable so that tests use fixed values rather than depending on when they run.
+- Deactivate and reactivate workers, one control per row, backed by REST endpoints. Deactivating changes only the active flag: the worker's internal identity, classes, shift preferences, approved leave and assignment history are all preserved, and reactivation restores the same record rather than creating a replacement. Deactivation is blocked while the worker holds an assigned shift that has not finished — a shift already in progress counts, not only shifts whose start is still ahead — and the refusal names those shifts and states that deactivating would not have cancelled them. Nothing is deleted, cancelled or reassigned. Shifts that have already ended are history and never block. "Has not finished" is judged against the project's single local simulation clock - one wall-clock timeline with no timezone or daylight-saving conversion - comparing the shift's end datetime with the reference time; the reference time is injectable so that tests use fixed values rather than depending on when they run.
 - After a successful action the list reloads with the supervisor's search text, sort selection and status filter unchanged. Because the list defaults to Active, a worker who was just deactivated is no longer shown, and the confirmation says so and directs the supervisor to the Inactive or All filter. A confirmed action and a failed list reload are reported as separate outcomes, and retrying the reload only re-reads the list.
 
 - Permanently delete an employee, behind an explicit confirmation identifying them by name and employee code and stating that their profile, classes, shift preferences and approved leave will be removed permanently. Cancelling performs no change of any kind. Deletion is allowed only when no assignment references that employee, historical assignments included, because shift history must continue to refer to a real worker; the backend enforces this rather than relying on the interface. The refusal explains that history is preserved and that deactivation is the appropriate alternative, subject to its own safeguards. The employee and their dependent class, preference and leave records are removed in one transaction, with the assignment check made inside that same transaction so a concurrent write cannot invalidate it; any failure removes nothing. Shared shifts and every other employee's records are preserved.
-- A deleted employee code is retained as a retired code, holding the code and the time only and no copy of the deleted worker's details. This exists so that automatic employee-code allocation, when it is implemented, can never reissue a code that has already been used. Allocation itself remains planned, not implemented, and nothing currently prevents a retired code being entered by hand during Add; supervisors should treat a retired code as spent until allocation enforces it.
+- A deleted employee code is retained as a retired code, holding the code and the time only and no copy of the deleted worker's details. Automatic employee-code allocation reads this record when working out the next code, so a code that has already been used is never reissued. Codes can no longer be entered by hand, so there is no other route to reusing one either.
 
 Remaining employee management is planned scope, not yet implemented:
 - Excluding inactive workers from new assignments and from schedule generation. The active flag is now stored and editable, but nothing consumes it beyond the employee list's own filter: neither the eligibility logic (Phase 6) nor the schedule generator (Phase 7) exists yet. Both must exclude inactive workers while leaving their historical assignments attached.
 
-The database is the source of truth after explicit demo initialization. Demo data is initialized once, into a database that holds no workforce or scheduling records, and that initialization is atomic: it either writes the whole dataset or nothing. If any such record already exists, initialization refuses and changes nothing, so it cannot overwrite edits, restore intentionally deleted workers, or add demo workers to a manually managed database. There is no repair, reset or regeneration workflow, and neither application startup nor any employee-management action performs seeding. Schema changes are applied through additive migrations that preserve existing records. Provide an empty-workforce path for entering fictional workers through the interface. The 30-worker count, student-type mix, and course-load conventions constrain demo generation, not user-created records. The synthetic-only data policy and 20-hour weekly limit remain unchanged.
+The database is the source of truth after explicit demo initialization. Demo data is initialized once, into a database that holds no workforce or scheduling records, and that initialization is atomic: it either writes the whole dataset or nothing. If any such record already exists, initialization refuses and changes nothing, so it cannot overwrite edits, restore intentionally deleted workers, or add demo workers to a manually managed database. There is no repair, reset or regeneration workflow, and neither application startup nor any employee-management action performs seeding. Schema changes are applied through repeatable migrations that preserve existing records and relationships. Most are purely additive; where a change must reshape existing data, it is carried out transactionally with the information preserved, never by resetting or reseeding the database. Provide an empty-workforce path for entering fictional workers through the interface. The 30-worker count, student-type mix, and course-load conventions constrain demo generation, not user-created records. The synthetic-only data policy and 20-hour weekly limit remain unchanged.
 
 Phase 5B initially covers list controls and worker identity/status management. Phase 5C, before eligibility implementation, is a required milestone for complete employee setup. The requirements below are planned, not implemented by the current basic Add/Edit form.
 
-#### Complete Employee Setup (Planned Phase 5C)
+#### Complete Employee Setup (Phase 5C)
+
+Two parts of this section are implemented and described above: automatic
+employee-code allocation, and the semester/class-block data model with its
+migration. The supervisor-facing entry and editing interface, explicit
+timetable confirmation controls, and the preference and leave editors remain
+planned and are not implemented.
+
+**Class timetables are stored as semester schedules owned by a worker.** A
+schedule records inclusive semester start and end dates and whether a
+supervisor has confirmed the timetable is complete. Each schedule owns
+recurring weekly class blocks, each a weekday plus a start and end time in
+the project's local clock. Course names and course entities are not required
+to operate the application.
+
+**Timetable readiness is reported for the displayed reporting period**, not
+as a permanent property of the worker. A semester confirmed for an earlier or
+later period does not make a worker ready for the period on screen, and must
+not be reported as if it did. Five states are distinguished:
+
+- *Missing* - no semester schedule exists for this worker at all.
+- *Outside the period* - schedules exist, but none covers any day of the
+  displayed period.
+- *Unconfirmed* - a schedule covers part of the period, but no confirmed
+  schedule covers any of it.
+- *Partial* - confirmed schedules cover some days of the period but not all.
+- *Confirmed* - confirmed schedules cover the whole period.
+
+A confirmed timetable with no class blocks means the worker deliberately has
+no classes in that period, and must remain distinguishable from missing
+information: eligibility work must be able to tell "we do not know" from "we
+know there are none". Readiness is separate from active status, and neither
+is shift eligibility, which is not implemented.
+
+**Migrating an existing database preserves everything.** Each stored class
+meeting becomes exactly one class block with its weekday and times unchanged,
+including meetings that look identical to one another; nothing is discarded,
+deduplicated or rewritten, and the legacy course records are retained. The
+transformation is repeatable and all-or-nothing: a failure leaves the
+database exactly as it was, and repeating it moves nothing. A migrated
+timetable is recorded as confirmed only where the stored class information is
+proved to be a validated generated timetable: its provenance marker must name
+a generated worker, and the stored meetings must match that worker's expected
+timetable exactly, compared with multiplicity so that a missing, extra,
+duplicated or altered meeting cannot pass. A provenance marker alone is not
+accepted as proof, because an earlier migration recorded one for every worker
+and stored data may since have been edited. Anything that does not match
+exactly is migrated unconfirmed with its records preserved untouched.
+
+The fictional demo semester runs from 2026-08-24 to 2026-12-11 inclusive,
+which contains the sample reporting week of 5-11 October 2026.
+Legacy timetables without known semester dates also receive these provisional
+dates during migration and remain unconfirmed unless validated as intact demo
+data. Supervisor editing must require review of these assumed dates; they are
+not evidence of the worker's actual semester period.
+
+Class-block counts and weekly class hours count only the classes that
+actually occur within the reporting period: each recurring class is resolved
+to its date in that period and counted only when that date falls inside its
+semester's inclusive start and end dates. A semester that begins midway
+through the period therefore excludes the earlier weekdays of that period,
+and one that ends midway excludes the later ones. Class durations remain
+fractional; the whole-hour rule applies to work shifts only.
 
 - The backend assigns the next employee code automatically on save, using the SW-001 sequence with at least three digits. Codes are read-only in the interface and cannot be changed through the management API. Existing codes and internal identities are preserved. Allocation must be unique under concurrent requests, persist across restarts, and never reuse an issued code after deletion. Demo initialization must respect the same namespace without overwriting manual workers; seed identity remains separate.
 - Supervisors enter a fictional worker's name and student type, then their semester class timetable, shift preferences, and any already-approved leave. The app handles internal keys, relationships, default active status, the 20-hour limit and calculated summaries. Saving an incomplete profile is allowed, but active status alone does not establish scheduling readiness.

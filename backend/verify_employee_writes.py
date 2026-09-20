@@ -47,6 +47,7 @@ from pathlib import Path
 
 from database import create_schema, get_connection
 from employees import (
+    EMPLOYEE_CODE_PATTERN,
     DuplicateEmployeeCode,
     EmployeeNotFound,
     EmployeeValidationError,
@@ -84,45 +85,51 @@ def empty_database():
     return connection
 
 
-def check_url_safe_codes():
-    """10. Codes that could not be addressed by the edit route are rejected."""
+def check_issued_codes_are_addressable():
+    """10. Every issued code can still be addressed by the edit route.
+
+    D036 required codes to be URL-safe because the code sits in the path of
+    PUT /api/employees/{employee_code}. Automatic allocation (D034) satisfies
+    that by construction - `SW-` plus digits contains nothing that needs
+    escaping - and there is no longer any way to submit a code on create. So
+    this checks the property still holds rather than checking a rejection
+    that can no longer be triggered.
+    """
     connection = empty_database()
-    for code in ["SW/031", "SW 031", "SW?031", "SW#031", "SW.031", "SW%031"]:
-        expect_error(
-            EmployeeValidationError,
-            lambda code=code: create_employee(
-                connection,
-                {"employee_code": code, "full_name": "X", "student_type": "masters"},
-            ),
-            f"URL-unsafe code {code!r} is rejected on create",
+    issued = [
+        create_employee(connection, {"full_name": f"Worker {n}", "student_type": "masters"})[
+            "employee_code"
+        ]
+        for n in range(1, 4)
+    ]
+    check(
+        all(EMPLOYEE_CODE_PATTERN.match(code) for code in issued),
+        f"every issued code is URL-safe by construction {issued}",
+    )
+
+    # Addressable in practice: the edit route finds each of them by code.
+    for code in issued:
+        edited = update_employee(
+            connection,
+            code,
+            {"employee_code": code, "full_name": f"Edited {code}", "student_type": "undergraduate"},
+        )
+        check(
+            edited["employee_code"] == code and edited["full_name"] == f"Edited {code}",
+            f"issued code {code} can be addressed and edited",
         )
 
-    create_employee(
-        connection,
-        {"employee_code": "SW-060", "full_name": "Editable", "student_type": "masters"},
-    )
     expect_error(
         EmployeeValidationError,
         lambda: update_employee(
             connection,
-            "SW-060",
-            {"employee_code": "SW/061", "full_name": "Editable", "student_type": "masters"},
+            issued[0],
+            {"employee_code": "SW/061", "full_name": "X", "student_type": "masters"},
         ),
         "an edit submitting a different code is rejected, URL-unsafe or not",
     )
-
-    for code in ["SW-061", "SW_061", "sw061", "061"]:
-        try:
-            create_employee(
-                connection,
-                {"employee_code": code, "full_name": f"OK {code}", "student_type": "masters"},
-            )
-            check(True, f"URL-safe code {code!r} is accepted")
-        except Exception as error:  # noqa: BLE001
-            check(False, f"URL-safe code {code!r} should be accepted ({error})")
-
     check(
-        find_by_code(connection, "SW-060")["employee_code"] == "SW-060",
+        find_by_code(connection, issued[0])["employee_code"] == issued[0],
         "a rejected edit leaves the stored code unchanged",
     )
     connection.close()
@@ -137,10 +144,13 @@ def check_demo_initialization_is_refused():
     answered earlier and more simply: it refuses outright.
     """
     connection = empty_database()
+    # Allocation issues SW-001 on an empty database, which is exactly the code
+    # the first demo worker would use - so this still sets up the collision
+    # that initialization must refuse rather than resolve.
     manual = create_employee(
-        connection,
-        {"employee_code": "SW-001", "full_name": "Manually Added", "student_type": "masters"},
+        connection, {"full_name": "Manually Added", "student_type": "masters"}
     )
+    check(manual["employee_code"] == "SW-001", "the manual worker is issued SW-001")
 
     try:
         initialize_demo_data(connection)
@@ -204,10 +214,9 @@ def main():
     )
 
     created = create_employee(
-        connection,
-        {"employee_code": "SW-031", "full_name": "New Worker", "student_type": "masters"},
+        connection, {"full_name": "New Worker", "student_type": "masters"}
     )
-    check(created["employee_code"] == "SW-031", "worker created in an empty database")
+    check(created["employee_code"] == "SW-001", "worker created in an empty database is issued SW-001")
     check(created["is_active"] == 1, "new worker starts active")
     check(created["weekly_hour_limit"] == 20, "new worker keeps the 20-hour weekly limit")
     check(created["seed_key"] is None, "manually created worker has no seed origin")
@@ -223,41 +232,42 @@ def main():
 
     # Surrounding whitespace is trimmed rather than stored.
     trimmed = create_employee(
-        connection,
-        {"employee_code": "  SW-032  ", "full_name": "  Spaced Name  ", "student_type": "undergraduate"},
+        connection, {"full_name": "  Spaced Name  ", "student_type": "undergraduate"}
     )
     check(
-        trimmed["employee_code"] == "SW-032" and trimmed["full_name"] == "Spaced Name",
-        "surrounding whitespace is trimmed on save",
+        trimmed["employee_code"] == "SW-002" and trimmed["full_name"] == "Spaced Name",
+        "surrounding whitespace is trimmed on save, and the next code is issued",
     )
 
-    # 5. Duplicate codes, exact and differing only by case.
+    # 5. Duplicate codes cannot arise on create any more: the caller does not
+    #    choose the code, and the sequence never repeats a number. What is
+    #    checked instead is that supplying one is refused outright rather than
+    #    silently ignored.
     expect_error(
-        DuplicateEmployeeCode,
+        EmployeeValidationError,
         lambda: create_employee(
             connection,
-            {"employee_code": "SW-031", "full_name": "Clash", "student_type": "masters"},
+            {"employee_code": "SW-500", "full_name": "Chooser", "student_type": "masters"},
         ),
-        "duplicate employee code is rejected on create",
+        "a client-supplied employee code is rejected on create",
     )
     expect_error(
-        DuplicateEmployeeCode,
+        EmployeeValidationError,
         lambda: create_employee(
             connection,
-            {"employee_code": "sw-031", "full_name": "Case Clash", "student_type": "masters"},
+            {"employee_code": "SW-001", "full_name": "Clash", "student_type": "masters"},
         ),
-        "duplicate code differing only by case is rejected",
+        "supplying a code that already exists is rejected as a supplied code, not as a duplicate",
     )
 
     # 6. Invalid input.
     invalid_cases = [
-        ({"employee_code": "", "full_name": "X", "student_type": "masters"}, "empty employee code"),
-        ({"employee_code": "   ", "full_name": "X", "student_type": "masters"}, "whitespace-only employee code"),
-        ({"employee_code": "SW-040", "full_name": "   ", "student_type": "masters"}, "whitespace-only name"),
-        ({"employee_code": "SW-040", "full_name": "X", "student_type": "professor"}, "unsupported student type"),
-        ({"employee_code": "SW-040", "full_name": "X"}, "missing student type"),
-        ({"full_name": "X", "student_type": "masters"}, "missing employee code"),
-        ({"employee_code": 42, "full_name": "X", "student_type": "masters"}, "non-text employee code"),
+        ({"full_name": "   ", "student_type": "masters"}, "whitespace-only name"),
+        ({"full_name": "X", "student_type": "professor"}, "unsupported student type"),
+        ({"full_name": "X"}, "missing student type"),
+        ({"student_type": "masters"}, "missing name"),
+        ({"full_name": 42, "student_type": "masters"}, "non-text name"),
+        ({"full_name": "X", "student_type": 7}, "non-text student type"),
     ]
     for payload, label in invalid_cases:
         expect_error(
@@ -268,11 +278,15 @@ def main():
 
     check(
         connection.execute("SELECT COUNT(*) AS n FROM employees").fetchone()["n"] == 2,
-        "no invalid or duplicate attempt created a row",
+        "no invalid or refused attempt created a row",
+    )
+    check(
+        find_by_code(connection, "SW-500") is None and find_by_code(connection, "SW-003") is None,
+        "a refused create neither honoured the supplied code nor consumed the next one",
     )
 
     # 4. Editing keeps identity and related records intact.
-    original_id = find_by_code(connection, "SW-031")["id"]
+    original_id = find_by_code(connection, "SW-001")["id"]
     connection.execute("INSERT INTO courses (employee_id, course_label) VALUES (?, ?)", (original_id, "Fixture A"))
     course_id = connection.execute("SELECT id FROM courses").fetchone()["id"]
     connection.execute(
@@ -291,16 +305,16 @@ def main():
 
     edited = update_employee(
         connection,
-        "SW-031",
-        {"employee_code": "SW-031", "full_name": "Edited Worker", "student_type": "undergraduate"},
+        "SW-001",
+        {"employee_code": "SW-001", "full_name": "Edited Worker", "student_type": "undergraduate"},
     )
     check(edited["id"] == original_id, "editing keeps the internal employee id stable")
-    check(edited["employee_code"] == "SW-031", "the employee code is preserved exactly")
+    check(edited["employee_code"] == "SW-001", "the employee code is preserved exactly")
     check(edited["full_name"] == "Edited Worker", "name is updated")
     check(edited["student_type"] == "undergraduate", "student type is updated")
     check(edited["is_active"] == 1 and edited["weekly_hour_limit"] == 20,
           "editing leaves active status and the weekly limit alone")
-    check(find_by_code(connection, "SW-031") is not None, "the worker is still addressable by their code")
+    check(find_by_code(connection, "SW-001") is not None, "the worker is still addressable by their code")
 
     still_linked = connection.execute(
         "SELECT (SELECT COUNT(*) FROM courses WHERE employee_id = ?) AS courses,"
@@ -316,26 +330,26 @@ def main():
     )
 
     # 4b. The employee code is immutable once the worker exists (D042).
-    before_rename = dict(find_by_code(connection, "SW-031"))
+    before_rename = dict(find_by_code(connection, "SW-001"))
     for attempted, label in [
         ("SW-999", "a different employee code"),
-        ("sw-031", "a case-only change"),
-        ("SW-032", "another worker's employee code"),
+        ("sw-001", "a case-only change"),
+        ("SW-002", "another worker's employee code"),
     ]:
         expect_error(
             EmployeeValidationError,
             lambda attempted=attempted: update_employee(
                 connection,
-                "SW-031",
+                "SW-001",
                 {"employee_code": attempted, "full_name": "Renamed", "student_type": "masters"},
             ),
             f"editing to {label} is rejected",
         )
 
-    after_rename = dict(find_by_code(connection, "SW-031"))
+    after_rename = dict(find_by_code(connection, "SW-001"))
     check(after_rename == before_rename, "a rejected rename changes nothing at all")
     check(
-        find_by_code(connection, "SW-999") is None and find_by_code(connection, "sw-031") is None,
+        find_by_code(connection, "SW-999") is None and find_by_code(connection, "sw-001") is None,
         "no row appears under a rejected code",
     )
     check(
@@ -351,21 +365,21 @@ def main():
     try:
         update_employee(
             connection,
-            "SW-031",
+            "SW-001",
             {"employee_code": "SW-999", "full_name": "Renamed", "student_type": "masters"},
         )
     except EmployeeValidationError as error:
         message = str(error)
     check(
-        "cannot be changed" in message and "SW-031" in message and "SW-999" in message,
+        "cannot be changed" in message and "SW-001" in message and "SW-999" in message,
         f"the refusal explains the rule and names both codes -> {message}",
     )
 
     # Re-saving a worker under their own unchanged code must still work.
     same = update_employee(
         connection,
-        "SW-031",
-        {"employee_code": "SW-031", "full_name": "Edited Worker", "student_type": "undergraduate"},
+        "SW-001",
+        {"employee_code": "SW-001", "full_name": "Edited Worker", "student_type": "undergraduate"},
     )
     check(same["id"] == original_id, "saving a worker under their own unchanged code is allowed")
 
@@ -396,20 +410,27 @@ def main():
         path = Path(folder) / "persistence.db"
         first = get_connection(path)
         create_schema(first)
-        create_employee(first, {"employee_code": "SW-050", "full_name": "Persisted", "student_type": "masters"})
-        update_employee(first, "SW-050", {"employee_code": "SW-050", "full_name": "Persisted Twice", "student_type": "undergraduate"})
+        made = create_employee(first, {"full_name": "Persisted", "student_type": "masters"})
+        code = made["employee_code"]
+        update_employee(first, code, {"employee_code": code, "full_name": "Persisted Twice", "student_type": "undergraduate"})
         first.close()
 
         reopened = get_connection(path)
-        stored = find_by_code(reopened, "SW-050")
+        stored = find_by_code(reopened, code)
         check(
             stored is not None and stored["full_name"] == "Persisted Twice"
             and stored["student_type"] == "undergraduate",
             "created and edited details survive reopening the database file",
         )
+        check(
+            create_employee(reopened, {"full_name": "Second", "student_type": "masters"})[
+                "employee_code"
+            ] == "SW-002",
+            "allocation also resumes correctly after reopening",
+        )
         reopened.close()
 
-    check_url_safe_codes()
+    check_issued_codes_are_addressable()
     check_demo_initialization_is_refused()
     check_edits_survive_initialization_attempts()
 

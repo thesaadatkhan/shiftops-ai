@@ -31,13 +31,25 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 
   Every write returns errors in one consistent `{"detail": ...}` shape.
 - Frontend/backend integration: when the Dashboard opens it calls `GET /api/health` once and displays the resulting connection status (loading, connected, or unavailable); the Employees section loads the workforce from `GET /api/employees` with the same loading and error handling. CORS is configured on the backend for the local frontend origin.
-- An Employees view listing one summary row per worker: employee ID, name, student type, course count, class-meeting count, weekly class hours, weekly hour limit, and a count of approved leave periods. The individual class meetings, shift preferences and leave periods behind those figures are stored in the database but are not yet displayed anywhere in the interface.
-- Adding and editing workers from the Employees view: forms for employee ID, name and student type, backed by `POST /api/employees` and `PUT /api/employees/{employee_code}`. The backend validates required fields, whitespace-only input, supported student types and unique employee codes, returning clear validation, duplicate-code and not-found errors. New workers start active with the 20-hour weekly limit, and no classes, preferences, leave or assignments are invented for them. A worker can be added to a completely empty database without seeding.
+- An Employees view listing one summary row per worker: employee ID, name, student type, class-block count, weekly class hours, timetable status, weekly hour limit, and a count of approved leave periods. The individual class blocks, shift preferences and leave periods behind those figures are stored in the database but are not yet displayed anywhere in the interface.
+- Class timetables are stored as **semester schedules owned by a worker**, each holding recurring weekly class blocks (a weekday plus a start and end time). Course names are no longer needed to run the application. Class-block counts and class hours count only the classes that actually fall inside the displayed week: a Monday class counts only if that Monday is within the worker's semester, so a semester starting on the Wednesday does not retrospectively add the Monday and Tuesday. Class hours stay fractional, because a class is 75 or 165 minutes rather than a whole number of hours.
+- Timetable status describes **the week on screen**, not whether a worker ever had a confirmed timetable. A semester confirmed last spring says nothing about October, so it is not reported as confirmed while October is displayed. There are five states:
+
+  | Status | Meaning |
+  |---|---|
+  | Not set up | No semester has been entered for this worker at all |
+  | Other semester only | They have a timetable, but for a different period |
+  | Awaiting confirmation | Something covers this week, but nobody has checked it |
+  | Part of week | Confirmed for some days of this week, not all seven |
+  | Confirmed | Confirmed for the whole week |
+
+  **Confirmed with no class blocks** means a deliberate "no classes this week", which stays distinct from **Not set up**. This describes timetable readiness only. It is not shift eligibility, which does not exist yet, and it is separate from whether a worker is active.
+- Adding and editing workers from the Employees view: Add asks for a name and student type, Edit also shows the read-only employee ID, backed by `POST /api/employees` and `PUT /api/employees/{employee_code}`. The backend validates required fields, whitespace-only input and supported student types, returning clear validation and not-found errors. Duplicate IDs cannot arise on Add, because the ID is issued by the backend rather than typed. New workers start active with the 20-hour weekly limit, and no classes, preferences, leave or assignments are invented for them. A worker can be added to a completely empty database without seeding.
 - **An employee ID cannot be changed once the worker exists.** Editing shows the ID read-only and offers the name and student type instead; the backend refuses any edit that submits a different ID, including one that differs only in capitalisation. The ID is what identifies a worker in schedules and reports, so renaming it would make one person appear to be two and could leave the old ID free for accidental reuse. Editing a worker's name or student type keeps their ID, their internal database identity, their active status and all of their classes, preferences, leave and assignments exactly as they were.
-- Employee IDs are still typed in by hand when adding a worker, which is temporary: Phase 5C will have the backend allocate them. While they are typed, an ID may contain only letters, digits, hyphens and underscores, so that every saved ID can still be addressed by the edit request. Existing stored IDs are left exactly as they are.
+- **Employee IDs are assigned by the backend**, not typed in. Adding a worker asks only for their name and student type; the ID is issued when the record is saved and shown in the confirmation. IDs run SW-001, SW-002 and so on, always at least three digits, and simply grow a digit past SW-999. The sequence continues above the highest ID ever used and never fills a gap, so a deleted or edited worker's ID is never handed to anyone else. Existing stored IDs, including any that predate this scheme, are left exactly as they are.
 - Deactivating and reactivating workers from the Employees view, one button per row. Deactivating preserves everything about the worker: their identity, classes, shift preferences, approved leave and past assignments are all left in place, and reactivating restores the same record rather than creating a new one. Deactivation is refused while the worker still has an assigned shift that has not finished — including one already in progress, not only shifts that have yet to start — and the refusal names those shifts and explains that nothing was cancelled. Shifts that have already ended are history and never block. Because the list defaults to the Active filter, a worker you have just deactivated disappears from the table; the confirmation message says to switch the Status filter to Inactive or All to find them again. Search, sorting and the status filter are left exactly as you set them when the list refreshes.
 - Permanently deleting a worker, behind an explicit confirmation that names them, says what will be removed, and warns that it cannot be undone. Deletion removes the worker's profile, courses, class meetings, shift preferences and approved leave in a single transaction; if any step fails, nothing is removed at all. Shifts are never deleted, because a shift is a residence hall's staffing requirement shared by everyone, and no other worker's records are touched. A worker who has **any** assignment on record cannot be deleted, historical assignments included: that history would otherwise refer to nobody. The backend enforces this, not just the interface, and it checks inside the same transaction that does the deleting, so a shift assigned at the same moment cannot slip past the check. Workers with shift history are deactivated instead.
-- A deleted employee ID is recorded in a retired-ID ledger. When Phase 5C adds automatic ID allocation, the allocator will consult that ledger and will never reissue a retired ID. That enforcement does not exist yet: IDs are still typed in by hand when adding a worker, and nothing currently stops you re-entering a retired one. Until automatic allocation arrives, treat a retired ID as spent and do not give it to another worker.
+- A deleted employee ID is recorded in a retired-ID ledger, and the allocator reads that ledger when working out the next ID. A deleted worker's ID is therefore never reissued, and since IDs can no longer be typed in, there is no way to re-enter one by hand either.
 - While a delete confirmation is open, it is the only thing you can act on: adding, editing, deactivating and deleting anyone else are all unavailable until you cancel or the request finishes. Searching, sorting and filtering still work, because they only change what the table shows.
 - List controls on the Employees view: case-insensitive search across worker name and employee ID; sorting by employee ID, name, student type, course count, weekly class hours or remaining capacity, in either direction, with numeric columns sorted by value; an Active / Inactive / All status filter defaulting to Active; a count of matching workers; a no-results message; and a Reset control. Search, filtering and sorting all combine. They run in the browser over the already-loaded list rather than querying the backend.
 - Remaining weekly capacity per worker, calculated in the backend as `max(0, weekly hour limit - assigned hours for the reporting week)`. Work shifts must be a positive whole number of hours, so assigned hours and remaining capacity are whole hours; a stored shift that breaks that rule produces a clear API error instead of an approximate figure. (Class meetings are not work and keep their 75- and 165-minute lengths.) A shift counts entirely towards the week containing its start, so a Sunday-night-into-Monday shift is not split across two weeks. This is theoretical unused capacity, not shift eligibility or availability: class hours and approved leave are deliberately not subtracted. With no assignments stored yet, every worker shows the full 20 hours.
@@ -51,8 +63,7 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 - Workforce capacity analytics
 - The AI scheduling agent: multi-step investigation, replacement proposals, supervisor-approved execution, audit history and result verification
 - Cloud deployment
-- Detailed employee setup. Class schedules, shift preferences and approved leave are stored and counted, but there is no interface for entering or editing them; the only ones that exist came from the demo data. Semester dates and recurring class blocks are planned for Phase 5C.
-- Automatic employee IDs, and the enforcement that goes with them. IDs are still typed by hand when adding a worker. Deletion already records the retired ID, so the allocator planned for Phase 5C will have what it needs to avoid reissuing one, but that allocator is not built and nothing today prevents a retired ID being re-entered manually.
+- Detailed employee setup. Class schedules, shift preferences and approved leave are stored and counted, but there is no interface for entering or editing them; the only ones that exist came from the demo data. Semester dates and recurring class blocks are the remaining Phase 5C work, and are not started.
 - Anything that acts on a worker's active status. Deactivating a worker records that status and hides them from the default list view, but no other part of the application reads it yet, because neither the eligibility logic nor the schedule generator exists. Excluding inactive workers from new assignments is a requirement for those later phases, not current behaviour.
 
 ## Running Locally
@@ -121,17 +132,26 @@ python verify_capacity.py      # assigned hours and remaining capacity, includin
 python verify_employee_writes.py     # creating and editing workers, validation, and the immutable employee ID
 python verify_employee_status.py     # deactivation and reactivation, and the shifts that block deactivation
 python verify_employee_deletion.py   # permanent deletion, assignment protection, rollback, and retired IDs
+python verify_code_allocation.py     # automatic employee IDs: sequence, reservation, concurrency, rollback
+python verify_employee_api.py        # the endpoints' request/response contract, against a throwaway database
+python verify_semester_migration.py  # migrating class meetings into semester schedules and class blocks
+python verify_timetable_reporting.py # class summaries and timetable readiness for the reporting week
 ```
 
 Each script uses its own in-memory or temporary database and never opens
 `backend/shiftops.db`, so they all work on a fresh checkout before any
 database exists.
+The employee API and timetable-reporting scripts call endpoint functions against
+disposable databases; they do not exercise HTTP routing, wire serialization, or
+CORS. Migration concurrency checks use separate SQLite connections in threads;
+they cover concurrent execution without guaranteeing a particular interleaving.
 
 ## Planned Capabilities
 
-Development order: Phase 5B employee lifecycle controls are complete; next is
-Phase 5C automatic IDs and complete semester-based worker setup, then
-eligibility, optimization, reporting and AI. None of those exist yet. Later phases must use the managed workforce
+Development order: Phase 5B employee lifecycle controls are complete, and
+Phase 5C includes automatic employee IDs and the semester/class-block migration. The rest of Phase 5C -
+complete semester-based worker setup - comes next, then eligibility,
+optimization, reporting and AI. None of those later stages exist yet. Later phases must use the managed workforce
 and confirmed semester data, not fixed demo counts. Full checklists live in
 the project context; public cross-phase requirements are in
 `docs/PROJECT_SPEC.md` section 10.
@@ -139,7 +159,7 @@ the project context; public cross-phase requirements are in
 Goals for the finished application. Employee records, shift preferences and approved leave are now stored, and worker summaries are viewable; everything below that depends on displaying those details, or on evaluating or generating a schedule, is still future work.
 
 - Workforce and coverage dashboard
-- Complete employee setup: automatic read-only employee IDs; supervisor entry of semester dates and recurring class times without course names; editing shift preferences and already-approved leave. Incomplete class information will block scheduling until confirmed. This is planned Phase 5C work, not part of the current basic Add/Edit form.
+- Complete employee setup: supervisor entry of semester dates and recurring class times without course names; editing shift preferences and already-approved leave. Incomplete class information will block scheduling until confirmed. This is planned Phase 5C work, not part of the current basic Add/Edit form.
 - Class schedule conflict detection
 - Shift eligibility analysis
 - Automated schedule generation

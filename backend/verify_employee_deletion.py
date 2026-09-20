@@ -30,7 +30,12 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from database import create_schema, get_connection
+from database import (
+    DEMO_SEMESTER_END,
+    DEMO_SEMESTER_START,
+    create_schema,
+    get_connection,
+)
 from employees import (
     DeletionBlocked,
     EmployeeNotFound,
@@ -59,10 +64,21 @@ def fixture():
 
 
 def add_worker(connection, code, name):
-    return create_employee(
-        connection,
-        {"employee_code": code, "full_name": name, "student_type": "undergraduate"},
+    """Create a worker through the real path and confirm the code issued.
+
+    Employee codes are allocated by the backend now (D034), so `code` is the
+    code this fixture EXPECTS, not one it supplies. A mismatch is raised
+    rather than ignored, so these checks can never end up asserting against a
+    worker other than the one they meant.
+    """
+    created = create_employee(
+        connection, {"full_name": name, "student_type": "undergraduate"}
     )
+    if created["employee_code"] != code:
+        raise AssertionError(
+            f"fixture expected {code} to be issued, got {created['employee_code']}"
+        )
+    return created
 
 
 def add_shift(connection, hall, start, end):
@@ -91,6 +107,23 @@ def give_records(connection, employee_id, label="Writing A"):
             " VALUES (?, ?, ?, ?)",
             (course_id, day, "09:00", "10:15"),
         )
+
+    # The semester model as well as the legacy rows, so deletion is checked
+    # against both kinds of owned timetable data.
+    connection.execute(
+        "INSERT INTO semester_schedules (employee_id, start_date, end_date, confirmed_at)"
+        " VALUES (?, ?, ?, NULL)",
+        (employee_id, DEMO_SEMESTER_START, DEMO_SEMESTER_END),
+    )
+    schedule_id = connection.execute(
+        "SELECT id FROM semester_schedules WHERE employee_id = ?", (employee_id,)
+    ).fetchone()["id"]
+    for day in (0, 2):
+        connection.execute(
+            "INSERT INTO class_blocks (schedule_id, day_of_week, start_time, end_time)"
+            " VALUES (?, ?, ?, ?)",
+            (schedule_id, day, "09:00", "10:15"),
+        )
     connection.execute(
         "INSERT INTO approved_leave (employee_id, start_datetime, end_datetime)"
         " VALUES (?, ?, ?)",
@@ -109,6 +142,8 @@ def give_records(connection, employee_id, label="Writing A"):
 def counts(connection):
     tables = (
         "employees",
+        "semester_schedules",
+        "class_blocks",
         "courses",
         "class_meetings",
         "shifts",
@@ -212,6 +247,8 @@ def main():
     check(result["full_name"] == "Alice Adams", "the result names the deleted worker")
     check(
         result["removed"] == {
+            "semester_schedules": 1,
+            "class_blocks": 2,
             "courses": 1,
             "class_meetings": 2,
             "shift_preferences": 1,
@@ -355,34 +392,42 @@ def main():
         path = Path(folder) / "deleted.db"
         first = get_connection(path)
         create_schema(first)
-        add_worker(first, "SW-031", "Jack Ma")
-        add_worker(first, "SW-032", "Kept Worker")
-        give_records(first, find_by_code(first, "SW-031")["id"])
-        delete_employee(first, "SW-031", retired_at=RETIRED_AT)
+        add_worker(first, "SW-001", "Jack Ma")
+        add_worker(first, "SW-002", "Kept Worker")
+        give_records(first, find_by_code(first, "SW-001")["id"])
+        delete_employee(first, "SW-001", retired_at=RETIRED_AT)
         first.close()
 
         reopened = get_connection(path)
-        check(find_by_code(reopened, "SW-031") is None, "the deletion survives reopening")
+        check(find_by_code(reopened, "SW-001") is None, "the deletion survives reopening")
         check(
-            find_by_code(reopened, "SW-032") is not None,
+            find_by_code(reopened, "SW-002") is not None,
             "the remaining worker survives reopening",
         )
         check(
-            retired_employee_codes(reopened) == ["SW-031"],
+            retired_employee_codes(reopened) == ["SW-001"],
             "the retired code survives reopening",
         )
         check(
             reopened.execute("SELECT COUNT(*) AS n FROM courses").fetchone()["n"] == 0,
             "the deleted worker's courses are still gone after reopening",
         )
-        # The number stays spent: a future allocator reading employees alone
-        # would wrongly conclude SW-031 is free.
+        # The number stays spent. An allocator reading live employees alone
+        # would wrongly conclude SW-001 is free; the ledger is what stops it.
         highest_live = reopened.execute(
             "SELECT MAX(employee_code) AS c FROM employees"
         ).fetchone()["c"]
         check(
-            highest_live == "SW-032" and "SW-031" in retired_employee_codes(reopened),
-            "SW-031 is absent from employees but still recorded as spent",
+            highest_live == "SW-002" and "SW-001" in retired_employee_codes(reopened),
+            "SW-001 is absent from employees but still recorded as spent",
+        )
+        # And allocation actually honours it, rather than merely recording it.
+        next_worker = create_employee(
+            reopened, {"full_name": "After Deletion", "student_type": "masters"}
+        )
+        check(
+            next_worker["employee_code"] == "SW-003",
+            f"the next issued code skips the retired SW-001 ({next_worker['employee_code']})",
         )
         reopened.close()
 
@@ -404,6 +449,57 @@ def main():
     check(
         connection.execute("SELECT COUNT(*) AS n FROM employees").fetchone()["n"] == 0,
         "the refused initialization wrote nothing",
+    )
+    connection.close()
+
+    # 12. A freshly SEEDED worker has semester records but no legacy course
+    #     rows at all. The deletion summary must still describe their classes
+    #     rather than claiming they had none.
+    connection = fixture()
+    initialize_demo_data(connection)
+    check(
+        connection.execute("SELECT COUNT(*) AS n FROM courses").fetchone()["n"] == 0,
+        "a seeded database holds no legacy course rows",
+    )
+    seeded = find_by_code(connection, "SW-002")
+    blocks_before = connection.execute(
+        "SELECT COUNT(*) AS n FROM class_blocks b"
+        " JOIN semester_schedules s ON s.id = b.schedule_id WHERE s.employee_id = ?",
+        (seeded["id"],),
+    ).fetchone()["n"]
+    check(blocks_before > 0, f"the seeded worker has class blocks ({blocks_before})")
+
+    removed = delete_employee(connection, "SW-002")["removed"]
+    check(
+        removed["class_blocks"] == blocks_before,
+        f"deleting a seeded worker reports their class blocks ({removed})",
+    )
+    check(removed["semester_schedules"] == 1, "and their semester schedule")
+    check(
+        removed["courses"] == 0 and removed["class_meetings"] == 0,
+        "with no legacy rows to report",
+    )
+    check(
+        sum(removed.values()) > 0,
+        "the summary is not empty, so the interface cannot say they had no classes",
+    )
+    check(find_by_code(connection, "SW-002") is None, "the seeded worker is gone")
+    check(
+        find_by_code(connection, "SW-001") is not None
+        and connection.execute(
+            "SELECT COUNT(*) AS n FROM class_blocks b"
+            " JOIN semester_schedules s ON s.id = b.schedule_id WHERE s.employee_id = ?",
+            (find_by_code(connection, "SW-001")["id"],),
+        ).fetchone()["n"] > 0,
+        "another seeded worker keeps their blocks",
+    )
+    check(
+        connection.execute("SELECT COUNT(*) AS n FROM shifts").fetchone()["n"] == 99,
+        "shared shifts survive",
+    )
+    check(
+        retired_employee_codes(connection) == ["SW-002"],
+        "the seeded worker's code is retired",
     )
     connection.close()
 

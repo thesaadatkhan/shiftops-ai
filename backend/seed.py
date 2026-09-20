@@ -23,19 +23,30 @@ module. It is a command you run on purpose.
 
 import sys
 
-from database import create_schema, get_connection
+from database import (
+    DEMO_SEMESTER_CONFIRMED_AT,
+    DEMO_SEMESTER_END,
+    DEMO_SEMESTER_START,
+    create_schema,
+    get_connection,
+)
+from employees import allocation_progress, reserve_up_to, sequence_number
 from synthetic_data import expand_preferences, generate_required_shifts, generate_workers
 
 # Every table demo initialization writes to.
 WORKFORCE_TABLES = (
     "employees",
-    "courses",
-    "class_meetings",
+    "semester_schedules",
+    "class_blocks",
     "shifts",
     "shift_preferences",
     "approved_leave",
     "assignments",
 )
+
+# Legacy tables initialization no longer writes to, but which still mean the
+# database is in use: a pre-migration database holds its timetables here.
+LEGACY_WORKFORCE_TABLES = ("courses", "class_meetings")
 
 # Every table that must be empty before initialization may run: the tables
 # above, plus the retired-code ledger.
@@ -45,7 +56,9 @@ WORKFORCE_TABLES = (
 # demo data into it could hand SW-005 to a demo worker after a real one had
 # already been deleted under that code - which is exactly the reuse D040
 # exists to prevent.
-TABLES_THAT_MUST_BE_EMPTY = WORKFORCE_TABLES + ("retired_employee_codes",)
+TABLES_THAT_MUST_BE_EMPTY = (
+    WORKFORCE_TABLES + LEGACY_WORKFORCE_TABLES + ("retired_employee_codes",)
+)
 
 
 class DatabaseNotEmpty(RuntimeError):
@@ -53,12 +66,26 @@ class DatabaseNotEmpty(RuntimeError):
 
 
 def non_empty_tables(connection):
-    """Tables that must be empty but already hold rows, as {table: count}."""
+    """Tables that must be empty but already hold rows, as {table: count}.
+
+    `code_allocation` is checked by its value rather than by its row count.
+    The table simply existing, or holding a counter still at zero, means
+    nothing has been issued and initialization may proceed. A counter above
+    zero means employee codes have been handed out in this database, and
+    seeding demo workers into it could issue one of those numbers a second
+    time - so it counts as in use, even if every employee has since been
+    deleted.
+    """
     counts = {}
     for table in TABLES_THAT_MUST_BE_EMPTY:
         count = connection.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
         if count:
             counts[table] = count
+
+    issued = allocation_progress(connection)
+    if issued:
+        counts["issued employee codes"] = issued
+
     return counts
 
 
@@ -114,23 +141,39 @@ def insert_worker(connection, worker, shifts, shift_ids):
         (worker["employee_code"],),
     ).fetchone()["id"]
 
-    for course_label, meetings in worker["courses"]:
-        connection.execute(
-            "INSERT INTO courses (employee_id, course_label) VALUES (?, ?)",
-            (employee_id, course_label),
-        )
-        course_id = connection.execute(
-            "SELECT id FROM courses WHERE employee_id = ? AND course_label = ?",
-            (employee_id, course_label),
-        ).fetchone()["id"]
+    # The demo timetable goes straight into the semester model. Course labels
+    # from the generator are kept only as a note on each block: they are no
+    # longer an operational input (D035), and nothing reads them.
+    #
+    # The timetable is confirmed because the generator builds it to the
+    # documented conventions - fixed course loads, non-overlapping classes -
+    # so it is validated by construction, not merely present.
+    connection.execute(
+        """
+        INSERT INTO semester_schedules
+            (employee_id, start_date, end_date, confirmed_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            employee_id,
+            DEMO_SEMESTER_START,
+            DEMO_SEMESTER_END,
+            DEMO_SEMESTER_CONFIRMED_AT,
+        ),
+    )
+    schedule_id = connection.execute(
+        "SELECT id FROM semester_schedules WHERE employee_id = ?", (employee_id,)
+    ).fetchone()["id"]
 
+    for course_label, meetings in worker["courses"]:
         for day_of_week, start_time, end_time in meetings:
             connection.execute(
                 """
-                INSERT INTO class_meetings (course_id, day_of_week, start_time, end_time)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO class_blocks
+                    (schedule_id, day_of_week, start_time, end_time, source_note)
+                VALUES (?, ?, ?, ?, ?)
                 """,
-                (course_id, day_of_week, start_time, end_time),
+                (schedule_id, day_of_week, start_time, end_time, course_label),
             )
 
     for start_datetime, end_datetime in worker["approved_leave"]:
@@ -186,6 +229,19 @@ def initialize_demo_data(connection):
             shift_ids = insert_shifts(connection, shifts)
             for worker in workers:
                 insert_worker(connection, worker, shifts, shift_ids)
+
+            # Reserve the numbers the demo codes occupy, in this same
+            # transaction. Without it the first worker added afterwards would
+            # be issued SW-001, which a demo worker already holds.
+            reserved = [
+                number
+                for number in (
+                    sequence_number(worker["employee_code"]) for worker in workers
+                )
+                if number is not None
+            ]
+            if reserved:
+                reserve_up_to(connection, max(reserved))
 
             connection.execute("COMMIT")
         except Exception:

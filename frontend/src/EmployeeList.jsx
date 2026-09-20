@@ -11,7 +11,7 @@ const SORT_FIELDS = [
   { value: 'employee_code', label: 'Employee ID' },
   { value: 'full_name', label: 'Name' },
   { value: 'student_type', label: 'Student type' },
-  { value: 'course_count', label: 'Courses' },
+  { value: 'class_block_count', label: 'Class blocks' },
   { value: 'weekly_class_hours', label: 'Class hours/week' },
   { value: 'remaining_capacity_hours', label: 'Remaining capacity' },
 ]
@@ -19,7 +19,7 @@ const SORT_FIELDS = [
 // Sorted with subtraction rather than localeCompare, so 10 sorts after 9
 // instead of before it.
 const NUMERIC_SORT_FIELDS = new Set([
-  'course_count',
+  'class_block_count',
   'weekly_class_hours',
   'remaining_capacity_hours',
 ])
@@ -77,7 +77,10 @@ function isValidEmployeesResponse(data) {
   )
 }
 
-const EMPTY_FORM = { employee_code: '', full_name: '', student_type: 'undergraduate' }
+// Adding carries no employee ID: the backend issues one when the worker is
+// saved (D034). Editing adds `employee_code` so the request can be checked
+// against the stored code, which it is never allowed to change (D042).
+const EMPTY_FORM = { full_name: '', student_type: 'undergraduate' }
 
 async function fetchEmployees() {
   const response = await fetch(EMPLOYEES_URL)
@@ -124,6 +127,26 @@ function hiddenReason(employee, statusFilter, query) {
     return 'They are hidden by the current search - clear the search box to find them.'
   }
   return null
+}
+
+// Timetable readiness FOR THE DISPLAYED WEEK, which is NOT shift eligibility
+// and NOT active status. Each label answers a different question, and they
+// are deliberately not collapsed:
+//
+//   Not set up          nobody has entered any semester for this worker.
+//   Other semester only they have a timetable, but for a different period -
+//                       an expired one, or one still ahead of this week.
+//   Awaiting confirm.   something covers this week but nobody has checked it.
+//   Part of week        confirmed for some days of this week, not all seven.
+//   Confirmed           confirmed for the whole week. With zero class blocks
+//                       that is a deliberate "no classes this week", which
+//                       stays distinct from "Not set up".
+const TIMETABLE_LABELS = {
+  missing: 'Not set up',
+  outside_period: 'Other semester only',
+  unconfirmed: 'Awaiting confirmation',
+  partial: 'Part of week',
+  confirmed: 'Confirmed',
 }
 
 const FEEDBACK_CLASSES = {
@@ -299,7 +322,14 @@ function EmployeeList() {
         {
           method: creating ? 'POST' : 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(formValues),
+          // Creating sends the two fields the supervisor filled in and
+          // nothing else. The backend rejects a supplied employee_code
+          // outright, so sending a blank or guessed one would fail the save.
+          body: JSON.stringify(
+            creating
+              ? { full_name: formValues.full_name, student_type: formValues.student_type }
+              : formValues,
+          ),
         },
       )
     } catch {
@@ -326,7 +356,11 @@ function EmployeeList() {
     // cannot resubmit it, and report success before attempting the reload -
     // a failed reload does not undo the save.
     closeForm()
-    const saved = `Saved ${body.full_name} (${body.employee_code}).`
+    // The code comes from the response, never from anything the browser
+    // guessed: it is the one the backend actually issued.
+    const saved = creating
+      ? `Added ${body.full_name}. Their employee ID is ${body.employee_code}.`
+      : `Saved ${body.full_name} (${body.employee_code}).`
     setFeedback({ tone: 'success', message: saved })
     await refreshList(body, saved)
     setSaving(false)
@@ -335,9 +369,16 @@ function EmployeeList() {
   function describeRemoved(removed) {
     // Only the record types they actually had, so the message does not list
     // "0 courses" at somebody who never had any.
+    // Every record type the backend reports. Semester schedules and class
+    // blocks are where timetables actually live now; the course rows only
+    // still exist for workers migrated from the old model. Leaving the new
+    // ones out made the message claim a worker "had no classes" purely
+    // because they had no legacy course rows.
     const parts = [
-      [removed.courses, 'course', 'courses'],
-      [removed.class_meetings, 'class meeting', 'class meetings'],
+      [removed.semester_schedules, 'semester schedule', 'semester schedules'],
+      [removed.class_blocks, 'class block', 'class blocks'],
+      [removed.courses, 'legacy course', 'legacy courses'],
+      [removed.class_meetings, 'legacy class meeting', 'legacy class meetings'],
       [removed.shift_preferences, 'shift preference', 'shift preferences'],
       [removed.approved_leave, 'approved leave period', 'approved leave periods'],
     ]
@@ -528,10 +569,9 @@ function EmployeeList() {
         and approved leave from the database for good. It cannot be undone.
       </p>
       <p className="table-note">
-        Their employee ID is recorded as retired. Automatic IDs, once they
-        arrive, will never reuse it &mdash; but IDs are still typed in by hand
-        today and nothing yet stops that, so do not enter{' '}
-        {confirmingDelete.employee_code} for anyone else.
+        Their employee ID, {confirmingDelete.employee_code}, is retired. New
+        workers continue from the highest ID used so far, so it will never be
+        given to anyone else.
       </p>
       <p className="table-note">
         To keep their records instead, cancel and use Deactivate &mdash; that
@@ -562,20 +602,22 @@ function EmployeeList() {
     <form className="employee-form" onSubmit={handleSave}>
       <h3>{formMode === 'create' ? 'Add employee' : `Edit ${editingCode}`}</h3>
       <div className="list-controls">
-        <label htmlFor="form-employee-code">Employee ID</label>
-        {/* Typed only when adding. An existing code is a stable identifier
-            that already appears elsewhere, so editing shows it read-only
-            rather than as a field that looks changeable (D042). readOnly
-            rather than disabled, so it can still be selected and copied. */}
-        <input
-          id="form-employee-code"
-          value={formValues.employee_code}
-          readOnly={formMode === 'edit'}
-          aria-readonly={formMode === 'edit'}
-          onChange={(event) =>
-            setFormValues({ ...formValues, employee_code: event.target.value })
-          }
-        />
+        {/* There is no ID field when adding: the backend issues the ID, and
+            showing a box would invite someone to choose one. When editing,
+            the stored ID is shown read-only rather than as a field that looks
+            changeable (D042) - readOnly, not disabled, so it can still be
+            selected and copied. */}
+        {formMode === 'edit' && (
+          <>
+            <label htmlFor="form-employee-code">Employee ID</label>
+            <input
+              id="form-employee-code"
+              value={formValues.employee_code}
+              readOnly
+              aria-readonly="true"
+            />
+          </>
+        )}
 
         <label htmlFor="form-full-name">Name</label>
         <input
@@ -609,7 +651,7 @@ function EmployeeList() {
       <p className="table-note">
         {formMode === 'edit'
           ? 'Employee IDs cannot be changed. This one appears in schedules and reports, so renaming it would make one worker look like two. Edit the name or student type instead, or delete the worker if they were created by mistake.'
-          : 'Employee IDs are typed in by hand for now and cannot be changed afterwards, so check it before saving. Letters, digits, hyphens and underscores only.'}
+          : 'The employee ID is assigned when you save, continuing from the highest ID used so far. It is shown once the worker has been created, and cannot be changed afterwards.'}
       </p>
 
       {formError !== null && (
@@ -747,6 +789,20 @@ function EmployeeList() {
         hours and approved leave are not subtracted from it.
       </p>
 
+      <p className="table-note">
+        Class blocks and class hours count only the classes that actually fall
+        between {week.start} and {week.end} &mdash; a Monday class is counted
+        only if that Monday is inside the worker&rsquo;s semester. Timetable
+        describes this week specifically: &ldquo;Not set up&rdquo; means no
+        semester has been entered at all, &ldquo;Other semester only&rdquo;
+        means their timetable is for a different period, &ldquo;Part of
+        week&rdquo; means only some days are confirmed, and
+        &ldquo;Confirmed&rdquo; with no class blocks means a deliberate
+        &ldquo;no classes this week&rdquo;. None of this is shift eligibility,
+        which does not exist yet, and it is separate from whether a worker is
+        active.
+      </p>
+
       {visibleEmployees.length === 0 ? (
         <p className="backend-status backend-status-loading">
           {/* Reset is deliberately not offered as the way to find a missing
@@ -765,8 +821,8 @@ function EmployeeList() {
                 <th>Name</th>
                 <th>Status</th>
                 <th>Student type</th>
-                <th>Courses</th>
-                <th>Class meetings</th>
+                <th>Class blocks</th>
+                <th>Timetable</th>
                 <th>Class hours/week</th>
                 <th>Weekly limit</th>
                 <th>Assigned</th>
@@ -782,8 +838,8 @@ function EmployeeList() {
                   <td>{employee.full_name}</td>
                   <td>{employee.is_active ? 'Active' : 'Inactive'}</td>
                   <td>{studentTypeLabel(employee)}</td>
-                  <td>{employee.course_count}</td>
-                  <td>{employee.class_meeting_count}</td>
+                  <td>{employee.class_block_count}</td>
+                  <td>{TIMETABLE_LABELS[employee.timetable_status] ?? employee.timetable_status}</td>
                   <td>{employee.weekly_class_hours}</td>
                   <td>{employee.weekly_hour_limit} h</td>
                   <td>{employee.assigned_hours} h</td>

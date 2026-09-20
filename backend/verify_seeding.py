@@ -84,10 +84,14 @@ def main():
     check(counts["employees"] == 30, f"initialization creates 30 employees ({counts['employees']})")
     check(counts["shifts"] == 99, f"initialization creates 99 shifts ({counts['shifts']})")
     check(
-        counts["courses"] == expected_courses
-        and counts["class_meetings"] == expected_meetings
+        counts["semester_schedules"] == 30,
+        f"initialization creates one semester schedule per worker ({counts['semester_schedules']})",
+    )
+    check(
+        counts["class_blocks"] == expected_meetings
         and counts["approved_leave"] == expected_leave,
-        "every generated course, class meeting and leave period is written",
+        f"every generated class block and leave period is written "
+        f"({counts['class_blocks']} blocks vs {expected_meetings} generated meetings)",
     )
     check(counts["shift_preferences"] > 0, f"shift preferences are written ({counts['shift_preferences']})")
     check(counts["assignments"] == 0, "no assignments are created")
@@ -108,6 +112,15 @@ def main():
     ).fetchone()["id"]
     for table in ("shift_preferences", "approved_leave", "assignments"):
         connection.execute(f"DELETE FROM {table} WHERE employee_id = ?", (deleted_id,))
+    connection.execute(
+        "DELETE FROM class_blocks WHERE schedule_id IN"
+        " (SELECT id FROM semester_schedules WHERE employee_id = ?)",
+        (deleted_id,),
+    )
+    connection.execute(
+        "DELETE FROM semester_schedules WHERE employee_id = ?", (deleted_id,)
+    )
+    # Legacy rows too, for a database that still holds them after migrating.
     connection.execute(
         "DELETE FROM class_meetings WHERE course_id IN (SELECT id FROM courses WHERE employee_id = ?)",
         (deleted_id,),
@@ -135,9 +148,10 @@ def main():
 
     # 3. A manually managed database is refused and left alone.
     manual = fresh_database()
+    # The code is issued by the backend now (D034); on an empty database that
+    # is SW-001, so this worker sits exactly where a demo worker would.
     created = create_employee(
-        manual,
-        {"employee_code": "SW-031", "full_name": "Manually Added", "student_type": "masters"},
+        manual, {"full_name": "Manually Added", "student_type": "masters"}
     )
     error = expect_refusal(manual, "a database with a manually created worker is refused")
     check(
@@ -145,7 +159,7 @@ def main():
         "the refusal names the table that already holds rows",
     )
     stored = manual.execute(
-        "SELECT id, full_name, seed_key FROM employees WHERE employee_code = 'SW-031'"
+        "SELECT id, full_name, seed_key FROM employees WHERE employee_code = 'SW-001'"
     ).fetchone()
     check(
         stored["id"] == created["id"] and stored["full_name"] == "Manually Added",

@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import ensure_schema, get_connection
 from employees import (
+    CodeAllocationError,
     DeactivationBlocked,
     DeletionBlocked,
     DuplicateEmployeeCode,
@@ -22,6 +23,11 @@ from reporting import (
     remaining_capacity_hours,
 )
 from synthetic_data import WEEK_START, WEEK_END
+
+# WEEK_END is the exclusive Monday boundary; the reporting week's last day is
+# the Sunday before it. Semester overlap is compared against that inclusive
+# date.
+REPORTING_WEEK_END = WEEK_END - timedelta(days=1)
 
 app = FastAPI()
 
@@ -59,8 +65,6 @@ def list_employees():
                 e.student_type,
                 e.weekly_hour_limit,
                 e.is_active,
-                (SELECT COUNT(*) FROM courses c
-                  WHERE c.employee_id = e.id) AS course_count,
                 (SELECT COUNT(*) FROM approved_leave l
                   WHERE l.employee_id = e.id) AS approved_leave_count
             FROM employees e
@@ -68,12 +72,22 @@ def list_employees():
             """
         ).fetchall()
 
-        meetings = connection.execute(
+        # Every block, with the semester it belongs to. Which of them
+        # actually happen in the reporting week is decided per block below,
+        # from the date that block falls on - not from whether the semester
+        # merely overlaps the week somewhere.
+        blocks = connection.execute(
             """
-            SELECT c.employee_id, m.start_time, m.end_time
-            FROM class_meetings m
-            JOIN courses c ON c.id = m.course_id
+            SELECT s.employee_id, s.start_date, s.end_date,
+                   b.day_of_week, b.start_time, b.end_time
+            FROM class_blocks b
+            JOIN semester_schedules s ON s.id = b.schedule_id
             """
+        ).fetchall()
+
+        schedules = connection.execute(
+            "SELECT employee_id, start_date, end_date, confirmed_at"
+            " FROM semester_schedules"
         ).fetchall()
 
         try:
@@ -90,12 +104,26 @@ def list_employees():
 
     meeting_counts = {}
     class_minutes = {}
-    for meeting in meetings:
-        employee_id = meeting["employee_id"]
+    for block in blocks:
+        # The date this recurring class actually falls on inside the
+        # reporting week. A Monday class in a semester that starts on the
+        # Wednesday of that week does NOT happen this week, even though the
+        # semester overlaps the week - which is exactly what comparing whole
+        # ranges got wrong.
+        occurrence = reporting_week_date(block["day_of_week"])
+        if not (block["start_date"] <= occurrence <= block["end_date"]):
+            continue
+
+        employee_id = block["employee_id"]
         meeting_counts[employee_id] = meeting_counts.get(employee_id, 0) + 1
+        # Class blocks keep their real lengths (75 and 165 minutes in the
+        # demo data), so class hours stay fractional. The whole-hour rule
+        # applies to work shifts only.
         class_minutes[employee_id] = class_minutes.get(employee_id, 0) + minutes_between(
-            meeting["start_time"], meeting["end_time"]
+            block["start_time"], block["end_time"]
         )
+
+    coverage = reporting_period_coverage(schedules)
 
     def employee_payload(employee):
         assigned = assigned_hours.get(employee["id"], 0)
@@ -108,9 +136,17 @@ def list_employees():
             "student_type": employee["student_type"],
             "is_active": bool(employee["is_active"]),
             "weekly_hour_limit": employee["weekly_hour_limit"],
-            "course_count": employee["course_count"],
-            "class_meeting_count": meeting_counts.get(employee["id"], 0),
+            "class_block_count": meeting_counts.get(employee["id"], 0),
             "weekly_class_hours": round(class_minutes.get(employee["id"], 0) / 60, 2),
+            # Readiness for the DISPLAYED reporting week, in five states -
+            # missing, outside_period, unconfirmed, partial, confirmed. See
+            # reporting_period_coverage() for what each one means and why
+            # they are deliberately not collapsed.
+            #
+            # This describes timetable readiness only. It is not shift
+            # eligibility, which does not exist yet, and it is independent of
+            # active status.
+            "timetable_status": coverage.get(employee["id"], "missing"),
             "approved_leave_count": employee["approved_leave_count"],
             # Whole hours: work shifts are whole-hour blocks, so these
             # totals never need rounding.
@@ -127,6 +163,79 @@ def list_employees():
         "week_end": (WEEK_END - timedelta(days=1)).strftime("%Y-%m-%d"),
         "employees": [employee_payload(employee) for employee in employees],
     }
+
+
+# The seven dates of the fixed reporting week, indexed by day_of_week with
+# 0 = Monday (D025).
+REPORTING_WEEK_DATES = [
+    (WEEK_START + timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(7)
+]
+
+
+def reporting_week_date(day_of_week):
+    """The date a recurring weekday falls on inside the reporting week."""
+    return REPORTING_WEEK_DATES[day_of_week]
+
+
+def reporting_period_coverage(schedules):
+    """Timetable readiness for the DISPLAYED reporting week, per employee.
+
+    Readiness is about the week on screen, not about whether a worker ever
+    had a confirmed timetable. A spring semester confirmed months ago says
+    nothing about October, and reporting it as "confirmed" while October is
+    displayed would be actively misleading.
+
+    Five states, each answering a different question:
+
+      missing        - no semester schedule at all. Nobody has said anything
+                       about this worker's classes.
+      outside_period - schedules exist, but none of them covers any day of
+                       the reporting week. Their information is about some
+                       other period: an expired semester, or one still ahead.
+      unconfirmed    - a schedule covers part of the week, but no confirmed
+                       schedule covers any of it. Something has been entered
+                       and nobody has checked it is complete.
+      partial        - confirmed schedules cover some days of the week but
+                       not all seven. The week is only partly accounted for.
+      confirmed      - confirmed schedules cover all seven days. Combined
+                       with a class-block count of zero, that is a deliberate
+                       "this worker has no classes this week", which stays
+                       distinguishable from `missing`.
+
+    This is timetable readiness only. It is NOT shift eligibility, which does
+    not exist, and it is independent of whether a worker is active.
+    """
+    any_days = {}
+    confirmed_days = {}
+    seen = set()
+
+    for schedule in schedules:
+        employee_id = schedule["employee_id"]
+        seen.add(employee_id)
+        covered = {
+            date
+            for date in REPORTING_WEEK_DATES
+            if schedule["start_date"] <= date <= schedule["end_date"]
+        }
+        if not covered:
+            continue
+        any_days.setdefault(employee_id, set()).update(covered)
+        if schedule["confirmed_at"] is not None:
+            confirmed_days.setdefault(employee_id, set()).update(covered)
+
+    status = {}
+    for employee_id in seen:
+        covered = any_days.get(employee_id, set())
+        confirmed = confirmed_days.get(employee_id, set())
+        if not covered:
+            status[employee_id] = "outside_period"
+        elif not confirmed:
+            status[employee_id] = "unconfirmed"
+        elif len(confirmed) < len(REPORTING_WEEK_DATES):
+            status[employee_id] = "partial"
+        else:
+            status[employee_id] = "confirmed"
+    return status
 
 
 def employee_response(row):
@@ -163,6 +272,10 @@ def run_employee_action(action):
         # 409 for the same reason: the worker has shift history, so deleting
         # them is refused. The transaction rolled back; nothing was removed.
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except CodeAllocationError as error:
+        # 500: the request was fine, but the server cannot issue a code. The
+        # transaction rolled back, so no worker was created.
+        raise HTTPException(status_code=500, detail=str(error)) from error
     finally:
         connection.close()
 
@@ -176,6 +289,12 @@ def write_employee(action):
 
 @app.post("/api/employees", status_code=201)
 def add_employee(payload: dict):
+    """Create a worker. The employee code is issued by the backend (D034).
+
+    The payload carries `full_name` and `student_type` only; sending an
+    `employee_code` is a 400. The response is the usual employee shape, so the
+    caller reads the code that was actually issued from it.
+    """
     return write_employee(lambda connection: create_employee(connection, payload))
 
 
