@@ -225,7 +225,7 @@ Implemented list controls (Phase 5B):
 - After a successful action the list reloads with the supervisor's search text, sort selection and status filter unchanged. Because the list defaults to Active, a worker who was just deactivated is no longer shown, and the confirmation says so and directs the supervisor to the Inactive or All filter. A confirmed action and a failed list reload are reported as separate outcomes, and retrying the reload only re-reads the list.
 
 - Permanently delete an employee, behind an explicit confirmation identifying them by name and employee code and stating that their profile, classes, shift preferences and approved leave will be removed permanently. Cancelling performs no change of any kind. Deletion is allowed only when no assignment references that employee, historical assignments included, because shift history must continue to refer to a real worker; the backend enforces this rather than relying on the interface. The refusal explains that history is preserved and that deactivation is the appropriate alternative, subject to its own safeguards. The employee and their dependent class, preference and leave records are removed in one transaction, with the assignment check made inside that same transaction so a concurrent write cannot invalidate it; any failure removes nothing. Shared shifts and every other employee's records are preserved.
-- A deleted employee code is retained as a retired code, holding the code and the time only and no copy of the deleted worker's details. This exists so that automatic employee-code allocation, when it is implemented, can never reissue a code that has already been used. Allocation itself remains planned, not implemented.
+- A deleted employee code is retained as a retired code, holding the code and the time only and no copy of the deleted worker's details. This exists so that automatic employee-code allocation, when it is implemented, can never reissue a code that has already been used. Allocation itself remains planned, not implemented, and nothing currently prevents a retired code being entered by hand during Add; supervisors should treat a retired code as spent until allocation enforces it.
 
 Remaining employee management is planned scope, not yet implemented:
 - Excluding inactive workers from new assignments and from schedule generation. The active flag is now stored and editable, but nothing consumes it beyond the employee list's own filter: neither the eligibility logic (Phase 6) nor the schedule generator (Phase 7) exists yet. Both must exclude inactive workers while leaving their historical assignments attached.
@@ -436,9 +436,10 @@ and confirmed semester timetables. These feed Phase 6 eligibility and Phase 7
 optimization, followed by Phase 8 reporting and Phase 9 AI. The following are
 planned integration requirements, not claims of existing scheduling behavior:
 
-- Preserve retired employee-number information when Phase 5B deletion ships,
-  so Phase 5C's allocator cannot reuse a deleted number. Existing identifiers
-  and internal relationships remain stable during migration.
+- Retired employee-number information is already preserved by Phase 5B
+  deletion, so Phase 5C's allocator must consult it and must not reuse a
+  deleted number. Existing identifiers and internal relationships remain
+  stable during migration.
 - Evaluate current database records, not fixed demo populations or course
   counts. Apply identical status, semester readiness, overlap and hour-limit
   rules to eligibility and generation; revalidate before saving assignments.
