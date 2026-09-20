@@ -10,6 +10,10 @@ Checks, per hall and overall:
 5. Every shift requires exactly one worker, lasts a positive whole number
    of hours, and carries the correct end date when it crosses midnight.
 
+Runs against a throwaway in-memory demo fixture. The project's own
+`backend/shiftops.db` is never opened, so this works on a fresh checkout and
+is unaffected by workers edited or removed through the application.
+
 Run with:  python verify_coverage.py
 Exits non-zero if any check fails.
 """
@@ -17,7 +21,7 @@ Exits non-zero if any check fails.
 import sys
 from datetime import datetime
 
-from database import get_connection
+from demo_fixture import demo_fixture_connection
 from reporting import InvalidWorkDuration, shift_duration_hours
 from synthetic_data import (
     ALL_HALLS,
@@ -35,7 +39,10 @@ def hours(periods):
 
 
 def load_shifts_by_hall():
-    connection = get_connection()
+    # A pristine in-memory demo fixture, never the working database: these
+    # figures describe the generated dataset, not whatever anyone has since
+    # edited through the application.
+    connection = demo_fixture_connection()
     try:
         rows = connection.execute(
             """

@@ -24,13 +24,17 @@ Checks:
    that the patterns themselves are right. Check 5 is what pins the
    representative patterns to revision 3.
 
+Runs against a throwaway in-memory demo fixture. The project's own
+`backend/shiftops.db` is never opened, so this works on a fresh checkout and
+is unaffected by workers edited or removed through the application.
+
 Run with:  python verify_preferences.py
 Exits non-zero if any check fails.
 """
 
 import sys
 
-from database import get_connection
+from demo_fixture import demo_fixture_connection
 from synthetic_data import (
     REPRESENTATIVE_WORKERS,
     expand_preferences,
@@ -111,7 +115,10 @@ def stored_preferences(connection, employee_code):
 
 def main():
     shifts = generate_required_shifts()
-    connection = get_connection()
+    # A pristine in-memory demo fixture, never the working database: the
+    # expectations below describe the generated dataset, so a worker renamed
+    # or removed through the application must not make them fail.
+    connection = demo_fixture_connection()
     failures = []
 
     try:

@@ -93,6 +93,11 @@ The workforce size should eventually be configurable for workforce-planning scen
 
 A student worker may only be assigned to a shift when all applicable constraints are satisfied.
 
+The planned Phase 6/7 rules require active status and confirmed semester
+timetable coverage for the full shift. Missing, unconfirmed or expired class
+information is not unrestricted availability; explicitly confirmed no classes
+is valid. These checks are not implemented by the current lifecycle endpoints.
+
 ### Shift Preferences
 
 Workers indicate preferred and low-preference shifts. Unspecified preferences are neutral. Preferences are soft: a low-preference shift remains assignable when all hard constraints are satisfied. Students do not freely declare themselves unavailable outside class; non-class absences require approved leave.
@@ -119,7 +124,7 @@ Every work shift must last a positive whole number of hours. Zero-length, negati
 
 Because individual shifts are whole hours, each worker's assigned hours and remaining weekly capacity are also whole hours.
 
-This rule governs **work** only. Class meetings are not work and legitimately last 75 minutes (undergraduate) or 165 minutes (master's). The workforce-wide figure of 16.3 hours per worker per week remains valid: it is an average across 30 workers, not an individual shift or assignment length.
+This rule governs **work** only. Demo class meetings last 75 minutes (undergraduate) or 165 minutes (master's); these lengths do not constrain manually entered semester blocks. The workforce-wide figure of 16.3 hours per worker per week remains valid for the original demo: it is an average across 30 workers, not an individual shift or assignment length.
 
 ### Assignment Conflicts
 
@@ -207,10 +212,12 @@ Implemented list controls (Phase 5B):
 
 - Add and edit worker details through forms backed by REST endpoints and SQLite. The employee's internal identity stays stable when details are edited, so related records remain attached even when the employee code changes. The backend validates required fields, rejects whitespace-only values, accepts only supported student types, and rejects an employee code already used by another worker (compared without regard to letter case). An employee code may contain only letters, digits, hyphens and underscores, because the code is used to address the worker in the edit request; codes already stored are left unchanged. (Automatic code allocation is planned separately and is not implemented.) New workers start active with the 20-hour weekly limit and receive no generated classes, preferences, leave, or assignments. A worker can be added to an empty database without seeding.
 
+- Deactivate and reactivate workers, one control per row, backed by REST endpoints. Deactivating changes only the active flag: the worker's internal identity, classes, shift preferences, approved leave and assignment history are all preserved, and reactivation restores the same record rather than creating a replacement. Deactivation is blocked while the worker holds an assigned shift that has not finished — a shift already in progress counts, not only shifts whose start is still ahead — and the refusal names those shifts and states that deactivating would not have cancelled them. Nothing is deleted, cancelled or reassigned. Shifts that have already ended are history and never block. "Has not finished" is judged against the project's single local simulation clock (section 5.1), comparing the shift's end datetime with the reference time; the reference time is injectable so that tests use fixed values rather than depending on when they run.
+- After a successful action the list reloads with the supervisor's search text, sort selection and status filter unchanged. Because the list defaults to Active, a worker who was just deactivated is no longer shown, and the confirmation says so and directs the supervisor to the Inactive or All filter. A confirmed action and a failed list reload are reported as separate outcomes, and retrying the reload only re-reads the list.
+
 Remaining employee management is planned scope (Phase 5B), not yet implemented:
-- Deactivate workers without deleting their classes, preferences, leave, or assignment history. Inactive workers must be excluded from new assignments and future schedule generation. Existing assignments must never silently disappear; if future assignments exist, block deactivation until they are explicitly resolved.
-- Allow reactivation. (The Active/Inactive/All filter itself is implemented; the actions that change a worker's status are not.)
 - Permanently delete an employee only after explicit confirmation and only when no assignment references that employee. Remove dependent class, preference, and leave records transactionally; preserve shared shifts. Workers with assignment history should be deactivated instead.
+- Excluding inactive workers from new assignments and from schedule generation. The active flag is now stored and editable, but nothing consumes it beyond the employee list's own filter: neither the eligibility logic (Phase 6) nor the schedule generator (Phase 7) exists yet. Both must exclude inactive workers while leaving their historical assignments attached.
 
 The database is the source of truth after explicit demo initialization. Demo data is initialized once, into a database that holds no workforce or scheduling records, and that initialization is atomic: it either writes the whole dataset or nothing. If any such record already exists, initialization refuses and changes nothing, so it cannot overwrite edits, restore intentionally deleted workers, or add demo workers to a manually managed database. There is no repair, reset or regeneration workflow, and neither application startup nor any employee-management action performs seeding. Schema changes are applied through additive migrations that preserve existing records. Provide an empty-workforce path for entering fictional workers through the interface. The 30-worker count, student-type mix, and course-load conventions constrain demo generation, not user-created records. The synthetic-only data policy and 20-hour weekly limit remain unchanged.
 
@@ -369,6 +376,40 @@ The completed application is intended to be deployed using Microsoft Azure servi
 ---
 
 ## 10. Architecture Principle
+
+### Integration of Employee Management With Later Phases
+
+Phase 5B manages identity/status/history; Phase 5C provides automatic codes
+and confirmed semester timetables. These feed Phase 6 eligibility and Phase 7
+optimization, followed by Phase 8 reporting and Phase 9 AI. The following are
+planned integration requirements, not claims of existing scheduling behavior:
+
+- Preserve retired employee-number information when Phase 5B deletion ships,
+  so Phase 5C's allocator cannot reuse a deleted number. Existing identifiers
+  and internal relationships remain stable during migration.
+- Evaluate current database records, not fixed demo populations or course
+  counts. Apply identical status, semester readiness, overlap and hour-limit
+  rules to eligibility and generation; revalidate before saving assignments.
+- Once assignments exist, class/leave edits must expose newly created
+  conflicts for explicit resolution. Do not silently remove assignments or
+  treat previously computed eligibility as permanently valid.
+- Apply the shared reporting week to class summaries, coverage and assigned
+  hours. Employee status is current, while historical assignments remain
+  history. Preserve D025 start-week work-hour accounting.
+- Preferences refer to concrete dated shifts. Another week's shifts require
+  explicit preparation, separate from one-time workforce initialization;
+  browsing a week must not generate records or copy preferences.
+- Calculate aggregate active capacity from actual worker limits, distinguish
+  it from timetable readiness and usable eligibility, and retain historical
+  coverage/hours for workers now inactive. The 30-worker/600-hour numbers
+  describe only the original demo.
+- AI tools must use the requested worker/week and return the deterministic
+  results, including incomplete/expired timetable explanations.
+- Deployment must preserve SQLite and ID-allocation state, support backup and
+  restore, migrate existing data rather than reinitialize it, and align the
+  runtime clock with the documented local simulation clock.
+
+### Source of Truth
 
 Structured operational truth should flow through:
 

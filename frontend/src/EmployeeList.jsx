@@ -98,6 +98,40 @@ function matchesStatus(employee, statusFilter) {
   return statusFilter === 'active' ? employee.is_active : !employee.is_active
 }
 
+// Why a worker the user just acted on is no longer in the table, and what to
+// do about it. Saying "hidden" without saying which control hid them leaves
+// them looking for a row that is filtered out, not missing.
+//
+// The advice is derived from the worker's own status, so it names the filter
+// that actually contains them: Active after a reactivation, Inactive after a
+// deactivation. Reset is deliberately never suggested here - it selects
+// Active, which would still hide a worker who has just been deactivated.
+function hiddenReason(employee, statusFilter, query) {
+  const byStatus = !matchesStatus(employee, statusFilter)
+  const bySearch = !matchesSearch(employee, query)
+  const filter = employee.is_active ? 'Active' : 'Inactive'
+
+  if (byStatus && bySearch) {
+    return (
+      'They are hidden by the current search and the Status filter - clear the ' +
+      `search box and set Status to ${filter} or All to find them.`
+    )
+  }
+  if (byStatus) {
+    return `They are hidden by the Status filter - choose ${filter} or All to find them.`
+  }
+  if (bySearch) {
+    return 'They are hidden by the current search - clear the search box to find them.'
+  }
+  return null
+}
+
+const FEEDBACK_CLASSES = {
+  success: 'backend-status backend-status-success',
+  error: 'backend-status backend-status-error',
+  notice: 'backend-status backend-status-loading',
+}
+
 function EmployeeList() {
   const [status, setStatus] = useState('loading')
   const [employees, setEmployees] = useState([])
@@ -110,6 +144,8 @@ function EmployeeList() {
   const [formValues, setFormValues] = useState(EMPTY_FORM)
   const [editingCode, setEditingCode] = useState(null)
   const [saving, setSaving] = useState(false)
+  // The employee_code of the row whose status change is in flight, or null.
+  const [pendingCode, setPendingCode] = useState(null)
   const [formError, setFormError] = useState(null)
   const [feedback, setFeedback] = useState(null)
   const [listError, setListError] = useState(null)
@@ -168,29 +204,30 @@ function EmployeeList() {
     setFormError(null)
   }
 
-  async function refreshList(savedEmployee = null) {
+  async function refreshList(affected = null, lead = '') {
     // Only ever reloads. Safe to call again from the Retry control, because
     // it never re-sends a write.
+    //
+    // Search, sort and status-filter live in their own state and are not
+    // touched here, so a refresh leaves the user's selections exactly as they
+    // were - which is also why the row they acted on may drop out of view.
     try {
       const data = await fetchEmployees()
       setEmployees(data.employees)
       setWeek({ start: data.week_start, end: data.week_end })
       setListError(null)
 
-      if (savedEmployee !== null) {
-        const saved = data.employees.find(
-          (employee) => employee.employee_code === savedEmployee.employee_code,
+      if (affected !== null) {
+        const current = data.employees.find(
+          (employee) => employee.employee_code === affected.employee_code,
         )
-        const query = searchText.trim().toLowerCase()
-        const hidden =
-          saved !== undefined &&
-          !(matchesStatus(saved, statusFilter) && matchesSearch(saved, query))
+        const reason =
+          current === undefined
+            ? null
+            : hiddenReason(current, statusFilter, searchText.trim().toLowerCase())
 
-        if (hidden) {
-          setFeedback({
-            tone: 'notice',
-            message: `Saved ${savedEmployee.full_name} (${savedEmployee.employee_code}), but the current search or status filter hides them. Reset the controls to see them.`,
-          })
+        if (reason !== null) {
+          setFeedback({ tone: 'notice', message: `${lead} ${reason}` })
         }
       }
       return true
@@ -250,12 +287,66 @@ function EmployeeList() {
     // still target the old employee code after a rename, and report success
     // before attempting the reload - a failed reload does not undo the save.
     closeForm()
-    setFeedback({
-      tone: 'success',
-      message: `Saved ${body.full_name} (${body.employee_code}).`,
-    })
-    await refreshList(body)
+    const saved = `Saved ${body.full_name} (${body.employee_code}).`
+    setFeedback({ tone: 'success', message: saved })
+    await refreshList(body, saved)
     setSaving(false)
+  }
+
+  async function handleStatusChange(employee, nextActive) {
+    // One action at a time across the whole table: a second click, on this
+    // row or another, cannot start a write while one is in flight.
+    if (pendingCode !== null || saving) {
+      return
+    }
+
+    const action = nextActive ? 'reactivate' : 'deactivate'
+    setPendingCode(employee.employee_code)
+    setFeedback(null)
+
+    let response
+
+    // Step 1: the write. Its outcome alone decides what we may claim.
+    try {
+      response = await fetch(
+        `${EMPLOYEES_URL}/${encodeURIComponent(employee.employee_code)}/${action}`,
+        { method: 'POST' },
+      )
+    } catch {
+      // No response came back, so whether the server applied the change is
+      // genuinely unknown - do not claim either way.
+      setFeedback({
+        tone: 'error',
+        message:
+          `Could not reach the backend, so it is unclear whether ${employee.full_name} ` +
+          `(${employee.employee_code}) was ${action}d. Reload the list to check before trying again.`,
+      })
+      setPendingCode(null)
+      return
+    }
+
+    const body = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      // Rejected outright - for a blocked deactivation the backend explains
+      // which shifts are unresolved. Nothing was changed, and no shift was
+      // deleted, cancelled or reassigned.
+      setFeedback({
+        tone: 'error',
+        message: body?.detail ?? `Could not ${action} this employee (status ${response.status}).`,
+      })
+      setPendingCode(null)
+      return
+    }
+
+    // Step 2: the change is confirmed. Report it before reloading, because a
+    // failed reload does not undo it.
+    const lead = nextActive
+      ? `Reactivated ${body.full_name} (${body.employee_code}).`
+      : `Deactivated ${body.full_name} (${body.employee_code}). Their classes, preferences, leave and assignment history are unchanged.`
+    setFeedback({ tone: 'success', message: lead })
+    await refreshList(body, lead)
+    setPendingCode(null)
   }
 
   if (status === 'loading') {
@@ -360,15 +451,19 @@ function EmployeeList() {
           </button>
         </div>
         {feedback !== null && (
-          <p className="backend-status backend-status-success" aria-live="polite">
+          <p className={FEEDBACK_CLASSES[feedback.tone]} aria-live="polite">
             {feedback.message}
           </p>
         )}
         {listError !== null && (
           <p className="backend-status backend-status-error" aria-live="polite">
             {listError}{' '}
-            <button type="button" onClick={() => refreshList()} disabled={saving}>
-                Retry loading
+            <button
+              type="button"
+              onClick={() => refreshList()}
+              disabled={saving || pendingCode !== null}
+            >
+              Retry loading
             </button>
           </p>
         )}
@@ -391,14 +486,7 @@ function EmployeeList() {
       </div>
 
       {feedback !== null && (
-        <p
-          className={
-            feedback.tone === 'success'
-              ? 'backend-status backend-status-success'
-              : 'backend-status backend-status-loading'
-          }
-          aria-live="polite"
-        >
+        <p className={FEEDBACK_CLASSES[feedback.tone]} aria-live="polite">
           {feedback.message}
         </p>
       )}
@@ -406,7 +494,11 @@ function EmployeeList() {
       {listError !== null && (
         <p className="backend-status backend-status-error" aria-live="polite">
           {listError}{' '}
-          <button type="button" onClick={() => refreshList()} disabled={saving}>
+          <button
+            type="button"
+            onClick={() => refreshList()}
+            disabled={saving || pendingCode !== null}
+          >
             Retry loading
           </button>
         </p>
@@ -479,9 +571,12 @@ function EmployeeList() {
 
       {visibleEmployees.length === 0 ? (
         <p className="backend-status backend-status-loading">
+          {/* Reset is deliberately not offered as the way to find a missing
+              worker: it selects Active, so it cannot reveal an inactive one.
+              All is the only status that never hides anybody. */}
           {query === ''
-            ? 'No employees match the current status filter. Try a different status, or reset the controls.'
-            : `No employees match "${searchText.trim()}" with the current status filter. Try a different name or employee ID, or reset the controls.`}
+            ? 'No employees match the current status filter. Choose All to show every worker, active and inactive.'
+            : `No employees match "${searchText.trim()}" with the current status filter. Try a different name or employee ID, and choose the All status to include inactive workers.`}
         </p>
       ) : (
         <div className="table-wrapper">
@@ -520,9 +615,23 @@ function EmployeeList() {
                     <button
                       type="button"
                       onClick={() => openEditForm(employee)}
-                      disabled={formMode !== null}
+                      disabled={formMode !== null || pendingCode !== null}
                     >
                       Edit
+                    </button>{' '}
+                    {/* Every row's button reads the same, so the accessible
+                        name carries which worker it acts on. */}
+                    <button
+                      type="button"
+                      onClick={() => handleStatusChange(employee, !employee.is_active)}
+                      disabled={formMode !== null || pendingCode !== null}
+                      aria-label={`${employee.is_active ? 'Deactivate' : 'Reactivate'} ${employee.full_name}`}
+                    >
+                      {pendingCode === employee.employee_code
+                        ? 'Working...'
+                        : employee.is_active
+                          ? 'Deactivate'
+                          : 'Reactivate'}
                     </button>
                   </td>
                 </tr>

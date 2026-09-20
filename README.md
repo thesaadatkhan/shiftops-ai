@@ -11,10 +11,11 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 **Implemented:**
 
 - A React application shell (Vite + JavaScript) with sidebar navigation covering all planned sections (Dashboard, Employees, Schedule, Coverage, Generate Schedule, Workforce Planning, AI Assistant). Dashboard and Employees show real data; the remaining five sections are still placeholders.
-- A FastAPI backend with four endpoints: `GET /api/health` and `GET /api/employees` for reading, plus `POST /api/employees` and `PUT /api/employees/{employee_code}` for adding and editing workers.
+- A FastAPI backend with six endpoints: `GET /api/health` and `GET /api/employees` for reading, `POST /api/employees` and `PUT /api/employees/{employee_code}` for adding and editing workers, and `POST /api/employees/{employee_code}/deactivate` and `POST /api/employees/{employee_code}/reactivate` for changing a worker's active status.
 - Frontend/backend integration: when the Dashboard opens it calls `GET /api/health` once and displays the resulting connection status (loading, connected, or unavailable); the Employees section loads the workforce from `GET /api/employees` with the same loading and error handling. CORS is configured on the backend for the local frontend origin.
 - An Employees view listing one summary row per worker: employee ID, name, student type, course count, class-meeting count, weekly class hours, weekly hour limit, and a count of approved leave periods. The individual class meetings, shift preferences and leave periods behind those figures are stored in the database but are not yet displayed anywhere in the interface.
 - Adding and editing workers from the Employees view: forms for employee ID, name and student type, backed by `POST /api/employees` and `PUT /api/employees/{employee_code}`. The backend validates required fields, whitespace-only input, supported student types and unique employee codes, returning clear validation, duplicate-code and not-found errors. Employee codes may contain only letters, digits, hyphens and underscores, so that every saved code can still be addressed by the edit request; existing stored codes are left unchanged. Editing keeps the worker's internal identity, so their classes, preferences, leave and assignments stay attached even when the employee code changes. New workers start active with the 20-hour weekly limit, and no classes, preferences, leave or assignments are invented for them. A worker can be added to a completely empty database without seeding.
+- Deactivating and reactivating workers from the Employees view, one button per row. Deactivating preserves everything about the worker: their identity, classes, shift preferences, approved leave and past assignments are all left in place, and reactivating restores the same record rather than creating a new one. Deactivation is refused while the worker still has an assigned shift that has not finished — including one already in progress, not only shifts that have yet to start — and the refusal names those shifts and explains that nothing was cancelled. Shifts that have already ended are history and never block. Because the list defaults to the Active filter, a worker you have just deactivated disappears from the table; the confirmation message says to switch the Status filter to Inactive or All to find them again. Search, sorting and the status filter are left exactly as you set them when the list refreshes. Permanent deletion does not exist yet.
 - List controls on the Employees view: case-insensitive search across worker name and employee ID; sorting by employee ID, name, student type, course count, weekly class hours or remaining capacity, in either direction, with numeric columns sorted by value; an Active / Inactive / All status filter defaulting to Active; a count of matching workers; a no-results message; and a Reset control. Search, filtering and sorting all combine. They run in the browser over the already-loaded list rather than querying the backend.
 - Remaining weekly capacity per worker, calculated in the backend as `max(0, weekly hour limit - assigned hours for the reporting week)`. Work shifts must be a positive whole number of hours, so assigned hours and remaining capacity are whole hours; a stored shift that breaks that rule produces a clear API error instead of an approximate figure. (Class meetings are not work and keep their 75- and 165-minute lengths.) A shift counts entirely towards the week containing its start, so a Sunday-night-into-Monday shift is not split across two weeks. This is theoretical unused capacity, not shift eligibility or availability: class hours and approved leave are deliberately not subtracted. With no assignments stored yet, every worker shows the full 20 hours.
 - A SQLite database holding the synthetic dataset, created and populated by scripts in `backend/` so it can be rebuilt from scratch at any time. It stores employees, courses, class meetings, shifts, shift preferences, approved leave, and assignments.
@@ -27,7 +28,8 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 - Workforce capacity analytics
 - The natural-language AI assistant
 - Cloud deployment
-- The rest of employee management: deactivate, reactivate and delete actions. These are planned for Phase 5B, not implemented. Its list controls, the active-status column, and adding/editing worker details have shipped, but nothing can yet change a worker's active status or remove a worker. Deactivation will preserve history; permanent deletion will be restricted to workers without assignments.
+- Permanently deleting a worker. This is the last remaining Phase 5B action; it will require explicit confirmation and will be restricted to workers with no assignments.
+- Anything that acts on a worker's active status. Deactivating a worker records that status and hides them from the default list view, but no other part of the application reads it yet, because neither the eligibility logic nor the schedule generator exists. Excluding inactive workers from new assignments is a requirement for those later phases, not current behaviour.
 
 ## Running Locally
 
@@ -78,7 +80,7 @@ An existing database with the tables created but no rows is still eligible. Empt
 
 Everything is written in one transaction. If any part fails, the whole dataset is rolled back, so there is no half-initialized state.
 
-Starting the backend never seeds. It creates any missing tables and applies additive schema migrations — for example adding a new column to an existing table, which `CREATE TABLE IF NOT EXISTS` cannot do. Migrations only ever add; they never drop a table, delete a row, rewrite existing values, or generate workers. Records live in `backend/shiftops.db` and persist across restarts. That file is deliberately not committed, so a fresh clone starts empty until you initialize.
+Starting the backend never seeds. It creates missing tables and applies schema migrations; `CREATE TABLE IF NOT EXISTS` alone cannot update an existing table. Current migrations add fields and backfill metadata. Future semester-model migrations must preserve worker records and relationships while transforming their representation; initialization is not a migration mechanism. Records live in `backend/shiftops.db` and persist across restarts. That file is deliberately not committed, so a fresh clone starts empty and can be populated manually or explicitly initialized with demo data.
 
 To start over with fresh demo data, delete `backend/shiftops.db` and run `python seed.py` again. That is the only way to regenerate, and it is a deliberate manual act.
 
@@ -96,6 +98,13 @@ python verify_employee_writes.py  # creating and editing workers, validation, an
 ```
 
 ## Planned Capabilities
+
+Development order: finish Phase 5B employee lifecycle controls, then Phase 5C
+automatic IDs and complete semester-based worker setup, then eligibility,
+optimization, reporting and AI. Later phases must use the managed workforce
+and confirmed semester data, not fixed demo counts. Full checklists live in
+the project context; public cross-phase requirements are in
+`docs/PROJECT_SPEC.md` section 10.
 
 Goals for the finished application. Employee records, shift preferences and approved leave are now stored, and worker summaries are viewable; everything below that depends on displaying those details, or on evaluating or generating a schedule, is still future work.
 

@@ -5,10 +5,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database import ensure_schema, get_connection
 from employees import (
+    DeactivationBlocked,
     DuplicateEmployeeCode,
     EmployeeNotFound,
     EmployeeValidationError,
     create_employee,
+    set_active,
     update_employee,
 )
 from reporting import (
@@ -146,6 +148,10 @@ def write_employee(action):
         raise HTTPException(status_code=409, detail=str(error)) from error
     except EmployeeNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except DeactivationBlocked as error:
+        # 409: the request is valid, but the worker's current state does not
+        # allow it. Nothing was changed.
+        raise HTTPException(status_code=409, detail=str(error)) from error
     finally:
         connection.close()
 
@@ -159,4 +165,18 @@ def add_employee(payload: dict):
 def edit_employee(employee_code: str, payload: dict):
     return write_employee(
         lambda connection: update_employee(connection, employee_code, payload)
+    )
+
+
+@app.post("/api/employees/{employee_code}/deactivate")
+def deactivate_employee(employee_code: str):
+    return write_employee(
+        lambda connection: set_active(connection, employee_code, active=False)
+    )
+
+
+@app.post("/api/employees/{employee_code}/reactivate")
+def reactivate_employee(employee_code: str):
+    return write_employee(
+        lambda connection: set_active(connection, employee_code, active=True)
     )

@@ -12,6 +12,9 @@ demo data, not workers a supervisor enters by hand.
 """
 
 import re
+from datetime import datetime
+
+from synthetic_data import TIME_FORMAT
 
 VALID_STUDENT_TYPES = ("undergraduate", "masters")
 
@@ -145,3 +148,76 @@ def update_employee(connection, current_code, payload):
     )
     connection.commit()
     return find_by_code(connection, details["employee_code"])
+
+
+class DeactivationBlocked(RuntimeError):
+    """The worker still has assignments that have not finished."""
+
+
+def unfinished_assignments(connection, employee_id, reference_time):
+    """Assigned shifts that have not finished by `reference_time`.
+
+    A shift blocks deactivation while it is still running or has not started
+    yet, which is exactly `end_datetime > reference_time`. Using the END
+    rather than the start is deliberate: a shift that began an hour ago is
+    still being worked, and treating only future start times as unresolved
+    would let a worker be deactivated mid-shift.
+
+    Shifts that already finished are history. They stay attached to the
+    worker and never block anything.
+    """
+    return connection.execute(
+        """
+        SELECT s.hall, s.start_datetime, s.end_datetime
+        FROM assignments a
+        JOIN shifts s ON s.id = a.shift_id
+        WHERE a.employee_id = ? AND s.end_datetime > ?
+        ORDER BY s.start_datetime
+        """,
+        (employee_id, reference_time.strftime(TIME_FORMAT)),
+    ).fetchall()
+
+
+def set_active(connection, employee_code, active, reference_time=None):
+    """Deactivate or reactivate a worker.
+
+    Only the `is_active` flag changes. The worker's internal id, employee
+    code, name, student type, weekly limit, seed provenance, courses, class
+    meetings, shift preferences, approved leave and assignments are all left
+    exactly as they are - deactivating is not a soft delete.
+
+    Deactivation is refused while the worker has assignments that have not
+    finished, and the refusal lists them. Nothing is deleted, cancelled or
+    reassigned automatically: resolving those shifts is a scheduling decision
+    for a person to make.
+
+    `reference_time` defaults to the current local time. The application uses
+    one local simulation clock with no timezone conversion (D025), so a naive
+    local `now` is the right reading of "has this shift finished?". Tests pass
+    a fixed time so their results do not depend on when they run.
+    """
+    existing = find_by_code(connection, employee_code)
+    if existing is None:
+        raise EmployeeNotFound(f"No employee with code {employee_code}.")
+
+    if not active:
+        when = reference_time if reference_time is not None else datetime.now()
+        blocking = unfinished_assignments(connection, existing["id"], when)
+        if blocking:
+            listed = "; ".join(
+                f"{row['hall']} {row['start_datetime']} to {row['end_datetime']}"
+                for row in blocking
+            )
+            raise DeactivationBlocked(
+                f"{existing['full_name']} still has "
+                f"{len(blocking)} unfinished assignment(s): {listed}. "
+                "Reassign or remove those shifts first; deactivating will not "
+                "cancel them."
+            )
+
+    connection.execute(
+        "UPDATE employees SET is_active = ? WHERE id = ?",
+        (1 if active else 0, existing["id"]),
+    )
+    connection.commit()
+    return find_by_code(connection, employee_code)
