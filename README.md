@@ -11,9 +11,10 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 **Implemented:**
 
 - A React application shell (Vite + JavaScript) with sidebar navigation covering all planned sections (Dashboard, Employees, Schedule, Coverage, Generate Schedule, Workforce Planning, AI Assistant). Dashboard and Employees show real data; the remaining five sections are still placeholders.
-- A FastAPI backend with two read-only endpoints: `GET /api/health` and `GET /api/employees`.
+- A FastAPI backend with four endpoints: `GET /api/health` and `GET /api/employees` for reading, plus `POST /api/employees` and `PUT /api/employees/{employee_code}` for adding and editing workers.
 - Frontend/backend integration: when the Dashboard opens it calls `GET /api/health` once and displays the resulting connection status (loading, connected, or unavailable); the Employees section loads the workforce from `GET /api/employees` with the same loading and error handling. CORS is configured on the backend for the local frontend origin.
 - An Employees view listing one summary row per worker: employee ID, name, student type, course count, class-meeting count, weekly class hours, weekly hour limit, and a count of approved leave periods. The individual class meetings, shift preferences and leave periods behind those figures are stored in the database but are not yet displayed anywhere in the interface.
+- Adding and editing workers from the Employees view: forms for employee ID, name and student type, backed by `POST /api/employees` and `PUT /api/employees/{employee_code}`. The backend validates required fields, whitespace-only input, supported student types and unique employee codes, returning clear validation, duplicate-code and not-found errors. Employee codes may contain only letters, digits, hyphens and underscores, so that every saved code can still be addressed by the edit request; existing stored codes are left unchanged. Editing keeps the worker's internal identity, so their classes, preferences, leave and assignments stay attached even when the employee code changes. New workers start active with the 20-hour weekly limit, and no classes, preferences, leave or assignments are invented for them. A worker can be added to a completely empty database without seeding.
 - List controls on the Employees view: case-insensitive search across worker name and employee ID; sorting by employee ID, name, student type, course count, weekly class hours or remaining capacity, in either direction, with numeric columns sorted by value; an Active / Inactive / All status filter defaulting to Active; a count of matching workers; a no-results message; and a Reset control. Search, filtering and sorting all combine. They run in the browser over the already-loaded list rather than querying the backend.
 - Remaining weekly capacity per worker, calculated in the backend as `max(0, weekly hour limit - assigned hours for the reporting week)`. Work shifts must be a positive whole number of hours, so assigned hours and remaining capacity are whole hours; a stored shift that breaks that rule produces a clear API error instead of an approximate figure. (Class meetings are not work and keep their 75- and 165-minute lengths.) A shift counts entirely towards the week containing its start, so a Sunday-night-into-Monday shift is not split across two weeks. This is theoretical unused capacity, not shift eligibility or availability: class hours and approved leave are deliberately not subtracted. With no assignments stored yet, every worker shows the full 20 hours.
 - A SQLite database holding the synthetic dataset, created and populated by scripts in `backend/` so it can be rebuilt from scratch at any time. It stores employees, courses, class meetings, shifts, shift preferences, approved leave, and assignments.
@@ -26,7 +27,7 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 - Workforce capacity analytics
 - The natural-language AI assistant
 - Cloud deployment
-- The rest of employee management: add/edit forms and deactivate/reactivate/delete actions. These are planned for Phase 5B, not implemented — its list controls (search, sorting, status filtering) and the active-status column have shipped, but nothing can yet change a worker's status or details. The application still has no endpoints that modify data. Deactivation will preserve history; permanent deletion will be restricted to workers without assignments.
+- The rest of employee management: deactivate, reactivate and delete actions. These are planned for Phase 5B, not implemented. Its list controls, the active-status column, and adding/editing worker details have shipped, but nothing can yet change a worker's active status or remove a worker. Deactivation will preserve history; permanent deletion will be restricted to workers without assignments.
 
 ## Running Locally
 
@@ -38,7 +39,7 @@ Requires Python 3.12+ and Node.js. Two terminals.
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1        # PowerShell; use source .venv/bin/activate on macOS/Linux
 pip install -r requirements.txt
-python seed.py                       # first run only: creates and populates the database
+python seed.py                       # once, on an empty database: loads the demo data
 uvicorn main:app --reload --port 8000
 ```
 
@@ -63,16 +64,23 @@ Confirm the command line is this project's `uvicorn main:app`, then stop it with
 
 ### About the demo data
 
-The synthetic workforce is **seeded explicitly, never automatically**. Starting the backend creates any missing tables and applies additive schema migrations — for example adding a new column to an existing table, which `CREATE TABLE IF NOT EXISTS` cannot do. Migrations only ever add; they never drop a table, delete a row, or rewrite existing values, and they never generate or regenerate workers. Records live in a SQLite file (`backend/shiftops.db`) and persist across restarts. That file is deliberately not committed, so a fresh clone starts empty until you run the seed script.
+The synthetic workforce is **initialized once, explicitly, into an empty database**:
 
 ```
-python seed.py            # ordinary seeding - safe to run at any time
-python seed.py --repair   # destructive - overwrites the seeded workers
+python seed.py
 ```
 
-Ordinary `python seed.py` only fills in what is missing: it creates seed workers that are absent, and skips workers that already exist without touching their details, classes, leave or preferences. Running it repeatedly is harmless and creates no duplicates.
+After that, workers are managed through the application. The records in the database are the source of truth.
 
-`python seed.py --repair` is the destructive counterpart. It rewrites the seed workers' names, courses, class meetings, approved leave and shift preferences from the generator, **deleting any rows the generator does not produce** — including records you added yourself. It prints exactly what it will replace before running. Use it only when you have changed the generator and want its values to overwrite what is stored. It never touches shift assignments, the shift list, or workers the generator does not produce.
+Initialization only runs when the database holds no workforce or scheduling records at all. If anything is already there, it refuses, explains what it found, and changes nothing. There is deliberately no repair, reset or force mode, and no "add the demo workers that are missing" behaviour — so re-running it can never overwrite your edits, restore a worker you deleted, or drop demo workers into a database you are managing yourself.
+
+An existing database with the tables created but no rows is still eligible. Emptiness is judged across every workforce table, not just the employee count: a database can hold shifts or assignments with no employees, and that still counts as in use.
+
+Everything is written in one transaction. If any part fails, the whole dataset is rolled back, so there is no half-initialized state.
+
+Starting the backend never seeds. It creates any missing tables and applies additive schema migrations — for example adding a new column to an existing table, which `CREATE TABLE IF NOT EXISTS` cannot do. Migrations only ever add; they never drop a table, delete a row, rewrite existing values, or generate workers. Records live in `backend/shiftops.db` and persist across restarts. That file is deliberately not committed, so a fresh clone starts empty until you initialize.
+
+To start over with fresh demo data, delete `backend/shiftops.db` and run `python seed.py` again. That is the only way to regenerate, and it is a deliberate manual act.
 
 ### Verification scripts
 
@@ -81,9 +89,10 @@ Run from `backend/` with the virtual environment active:
 ```
 python verify_coverage.py      # 99 shifts totalling 489 student-coverage hours, no gaps or double coverage
 python verify_preferences.py   # shift preferences match whole shifts, checked against independently listed expectations
-python verify_seeding.py       # seeding safety, run against a temporary in-memory database
+python verify_seeding.py       # demo initialization: empty-only, atomic, refuses to re-run
 python verify_migration.py     # schema migrations add columns without losing existing records
 python verify_capacity.py      # assigned hours and remaining capacity, including week boundaries
+python verify_employee_writes.py  # creating and editing workers, validation, and initialization refusal
 ```
 
 ## Planned Capabilities
@@ -91,6 +100,7 @@ python verify_capacity.py      # assigned hours and remaining capacity, includin
 Goals for the finished application. Employee records, shift preferences and approved leave are now stored, and worker summaries are viewable; everything below that depends on displaying those details, or on evaluating or generating a schedule, is still future work.
 
 - Workforce and coverage dashboard
+- Complete employee setup: automatic read-only employee IDs; supervisor entry of semester dates and recurring class times without course names; editing shift preferences and already-approved leave. Incomplete class information will block scheduling until confirmed. This is planned Phase 5C work, not part of the current basic Add/Edit form.
 - Class schedule conflict detection
 - Shift eligibility analysis
 - Automated schedule generation
@@ -105,7 +115,7 @@ Goals for the finished application. Employee records, shift preferences and appr
 - **Frontend:** React, JavaScript, Vite
 - **Backend:** Python, FastAPI, Uvicorn
 - **Database:** SQLite, accessed with Python's standard-library `sqlite3` and plain SQL (no ORM)
-- **API:** REST/JSON (read-only health and employee endpoints)
+- **API:** REST/JSON (health and employee reads, plus employee create and update)
 - **Version Control:** Git and GitHub
 
 **Planned:**

@@ -7,8 +7,10 @@ own `backend/shiftops.db` is never opened, read, or modified.
 added later never reaches a database created before it. These checks prove
 the migration closes that gap without losing data:
 
-1. On a database built from the OLD schema (no `is_active`), the migration
-   adds the column and every existing row survives unchanged.
+1. On a database built from the OLD schema (no `is_active`, no `seed_key`),
+   the migration adds both columns and every existing row survives
+   unchanged. `seed_key` is back-filled from `employee_code`, which is what
+   seeding previously matched on.
 2. Workers that existed before the migration come out active.
 3. Running the migration again changes nothing and reports nothing applied.
 4. On a fresh database the column is present from the start and the
@@ -197,8 +199,19 @@ def main():
     check("is_active" not in table_columns(connection, "employees"), "old schema starts without is_active")
 
     applied = migrate_schema(connection)
-    check(applied == ["employees.is_active"], f"migration reports what it applied ({applied})")
+    check(
+        applied == ["employees.is_active", "employees.seed_key"],
+        f"migration reports what it applied ({applied})",
+    )
     check("is_active" in table_columns(connection, "employees"), "migration adds the is_active column")
+    check("seed_key" in table_columns(connection, "employees"), "migration adds the seed_key column")
+    check(
+        all(
+            row["seed_key"] == row["employee_code"]
+            for row in connection.execute("SELECT employee_code, seed_key FROM employees")
+        ),
+        "seed_key is back-filled from employee_code for pre-existing rows",
+    )
     check(employee_rows(connection) == before, "every pre-existing employee row survives unchanged")
     check(len(employee_rows(connection)) == len(OLD_ROWS), f"row count preserved ({len(OLD_ROWS)})")
 
@@ -257,10 +270,13 @@ def main():
     )
 
     legacy_applied = migrate_schema(legacy)
-    check(legacy_applied == ["employees.is_active"], "migration runs on the populated legacy fixture")
     check(
-        "is_active" in table_columns(legacy, "employees"),
-        "populated legacy fixture gains is_active",
+        legacy_applied == ["employees.is_active", "employees.seed_key"],
+        f"migration runs on the populated legacy fixture ({legacy_applied})",
+    )
+    check(
+        {"is_active", "seed_key"} <= table_columns(legacy, "employees"),
+        "populated legacy fixture gains is_active and seed_key",
     )
     check(employee_rows(legacy) == before_employees, "legacy employee rows survive unchanged")
     check(

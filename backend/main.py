@@ -4,6 +4,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import ensure_schema, get_connection
+from employees import (
+    DuplicateEmployeeCode,
+    EmployeeNotFound,
+    EmployeeValidationError,
+    create_employee,
+    update_employee,
+)
 from reporting import (
     InvalidWorkDuration,
     assigned_hours_by_employee,
@@ -20,7 +27,10 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
-    allow_methods=["GET"],
+    # POST/PUT added for employee creation and editing; the JSON bodies they
+    # carry make Content-Type a non-simple header, so it must be allowed too.
+    allow_methods=["GET", "POST", "PUT"],
+    allow_headers=["Content-Type"],
 )
 
 ensure_schema()
@@ -112,3 +122,41 @@ def list_employees():
         "week_end": (WEEK_END - timedelta(days=1)).strftime("%Y-%m-%d"),
         "employees": [employee_payload(employee) for employee in employees],
     }
+
+
+def employee_response(row):
+    """The stored row as the frontend sees it after a save."""
+    return {
+        "employee_code": row["employee_code"],
+        "full_name": row["full_name"],
+        "student_type": row["student_type"],
+        "is_active": bool(row["is_active"]),
+        "weekly_hour_limit": row["weekly_hour_limit"],
+    }
+
+
+def write_employee(action):
+    """Run a create/update and turn its errors into clear HTTP responses."""
+    connection = get_connection()
+    try:
+        return employee_response(action(connection))
+    except EmployeeValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except DuplicateEmployeeCode as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except EmployeeNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    finally:
+        connection.close()
+
+
+@app.post("/api/employees", status_code=201)
+def add_employee(payload: dict):
+    return write_employee(lambda connection: create_employee(connection, payload))
+
+
+@app.put("/api/employees/{employee_code}")
+def edit_employee(employee_code: str, payload: dict):
+    return write_employee(
+        lambda connection: update_employee(connection, employee_code, payload)
+    )

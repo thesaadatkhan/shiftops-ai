@@ -28,7 +28,8 @@ SCHEMA_STATEMENTS = [
         student_type TEXT NOT NULL
             CHECK (student_type IN ('undergraduate', 'masters')),
         weekly_hour_limit INTEGER NOT NULL DEFAULT 20,
-        is_active INTEGER NOT NULL DEFAULT 1
+        is_active INTEGER NOT NULL DEFAULT 1,
+        seed_key TEXT
     )
     """,
     """
@@ -128,6 +129,29 @@ def migrate_schema(connection):
             "ALTER TABLE employees ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
         )
         applied.append("employees.is_active")
+
+    if "seed_key" not in table_columns(connection, "employees"):
+        # Legacy provenance: records which generated worker a row came from,
+        # and is NULL for workers created through the application. It no
+        # longer controls anything. It was introduced when seeding ran
+        # repeatedly and had to recognise a demo worker whose employee_code
+        # had been edited; demo initialization now runs only on an empty
+        # database, so nothing reads this column to decide whether to seed.
+        # Kept because dropping it would mean rebuilding the table, and
+        # knowing which rows came from the demo data is still useful.
+        connection.execute("ALTER TABLE employees ADD COLUMN seed_key TEXT")
+        connection.execute(
+            "UPDATE employees SET seed_key = employee_code WHERE seed_key IS NULL"
+        )
+        applied.append("employees.seed_key")
+
+    # Created here rather than alongside the CREATE TABLE statements: those
+    # run before this function, so on a database that predates seed_key the
+    # index would reference a column that does not exist yet.
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS employees_seed_key "
+        "ON employees (seed_key) WHERE seed_key IS NOT NULL"
+    )
 
     connection.commit()
     return applied

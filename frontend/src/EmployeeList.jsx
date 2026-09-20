@@ -77,6 +77,20 @@ function isValidEmployeesResponse(data) {
   )
 }
 
+const EMPTY_FORM = { employee_code: '', full_name: '', student_type: 'undergraduate' }
+
+async function fetchEmployees() {
+  const response = await fetch(EMPLOYEES_URL)
+  if (!response.ok) {
+    throw new Error(`Backend responded with status ${response.status}`)
+  }
+  const data = await response.json()
+  if (!isValidEmployeesResponse(data)) {
+    throw new Error('Employee response did not have the expected shape')
+  }
+  return data
+}
+
 function matchesStatus(employee, statusFilter) {
   if (statusFilter === 'all') {
     return true
@@ -92,23 +106,20 @@ function EmployeeList() {
   const [sortField, setSortField] = useState(DEFAULT_SORT_FIELD)
   const [sortDirection, setSortDirection] = useState(DEFAULT_SORT_DIRECTION)
   const [statusFilter, setStatusFilter] = useState(DEFAULT_STATUS_FILTER)
+  const [formMode, setFormMode] = useState(null)
+  const [formValues, setFormValues] = useState(EMPTY_FORM)
+  const [editingCode, setEditingCode] = useState(null)
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState(null)
+  const [feedback, setFeedback] = useState(null)
+  const [listError, setListError] = useState(null)
 
   useEffect(() => {
     let cancelled = false
 
     async function loadEmployees() {
       try {
-        const response = await fetch(EMPLOYEES_URL)
-
-        if (!response.ok) {
-          throw new Error(`Backend responded with status ${response.status}`)
-        }
-
-        const data = await response.json()
-
-        if (!isValidEmployeesResponse(data)) {
-          throw new Error('Employee response did not have the expected shape')
-        }
+        const data = await fetchEmployees()
 
         if (!cancelled) {
           setEmployees(data.employees)
@@ -129,6 +140,124 @@ function EmployeeList() {
     }
   }, [])
 
+  function openCreateForm() {
+    setFormMode('create')
+    setEditingCode(null)
+    setFormValues(EMPTY_FORM)
+    setFormError(null)
+    setFeedback(null)
+  }
+
+  function openEditForm(employee) {
+    setFormMode('edit')
+    setEditingCode(employee.employee_code)
+    setFormValues({
+      employee_code: employee.employee_code,
+      full_name: employee.full_name,
+      student_type: employee.student_type,
+    })
+    setFormError(null)
+    setFeedback(null)
+  }
+
+  function closeForm() {
+    // Cancel discards the entered values; a failed save keeps them instead.
+    setFormMode(null)
+    setEditingCode(null)
+    setFormValues(EMPTY_FORM)
+    setFormError(null)
+  }
+
+  async function refreshList(savedEmployee = null) {
+    // Only ever reloads. Safe to call again from the Retry control, because
+    // it never re-sends a write.
+    try {
+      const data = await fetchEmployees()
+      setEmployees(data.employees)
+      setWeek({ start: data.week_start, end: data.week_end })
+      setListError(null)
+
+      if (savedEmployee !== null) {
+        const saved = data.employees.find(
+          (employee) => employee.employee_code === savedEmployee.employee_code,
+        )
+        const query = searchText.trim().toLowerCase()
+        const hidden =
+          saved !== undefined &&
+          !(matchesStatus(saved, statusFilter) && matchesSearch(saved, query))
+
+        if (hidden) {
+          setFeedback({
+            tone: 'notice',
+            message: `Saved ${savedEmployee.full_name} (${savedEmployee.employee_code}), but the current search or status filter hides them. Reset the controls to see them.`,
+          })
+        }
+      }
+      return true
+    } catch {
+      setListError(
+        'Could not reload the employee list. Anything already saved is still saved.',
+      )
+      return false
+    }
+  }
+
+  async function handleSave(event) {
+    event.preventDefault()
+    if (saving) {
+      return
+    }
+
+    setSaving(true)
+    setFormError(null)
+
+    const creating = formMode === 'create'
+    let response
+
+    // Step 1: the write. Its outcome decides what we are allowed to claim.
+    try {
+      response = await fetch(
+        creating
+          ? EMPLOYEES_URL
+          : `${EMPLOYEES_URL}/${encodeURIComponent(editingCode)}`,
+        {
+          method: creating ? 'POST' : 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(formValues),
+        },
+      )
+    } catch {
+      // The request never produced a response, so whether the server applied
+      // it is genuinely unknown. Claiming it was not saved could be wrong.
+      setFormError(
+        'Could not reach the backend, so it is unclear whether this was saved. ' +
+          'Reload the list to check before trying again.',
+      )
+      setSaving(false)
+      return
+    }
+
+    const body = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      // Genuinely rejected: keep the form open with what was typed.
+      setFormError(body?.detail ?? `Save failed (status ${response.status}).`)
+      setSaving(false)
+      return
+    }
+
+    // Step 2: the write is confirmed. Close the form first so it can never
+    // still target the old employee code after a rename, and report success
+    // before attempting the reload - a failed reload does not undo the save.
+    closeForm()
+    setFeedback({
+      tone: 'success',
+      message: `Saved ${body.full_name} (${body.employee_code}).`,
+    })
+    await refreshList(body)
+    setSaving(false)
+  }
+
   if (status === 'loading') {
     return <p className="backend-status backend-status-loading">Loading employees...</p>
   }
@@ -138,14 +267,6 @@ function EmployeeList() {
       <p className="backend-status backend-status-error">
         Could not load employees. The backend may be offline or returned an
         unexpected response.
-      </p>
-    )
-  }
-
-  if (employees.length === 0) {
-    return (
-      <p className="backend-status backend-status-loading">
-        No employees found. Seed the database with: python seed.py
       </p>
     )
   }
@@ -182,8 +303,117 @@ function EmployeeList() {
     setStatusFilter(DEFAULT_STATUS_FILTER)
   }
 
+  const employeeForm = (
+    <form className="employee-form" onSubmit={handleSave}>
+      <h3>{formMode === 'create' ? 'Add employee' : `Edit ${editingCode}`}</h3>
+      <div className="list-controls">
+        <label htmlFor="form-employee-code">Employee ID</label>
+        <input
+          id="form-employee-code"
+          value={formValues.employee_code}
+          onChange={(event) =>
+            setFormValues({ ...formValues, employee_code: event.target.value })
+          }
+        />
+
+        <label htmlFor="form-full-name">Name</label>
+        <input
+          id="form-full-name"
+          value={formValues.full_name}
+          onChange={(event) =>
+            setFormValues({ ...formValues, full_name: event.target.value })
+          }
+        />
+
+        <label htmlFor="form-student-type">Student type</label>
+        <select
+          id="form-student-type"
+          value={formValues.student_type}
+          onChange={(event) =>
+            setFormValues({ ...formValues, student_type: event.target.value })
+          }
+        >
+          <option value="undergraduate">Undergraduate</option>
+          <option value="masters">Master&rsquo;s</option>
+        </select>
+
+        <button type="submit" disabled={saving}>
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+        <button type="button" onClick={closeForm} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+
+      {formError !== null && (
+        <p className="backend-status backend-status-error">{formError}</p>
+      )}
+    </form>
+  )
+
+  if (employees.length === 0) {
+    return (
+      <>
+        <div className="list-controls">
+          <button type="button" onClick={openCreateForm} disabled={formMode !== null}>
+            Add employee
+          </button>
+        </div>
+        {feedback !== null && (
+          <p className="backend-status backend-status-success" aria-live="polite">
+            {feedback.message}
+          </p>
+        )}
+        {listError !== null && (
+          <p className="backend-status backend-status-error" aria-live="polite">
+            {listError}{' '}
+            <button type="button" onClick={() => refreshList()} disabled={saving}>
+                Retry loading
+            </button>
+          </p>
+        )}
+
+        {formMode !== null && employeeForm}
+        <p className="backend-status backend-status-loading">
+          No employees yet. Add one with the button above, or load the demo
+          workforce with: python seed.py
+        </p>
+      </>
+    )
+  }
+
   return (
     <>
+      <div className="list-controls">
+        <button type="button" onClick={openCreateForm} disabled={formMode !== null}>
+          Add employee
+        </button>
+      </div>
+
+      {feedback !== null && (
+        <p
+          className={
+            feedback.tone === 'success'
+              ? 'backend-status backend-status-success'
+              : 'backend-status backend-status-loading'
+          }
+          aria-live="polite"
+        >
+          {feedback.message}
+        </p>
+      )}
+
+      {listError !== null && (
+        <p className="backend-status backend-status-error" aria-live="polite">
+          {listError}{' '}
+          <button type="button" onClick={() => refreshList()} disabled={saving}>
+            Retry loading
+          </button>
+        </p>
+      )}
+
+      {formMode !== null && employeeForm}
+
       <div className="list-controls">
         <label htmlFor="employee-search">Search</label>
         <input
@@ -269,6 +499,7 @@ function EmployeeList() {
                 <th>Assigned</th>
                 <th>Remaining capacity</th>
                 <th>Approved leave</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -285,6 +516,15 @@ function EmployeeList() {
                   <td>{employee.assigned_hours} h</td>
                   <td>{employee.remaining_capacity_hours} h</td>
                   <td>{employee.approved_leave_count}</td>
+                  <td>
+                    <button
+                      type="button"
+                      onClick={() => openEditForm(employee)}
+                      disabled={formMode !== null}
+                    >
+                      Edit
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
