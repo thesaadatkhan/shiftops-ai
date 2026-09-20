@@ -144,8 +144,13 @@ function EmployeeList() {
   const [formValues, setFormValues] = useState(EMPTY_FORM)
   const [editingCode, setEditingCode] = useState(null)
   const [saving, setSaving] = useState(false)
-  // The employee_code of the row whose status change is in flight, or null.
+  // The employee_code of the row whose status change or deletion is in
+  // flight, or null.
   const [pendingCode, setPendingCode] = useState(null)
+  // The employee awaiting delete confirmation, or null. Holding the employee
+  // rather than a boolean means the confirmation can name exactly who it is
+  // about, and opening it performs no request of any kind.
+  const [confirmingDelete, setConfirmingDelete] = useState(null)
   const [formError, setFormError] = useState(null)
   const [feedback, setFeedback] = useState(null)
   const [listError, setListError] = useState(null)
@@ -176,7 +181,27 @@ function EmployeeList() {
     }
   }, [])
 
+  // One action owns the interface at a time. An open form, a write already
+  // in flight, and an open delete confirmation each block the others.
+  //
+  // Checked here as well as through the `disabled` attribute on the buttons,
+  // so a forced click, a very fast double click, or anything else that
+  // bypasses the markup still cannot start a second, conflicting action.
+  // Search, sorting and the status filter are deliberately not blocked -
+  // they only change what is displayed and mutate nothing.
+  function anotherActionIsOpen() {
+    return (
+      formMode !== null ||
+      saving ||
+      pendingCode !== null ||
+      confirmingDelete !== null
+    )
+  }
+
   function openCreateForm() {
+    if (anotherActionIsOpen()) {
+      return
+    }
     setFormMode('create')
     setEditingCode(null)
     setFormValues(EMPTY_FORM)
@@ -184,7 +209,18 @@ function EmployeeList() {
     setFeedback(null)
   }
 
+  function startDelete(employee) {
+    if (anotherActionIsOpen()) {
+      return
+    }
+    // Opening the confirmation sends no request of any kind.
+    setConfirmingDelete(employee)
+  }
+
   function openEditForm(employee) {
+    if (anotherActionIsOpen()) {
+      return
+    }
     setFormMode('edit')
     setEditingCode(employee.employee_code)
     setFormValues({
@@ -233,7 +269,10 @@ function EmployeeList() {
       return true
     } catch {
       setListError(
-        'Could not reload the employee list. Anything already saved is still saved.',
+        // Deliberately not "still saved": this same banner follows a delete,
+        // where nothing was saved. Whatever the action was, failing to reload
+        // the table does not undo it.
+        'Could not reload the employee list. This does not undo anything that was already applied.',
       )
       return false
     }
@@ -283,9 +322,9 @@ function EmployeeList() {
       return
     }
 
-    // Step 2: the write is confirmed. Close the form first so it can never
-    // still target the old employee code after a rename, and report success
-    // before attempting the reload - a failed reload does not undo the save.
+    // Step 2: the write is confirmed. Close the form first so a second Save
+    // cannot resubmit it, and report success before attempting the reload -
+    // a failed reload does not undo the save.
     closeForm()
     const saved = `Saved ${body.full_name} (${body.employee_code}).`
     setFeedback({ tone: 'success', message: saved })
@@ -293,10 +332,92 @@ function EmployeeList() {
     setSaving(false)
   }
 
-  async function handleStatusChange(employee, nextActive) {
-    // One action at a time across the whole table: a second click, on this
-    // row or another, cannot start a write while one is in flight.
+  function describeRemoved(removed) {
+    // Only the record types they actually had, so the message does not list
+    // "0 courses" at somebody who never had any.
+    const parts = [
+      [removed.courses, 'course', 'courses'],
+      [removed.class_meetings, 'class meeting', 'class meetings'],
+      [removed.shift_preferences, 'shift preference', 'shift preferences'],
+      [removed.approved_leave, 'approved leave period', 'approved leave periods'],
+    ]
+      .filter(([count]) => count > 0)
+      .map(([count, one, many]) => `${count} ${count === 1 ? one : many}`)
+
+    return parts.length === 0
+      ? 'They had no classes, preferences or leave on record.'
+      : `Also removed: ${parts.join(', ')}.`
+  }
+
+  async function handleDelete(employee) {
+    // Deliberately not `anotherActionIsOpen()`: this runs from inside the
+    // confirmation, so `confirmingDelete` is set by definition. What must
+    // not happen is a second send while the first is in flight.
     if (pendingCode !== null || saving) {
+      return
+    }
+
+    setPendingCode(employee.employee_code)
+    setFeedback(null)
+
+    let response
+
+    // Step 1: the write. Its outcome alone decides what we may claim.
+    try {
+      response = await fetch(
+        `${EMPLOYEES_URL}/${encodeURIComponent(employee.employee_code)}`,
+        { method: 'DELETE' },
+      )
+    } catch {
+      // No response at all, so whether the row is gone is genuinely unknown.
+      // Deletion cannot be undone, so guessing here would be the worst kind
+      // of wrong - leave the confirmation open and say to check.
+      setFeedback({
+        tone: 'error',
+        message:
+          `Could not reach the backend, so it is unclear whether ${employee.full_name} ` +
+          `(${employee.employee_code}) was deleted. Reload the list to check before trying again.`,
+      })
+      setPendingCode(null)
+      return
+    }
+
+    const body = await response.json().catch(() => null)
+
+    if (!response.ok) {
+      // 404 means somebody else already removed them; 409 means they have
+      // shift history. Either way nothing changed here. Close the
+      // confirmation, because retrying it would ask the same refused
+      // question, and reload so the table matches the server.
+      setConfirmingDelete(null)
+      setFeedback({
+        tone: 'error',
+        message:
+          body?.detail ??
+          `Could not delete ${employee.full_name} (status ${response.status}).`,
+      })
+      setPendingCode(null)
+      await refreshList()
+      return
+    }
+
+    // Step 2: confirmed. Report it before reloading - a failed reload does
+    // not bring the worker back.
+    setConfirmingDelete(null)
+    setFeedback({
+      tone: 'success',
+      message:
+        `Permanently deleted ${body.full_name} (${body.employee_code}). ` +
+        `${describeRemoved(body.removed)} This cannot be undone.`,
+    })
+    // No `affected` argument: the worker no longer exists, so there is no row
+    // to explain the absence of.
+    await refreshList()
+    setPendingCode(null)
+  }
+
+  async function handleStatusChange(employee, nextActive) {
+    if (anotherActionIsOpen()) {
       return
     }
 
@@ -394,14 +515,63 @@ function EmployeeList() {
     setStatusFilter(DEFAULT_STATUS_FILTER)
   }
 
+  // Rendering this panel changes nothing on the server; only Delete
+  // permanently does, and Cancel simply closes it.
+  const deleteConfirmation = confirmingDelete !== null && (
+    <div className="employee-form" role="alertdialog" aria-label="Confirm deletion">
+      <h3>
+        Permanently delete {confirmingDelete.full_name} (
+        {confirmingDelete.employee_code})?
+      </h3>
+      <p className="table-note">
+        This removes their profile, courses, class meetings, shift preferences
+        and approved leave from the database for good. It cannot be undone.
+      </p>
+      <p className="table-note">
+        Their employee ID is recorded as retired. Automatic IDs, once they
+        arrive, will never reuse it &mdash; but IDs are still typed in by hand
+        today and nothing yet stops that, so do not enter{' '}
+        {confirmingDelete.employee_code} for anyone else.
+      </p>
+      <p className="table-note">
+        To keep their records instead, cancel and use Deactivate &mdash; that
+        hides them from the active workforce and can be reversed.
+      </p>
+      <div className="list-controls">
+        <button
+          type="button"
+          onClick={() => handleDelete(confirmingDelete)}
+          disabled={pendingCode !== null}
+        >
+          {pendingCode === confirmingDelete.employee_code
+            ? 'Deleting...'
+            : 'Delete permanently'}
+        </button>
+        <button
+          type="button"
+          onClick={() => setConfirmingDelete(null)}
+          disabled={pendingCode !== null}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+
   const employeeForm = (
     <form className="employee-form" onSubmit={handleSave}>
       <h3>{formMode === 'create' ? 'Add employee' : `Edit ${editingCode}`}</h3>
       <div className="list-controls">
         <label htmlFor="form-employee-code">Employee ID</label>
+        {/* Typed only when adding. An existing code is a stable identifier
+            that already appears elsewhere, so editing shows it read-only
+            rather than as a field that looks changeable (D042). readOnly
+            rather than disabled, so it can still be selected and copied. */}
         <input
           id="form-employee-code"
           value={formValues.employee_code}
+          readOnly={formMode === 'edit'}
+          aria-readonly={formMode === 'edit'}
           onChange={(event) =>
             setFormValues({ ...formValues, employee_code: event.target.value })
           }
@@ -436,6 +606,12 @@ function EmployeeList() {
         </button>
       </div>
 
+      <p className="table-note">
+        {formMode === 'edit'
+          ? 'Employee IDs cannot be changed. This one appears in schedules and reports, so renaming it would make one worker look like two. Edit the name or student type instead, or delete the worker if they were created by mistake.'
+          : 'Employee IDs are typed in by hand for now and cannot be changed afterwards, so check it before saving. Letters, digits, hyphens and underscores only.'}
+      </p>
+
       {formError !== null && (
         <p className="backend-status backend-status-error">{formError}</p>
       )}
@@ -446,7 +622,7 @@ function EmployeeList() {
     return (
       <>
         <div className="list-controls">
-          <button type="button" onClick={openCreateForm} disabled={formMode !== null}>
+          <button type="button" onClick={openCreateForm} disabled={anotherActionIsOpen()}>
             Add employee
           </button>
         </div>
@@ -469,6 +645,7 @@ function EmployeeList() {
         )}
 
         {formMode !== null && employeeForm}
+      {deleteConfirmation}
         <p className="backend-status backend-status-loading">
           No employees yet. Add one with the button above, or load the demo
           workforce with: python seed.py
@@ -480,7 +657,7 @@ function EmployeeList() {
   return (
     <>
       <div className="list-controls">
-        <button type="button" onClick={openCreateForm} disabled={formMode !== null}>
+        <button type="button" onClick={openCreateForm} disabled={anotherActionIsOpen()}>
           Add employee
         </button>
       </div>
@@ -505,6 +682,7 @@ function EmployeeList() {
       )}
 
       {formMode !== null && employeeForm}
+      {deleteConfirmation}
 
       <div className="list-controls">
         <label htmlFor="employee-search">Search</label>
@@ -615,7 +793,7 @@ function EmployeeList() {
                     <button
                       type="button"
                       onClick={() => openEditForm(employee)}
-                      disabled={formMode !== null || pendingCode !== null}
+                      disabled={anotherActionIsOpen()}
                     >
                       Edit
                     </button>{' '}
@@ -624,7 +802,7 @@ function EmployeeList() {
                     <button
                       type="button"
                       onClick={() => handleStatusChange(employee, !employee.is_active)}
-                      disabled={formMode !== null || pendingCode !== null}
+                      disabled={anotherActionIsOpen()}
                       aria-label={`${employee.is_active ? 'Deactivate' : 'Reactivate'} ${employee.full_name}`}
                     >
                       {pendingCode === employee.employee_code
@@ -632,6 +810,14 @@ function EmployeeList() {
                         : employee.is_active
                           ? 'Deactivate'
                           : 'Reactivate'}
+                    </button>{' '}
+                    <button
+                      type="button"
+                      onClick={() => startDelete(employee)}
+                      disabled={anotherActionIsOpen()}
+                      aria-label={`Delete ${employee.full_name}`}
+                    >
+                      Delete
                     </button>
                   </td>
                 </tr>

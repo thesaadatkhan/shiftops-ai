@@ -26,8 +26,7 @@ import sys
 from database import create_schema, get_connection
 from synthetic_data import expand_preferences, generate_required_shifts, generate_workers
 
-# Every table demo initialization writes to, and therefore every table that
-# must be empty before it may run.
+# Every table demo initialization writes to.
 WORKFORCE_TABLES = (
     "employees",
     "courses",
@@ -38,15 +37,25 @@ WORKFORCE_TABLES = (
     "assignments",
 )
 
+# Every table that must be empty before initialization may run: the tables
+# above, plus the retired-code ledger.
+#
+# The ledger is included even though initialization never writes to it. A
+# database that has retired an employee code has been used, and initializing
+# demo data into it could hand SW-005 to a demo worker after a real one had
+# already been deleted under that code - which is exactly the reuse D040
+# exists to prevent.
+TABLES_THAT_MUST_BE_EMPTY = WORKFORCE_TABLES + ("retired_employee_codes",)
+
 
 class DatabaseNotEmpty(RuntimeError):
     """Demo initialization was attempted on a database that already has data."""
 
 
 def non_empty_tables(connection):
-    """Workforce tables that already hold rows, as {table: count}."""
+    """Tables that must be empty but already hold rows, as {table: count}."""
     counts = {}
-    for table in WORKFORCE_TABLES:
+    for table in TABLES_THAT_MUST_BE_EMPTY:
         count = connection.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
         if count:
             counts[table] = count

@@ -3,28 +3,39 @@
 Everything here runs against throwaway in-memory or temporary databases. The
 project's own `backend/shiftops.db` is never opened, read, or modified.
 
+Editing covers the name and student type only. An employee code is fixed once
+the worker exists (D042), so there is no rename to test and no duplicate-code
+check on the update path - an edit that cannot change the code cannot collide
+with another worker.
+
 Checks:
 
 1. A worker can be created in an empty database, with no seeding.
 2. Creation does not invent classes, preferences, leave or assignments.
 3. New workers start active with the 20-hour weekly limit.
-4. Editing keeps the internal employee id stable, so related records still
-   point at the same worker even when the employee code changes.
-5. Duplicate employee codes are rejected on create and on edit, including
+4. Editing keeps the internal employee id and the employee code exactly as
+   they were, so every related record stays attached.
+5. Duplicate employee codes are rejected when creating, including codes
    differing only by letter case.
 6. Blank, whitespace-only, missing, non-text and unsupported student-type
    values are rejected with clear messages.
-7. Editing an employee code that does not exist reports not-found.
-8. Saved changes survive closing and reopening the database file.
-9. Demo initialization refuses on a database that already holds records, so
-   an edited or deleted worker can never be restored by re-running it.
-10. Employee codes must be URL-safe, because the code appears in the path of
-    PUT /api/employees/{employee_code}. A code containing "/" or similar
-    would be accepted but then impossible to edit.
-11. A manually managed database is refused outright by demo initialization,
+7. An edit submitting any other code is rejected: a different code, a
+   case-only change, and another worker's code. A rejected edit changes
+   nothing, and re-saving under the unchanged code still works.
+8. Editing an employee code that does not exist reports not-found, whether or
+   not the submitted code matches the one in the URL.
+9. Saved changes survive closing and reopening the database file.
+10. Demo initialization refuses on a database that already holds records, so
+    an edited or deleted worker can never be restored by re-running it.
+11. Employee codes typed into the Add form must be URL-safe, because the code
+    appears in the path of PUT /api/employees/{employee_code}. A code
+    containing "/" or similar would be accepted but then impossible to
+    address. An edit refuses to change the code at all, so it has nothing to
+    validate.
+12. A manually managed database is refused outright by demo initialization,
     leaving the manual worker and their (absent) related records untouched.
-12. An edited demo worker keeps their edit and their internal id; re-running
-    initialization does not restore the old employee code.
+13. An edited demo worker keeps their edit, their internal id and their
+    employee code.
 
 Run with:  python verify_employee_writes.py
 Exits non-zero if any check fails.
@@ -97,7 +108,7 @@ def check_url_safe_codes():
             "SW-060",
             {"employee_code": "SW/061", "full_name": "Editable", "student_type": "masters"},
         ),
-        "URL-unsafe code is rejected on edit too",
+        "an edit submitting a different code is rejected, URL-unsafe or not",
     )
 
     for code in ["SW-061", "SW_061", "sw061", "061"]:
@@ -164,7 +175,7 @@ def check_edits_survive_initialization_attempts():
     update_employee(
         connection,
         "SW-001",
-        {"employee_code": "SW-900", "full_name": "Edited Demo Worker", "student_type": "masters"},
+        {"employee_code": "SW-001", "full_name": "Edited Demo Worker", "student_type": "masters"},
     )
 
     try:
@@ -173,10 +184,10 @@ def check_edits_survive_initialization_attempts():
     except DatabaseNotEmpty:
         check(True, "initialization refuses on an initialized database")
 
-    edited = find_by_code(connection, "SW-900")
+    edited = find_by_code(connection, "SW-001")
     check(edited is not None and edited["id"] == original_id, "the edited worker keeps their id")
     check(edited["full_name"] == "Edited Demo Worker", "the edit is not reverted")
-    check(find_by_code(connection, "SW-001") is None, "the old employee code is not recreated")
+    check(edited["employee_code"] == "SW-001", "the employee code is unchanged by the edit")
     check(
         connection.execute("SELECT COUNT(*) AS n FROM employees").fetchone()["n"] == 30,
         "no extra worker appears",
@@ -281,45 +292,85 @@ def main():
     edited = update_employee(
         connection,
         "SW-031",
-        {"employee_code": "SW-999", "full_name": "Renamed Worker", "student_type": "undergraduate"},
+        {"employee_code": "SW-031", "full_name": "Edited Worker", "student_type": "undergraduate"},
     )
     check(edited["id"] == original_id, "editing keeps the internal employee id stable")
-    check(edited["employee_code"] == "SW-999", "employee code is updated")
-    check(edited["full_name"] == "Renamed Worker", "name is updated")
+    check(edited["employee_code"] == "SW-031", "the employee code is preserved exactly")
+    check(edited["full_name"] == "Edited Worker", "name is updated")
     check(edited["student_type"] == "undergraduate", "student type is updated")
     check(edited["is_active"] == 1 and edited["weekly_hour_limit"] == 20,
           "editing leaves active status and the weekly limit alone")
-    check(find_by_code(connection, "SW-031") is None, "the old employee code no longer resolves")
+    check(find_by_code(connection, "SW-031") is not None, "the worker is still addressable by their code")
 
     still_linked = connection.execute(
         "SELECT (SELECT COUNT(*) FROM courses WHERE employee_id = ?) AS courses,"
+        " (SELECT COUNT(*) FROM class_meetings m JOIN courses c ON c.id = m.course_id"
+        "   WHERE c.employee_id = ?) AS meetings,"
         " (SELECT COUNT(*) FROM approved_leave WHERE employee_id = ?) AS leave_rows,"
         " (SELECT COUNT(*) FROM assignments WHERE employee_id = ?) AS assignments",
-        (original_id, original_id, original_id),
+        (original_id,) * 4,
     ).fetchone()
     check(
-        tuple(still_linked) == (1, 1, 1),
-        f"related records still point at the same worker after renaming {tuple(still_linked)}",
+        tuple(still_linked) == (1, 1, 1, 1),
+        f"every related record still points at the same worker after editing {tuple(still_linked)}",
     )
 
-    expect_error(
-        DuplicateEmployeeCode,
-        lambda: update_employee(
-            connection,
-            "SW-032",
-            {"employee_code": "SW-999", "full_name": "Clash", "student_type": "masters"},
-        ),
-        "editing to an employee code another worker uses is rejected",
+    # 4b. The employee code is immutable once the worker exists (D042).
+    before_rename = dict(find_by_code(connection, "SW-031"))
+    for attempted, label in [
+        ("SW-999", "a different employee code"),
+        ("sw-031", "a case-only change"),
+        ("SW-032", "another worker's employee code"),
+    ]:
+        expect_error(
+            EmployeeValidationError,
+            lambda attempted=attempted: update_employee(
+                connection,
+                "SW-031",
+                {"employee_code": attempted, "full_name": "Renamed", "student_type": "masters"},
+            ),
+            f"editing to {label} is rejected",
+        )
+
+    after_rename = dict(find_by_code(connection, "SW-031"))
+    check(after_rename == before_rename, "a rejected rename changes nothing at all")
+    check(
+        find_by_code(connection, "SW-999") is None and find_by_code(connection, "sw-031") is None,
+        "no row appears under a rejected code",
     )
+    check(
+        tuple(connection.execute(
+            "SELECT (SELECT COUNT(*) FROM courses WHERE employee_id = ?) AS courses,"
+            " (SELECT COUNT(*) FROM assignments WHERE employee_id = ?) AS assignments",
+            (original_id, original_id),
+        ).fetchone()) == (1, 1),
+        "a rejected rename leaves related records attached",
+    )
+
+    message = ""
+    try:
+        update_employee(
+            connection,
+            "SW-031",
+            {"employee_code": "SW-999", "full_name": "Renamed", "student_type": "masters"},
+        )
+    except EmployeeValidationError as error:
+        message = str(error)
+    check(
+        "cannot be changed" in message and "SW-031" in message and "SW-999" in message,
+        f"the refusal explains the rule and names both codes -> {message}",
+    )
+
     # Re-saving a worker under their own unchanged code must still work.
     same = update_employee(
         connection,
-        "SW-999",
-        {"employee_code": "SW-999", "full_name": "Renamed Worker", "student_type": "undergraduate"},
+        "SW-031",
+        {"employee_code": "SW-031", "full_name": "Edited Worker", "student_type": "undergraduate"},
     )
     check(same["id"] == original_id, "saving a worker under their own unchanged code is allowed")
 
-    # 7. Editing a worker that does not exist.
+    # 7. Editing a worker that does not exist reports not-found, NOT an
+    #    immutability error - the URL target is what is missing.
     expect_error(
         EmployeeNotFound,
         lambda: update_employee(
@@ -327,7 +378,16 @@ def main():
             "SW-DOES-NOT-EXIST",
             {"employee_code": "SW-041", "full_name": "Ghost", "student_type": "masters"},
         ),
-        "editing an unknown employee reports not-found",
+        "editing an unknown employee reports not-found even when the code differs",
+    )
+    expect_error(
+        EmployeeNotFound,
+        lambda: update_employee(
+            connection,
+            "SW-DOES-NOT-EXIST",
+            {"employee_code": "SW-DOES-NOT-EXIST", "full_name": "Ghost", "student_type": "masters"},
+        ),
+        "editing an unknown employee reports not-found when the code matches too",
     )
     connection.close()
 
@@ -337,11 +397,11 @@ def main():
         first = get_connection(path)
         create_schema(first)
         create_employee(first, {"employee_code": "SW-050", "full_name": "Persisted", "student_type": "masters"})
-        update_employee(first, "SW-050", {"employee_code": "SW-051", "full_name": "Persisted Twice", "student_type": "undergraduate"})
+        update_employee(first, "SW-050", {"employee_code": "SW-050", "full_name": "Persisted Twice", "student_type": "undergraduate"})
         first.close()
 
         reopened = get_connection(path)
-        stored = find_by_code(reopened, "SW-051")
+        stored = find_by_code(reopened, "SW-050")
         check(
             stored is not None and stored["full_name"] == "Persisted Twice"
             and stored["student_type"] == "undergraduate",

@@ -86,6 +86,26 @@ SCHEMA_STATEMENTS = [
         UNIQUE (employee_id, shift_id)
     )
     """,
+    # Employee codes that belonged to a worker who has been permanently
+    # deleted. Deliberately just the code and when it was retired: this is a
+    # ledger of numbers that have been used up, not an archive of the deleted
+    # worker, so it holds no name, student type or any other personal detail.
+    #
+    # It exists because Phase 5C will allocate codes automatically (D034) and
+    # must never reuse one. Without this, deleting SW-031 would let the next
+    # created worker be issued SW-031 again, so two different people would
+    # share a code across the project's history. The allocator will take the
+    # next number from the highest suffix in `employees` AND here, so a
+    # deleted number stays spent. See D040.
+    #
+    # A new table, so CREATE TABLE IF NOT EXISTS reaches existing databases -
+    # unlike a new column, which needs `migrate_schema()`.
+    """
+    CREATE TABLE IF NOT EXISTS retired_employee_codes (
+        employee_code TEXT PRIMARY KEY,
+        retired_at TEXT NOT NULL
+    )
+    """,
 ]
 
 

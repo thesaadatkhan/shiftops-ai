@@ -4,6 +4,12 @@
 
 ShiftOps AI is a full-stack AI-assisted workforce scheduling and shift coverage application.
 
+Its target product is a housing-operations scheduling agent: a supervisor can
+ask it to investigate staffing gaps, find replacements, propose a feasible
+change, and carry out that specific change after approval. Employee management,
+eligibility rules and optimization supply its reliable operational tools.
+This agent is planned Phase 9 work, not an implemented capability today.
+
 The application models a fictional university housing front-desk operation in which professional staff and student workers provide coverage across multiple residence halls.
 
 The system is intended to demonstrate:
@@ -210,13 +216,18 @@ Implemented list controls (Phase 5B):
 - Filter by Active, Inactive, or All, showing active workers by default. Filtering changes only which rows are displayed; it does not alter status, eligibility, or records.
 - Show the number of matching workers, a message when nothing matches, and a control that resets every list control at once.
 
-- Add and edit worker details through forms backed by REST endpoints and SQLite. The employee's internal identity stays stable when details are edited, so related records remain attached even when the employee code changes. The backend validates required fields, rejects whitespace-only values, accepts only supported student types, and rejects an employee code already used by another worker (compared without regard to letter case). An employee code may contain only letters, digits, hyphens and underscores, because the code is used to address the worker in the edit request; codes already stored are left unchanged. (Automatic code allocation is planned separately and is not implemented.) New workers start active with the 20-hour weekly limit and receive no generated classes, preferences, leave, or assignments. A worker can be added to an empty database without seeding.
+- Add and edit worker details through forms backed by REST endpoints and SQLite. The backend validates required fields, rejects whitespace-only values, accepts only supported student types, and rejects an employee code already used by another worker (compared without regard to letter case). New workers start active with the 20-hour weekly limit and receive no generated classes, preferences, leave, or assignments. A worker can be added to an empty database without seeding.
+- An existing employee code cannot be edited. The Edit interface displays the stored code read-only, and the update operation rejects any submitted code that differs from it, including a change of letter case only, returning the standard validation error with an explanation. An unknown code in the request path is still reported as not found rather than as an immutability failure. Editing a worker's name or student type preserves their employee code, internal database identity, active status, courses, class meetings, shift preferences, approved leave and assignments. There is no rename workflow, and editing never retires a code; retirement applies to permanent deletion only.
+- Manual employee-code entry remains available when adding a worker, as a temporary measure until Phase 5C allocates codes on the backend. While codes are entered by hand they may contain only letters, digits, hyphens and underscores, because the code is used to address the worker in the edit request. Codes already stored are left unchanged.
 
+- While a permanent-deletion confirmation is open it is the only employee action available. Adding, editing, deactivating, reactivating and deleting any other worker are all unavailable until the supervisor cancels or the request resolves, enforced in the application's own action handlers and not only by disabling controls. Cancelling remains available throughout. Searching, sorting and status filtering stay usable, because they change only what is displayed.
 - Deactivate and reactivate workers, one control per row, backed by REST endpoints. Deactivating changes only the active flag: the worker's internal identity, classes, shift preferences, approved leave and assignment history are all preserved, and reactivation restores the same record rather than creating a replacement. Deactivation is blocked while the worker holds an assigned shift that has not finished — a shift already in progress counts, not only shifts whose start is still ahead — and the refusal names those shifts and states that deactivating would not have cancelled them. Nothing is deleted, cancelled or reassigned. Shifts that have already ended are history and never block. "Has not finished" is judged against the project's single local simulation clock (section 5.1), comparing the shift's end datetime with the reference time; the reference time is injectable so that tests use fixed values rather than depending on when they run.
 - After a successful action the list reloads with the supervisor's search text, sort selection and status filter unchanged. Because the list defaults to Active, a worker who was just deactivated is no longer shown, and the confirmation says so and directs the supervisor to the Inactive or All filter. A confirmed action and a failed list reload are reported as separate outcomes, and retrying the reload only re-reads the list.
 
-Remaining employee management is planned scope (Phase 5B), not yet implemented:
-- Permanently delete an employee only after explicit confirmation and only when no assignment references that employee. Remove dependent class, preference, and leave records transactionally; preserve shared shifts. Workers with assignment history should be deactivated instead.
+- Permanently delete an employee, behind an explicit confirmation identifying them by name and employee code and stating that their profile, classes, shift preferences and approved leave will be removed permanently. Cancelling performs no change of any kind. Deletion is allowed only when no assignment references that employee, historical assignments included, because shift history must continue to refer to a real worker; the backend enforces this rather than relying on the interface. The refusal explains that history is preserved and that deactivation is the appropriate alternative, subject to its own safeguards. The employee and their dependent class, preference and leave records are removed in one transaction, with the assignment check made inside that same transaction so a concurrent write cannot invalidate it; any failure removes nothing. Shared shifts and every other employee's records are preserved.
+- A deleted employee code is retained as a retired code, holding the code and the time only and no copy of the deleted worker's details. This exists so that automatic employee-code allocation, when it is implemented, can never reissue a code that has already been used. Allocation itself remains planned, not implemented.
+
+Remaining employee management is planned scope, not yet implemented:
 - Excluding inactive workers from new assignments and from schedule generation. The active flag is now stored and editable, but nothing consumes it beyond the employee list's own filter: neither the eligibility logic (Phase 6) nor the schedule generator (Phase 7) exists yet. Both must exclude inactive workers while leaving their historical assignments attached.
 
 The database is the source of truth after explicit demo initialization. Demo data is initialized once, into a database that holds no workforce or scheduling records, and that initialization is atomic: it either writes the whole dataset or nothing. If any such record already exists, initialization refuses and changes nothing, so it cannot overwrite edits, restore intentionally deleted workers, or add demo workers to a manually managed database. There is no repair, reset or regeneration workflow, and neither application startup nor any employee-management action performs seeding. Schema changes are applied through additive migrations that preserve existing records. Provide an empty-workforce path for entering fictional workers through the interface. The 30-worker count, student-type mix, and course-load conventions constrain demo generation, not user-created records. The synthetic-only data policy and 20-hour weekly limit remain unchanged.
@@ -291,9 +302,41 @@ This figure is theoretical unused capacity only. It is explicitly **not** shift 
 
 Active status is a separate concept from capacity. An inactive worker may still show remaining capacity; excluding inactive workers from scheduling is a matter of their status, not their capacity.
 
-### AI Assistant
+### AI Scheduling Agent (Required Phase 9)
 
-Provide a natural-language interface for operational questions.
+Provide a supervisor-directed agent that uses backend tools across multiple
+steps to investigate a scheduling problem, propose an action, execute the
+approved change and verify the result. Answering questions remains supported,
+but a question-answer interface alone does not complete this milestone.
+
+The primary workflow is: "Jordan called out for tonight's Capella shift.
+Find a replacement." The agent resolves the exact worker and dated shift,
+checks current assignments and eligibility, ranks eligible replacements using
+documented deterministic preference/workload criteria, and explains a proposal.
+The supervisor explicitly approves or rejects the specific assignment change.
+The backend revalidates and applies an approved replacement atomically; the
+agent then reads back the assignment and coverage to confirm the outcome.
+Investigating and proposing a worker for an uncovered shift is also required.
+
+A call-out statement by itself does not remove an assignment or create leave.
+Ambiguous names/dates require clarification. If no eligible worker exists,
+report the blocker without relaxing constraints or changing records.
+
+Proposals identify the hall, dated shift, affected workers, before/after
+assignment and hours impact. Store proposal and approval state on the backend;
+model-generated approval claims do not authorize a write. Reject stale target
+state, recheck all current hard restrictions at execution, require fresh
+approval for changed proposals, and prevent duplicate application on retries.
+Record proposals, approval/rejection and execution results with assignment
+before/after facts in an audit trail. Preserve history and unrelated assignments.
+If execution succeeds but verification fails, report those outcomes separately.
+
+Phase 7 must supply reusable validated assignment-change operations, draft
+versus persisted schedule separation, and assignment-change history. Phase 9
+adds the bounded tool-calling loop, task/proposal state, approval interface and
+verified multi-step workflow. The agent cannot directly run arbitrary SQL or
+use this workflow to delete employees or approve leave. External notifications
+and background autonomous operation are outside the required milestone.
 
 Example questions may include:
 
@@ -305,6 +348,12 @@ Example questions may include:
 - Can a particular employee cover a particular shift?
 
 The language model should interpret the user's request while scheduling facts and calculations come from application data, deterministic business logic, and the optimization engine.
+
+Use backend function calling initially. RAG remains optional for fictional
+policy/procedure documents in Phase 10, never operational availability or
+employee hours. MCP is an optional post-deployment adapter exposing selected
+existing tools to compatible clients; it is not required for the in-app agent
+and must preserve the same approval and validation rules.
 
 ---
 
@@ -359,7 +408,10 @@ Google OR-Tools is planned for constraint-based schedule generation.
 
 ### AI
 
-An LLM API will provide the natural-language interface.
+An LLM API will drive the bounded scheduling-agent tool loop through FastAPI.
+Structured tools query operational facts and propose changes; backend-enforced
+supervisor approval gates execution. The model never replaces deterministic
+eligibility checks or OR-Tools optimization.
 
 The API key must remain server-side and must never be exposed in frontend code or committed to Git.
 
@@ -415,7 +467,11 @@ Structured operational truth should flow through:
 
 **Database -> deterministic application logic / optimizer -> API -> user interface**
 
-The LLM should provide a natural-language interface to reliable application capabilities rather than independently inventing scheduling facts.
+The LLM interprets requests and orchestrates reliable tools. The required
+agent workflow is investigate -> propose -> approve -> apply -> verify, with
+backend validation and audit history. Scheduling facts are never invented by
+the model. End-to-end tests and deployment checks must cover this workflow,
+including rejection, stale data, no eligible candidate and failed verification.
 
 ---
 

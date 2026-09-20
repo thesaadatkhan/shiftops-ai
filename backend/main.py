@@ -6,10 +6,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import ensure_schema, get_connection
 from employees import (
     DeactivationBlocked,
+    DeletionBlocked,
     DuplicateEmployeeCode,
     EmployeeNotFound,
     EmployeeValidationError,
     create_employee,
+    delete_employee,
     set_active,
     update_employee,
 )
@@ -29,9 +31,10 @@ app.add_middleware(
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ],
-    # POST/PUT added for employee creation and editing; the JSON bodies they
-    # carry make Content-Type a non-simple header, so it must be allowed too.
-    allow_methods=["GET", "POST", "PUT"],
+    # POST/PUT for creating and editing, DELETE for permanent removal. The
+    # JSON bodies POST/PUT carry make Content-Type a non-simple header, so it
+    # must be allowed too.
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -137,11 +140,15 @@ def employee_response(row):
     }
 
 
-def write_employee(action):
-    """Run a create/update and turn its errors into clear HTTP responses."""
+def run_employee_action(action):
+    """Run an employee write and turn its errors into clear HTTP responses.
+
+    Every employee write shares this mapping, so the frontend only ever has
+    to read one `{"detail": ...}` shape (D033).
+    """
     connection = get_connection()
     try:
-        return employee_response(action(connection))
+        return action(connection)
     except EmployeeValidationError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except DuplicateEmployeeCode as error:
@@ -152,8 +159,19 @@ def write_employee(action):
         # 409: the request is valid, but the worker's current state does not
         # allow it. Nothing was changed.
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except DeletionBlocked as error:
+        # 409 for the same reason: the worker has shift history, so deleting
+        # them is refused. The transaction rolled back; nothing was removed.
+        raise HTTPException(status_code=409, detail=str(error)) from error
     finally:
         connection.close()
+
+
+def write_employee(action):
+    """Run a write whose result is a stored employee row."""
+    return run_employee_action(
+        lambda connection: employee_response(action(connection))
+    )
 
 
 @app.post("/api/employees", status_code=201)
@@ -179,4 +197,16 @@ def deactivate_employee(employee_code: str):
 def reactivate_employee(employee_code: str):
     return write_employee(
         lambda connection: set_active(connection, employee_code, active=True)
+    )
+
+
+@app.delete("/api/employees/{employee_code}")
+def remove_employee(employee_code: str):
+    """Permanently delete a worker who has no assignments.
+
+    Returns what was removed rather than an employee row, because by the time
+    this responds the employee no longer exists.
+    """
+    return run_employee_action(
+        lambda connection: delete_employee(connection, employee_code)
     )

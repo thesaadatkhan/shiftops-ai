@@ -4,8 +4,10 @@ Separate from `main.py` so the rules can be tested directly against an
 isolated database, without HTTP and without importing the module that
 migrates the real database on import.
 
-Scope is deliberately narrow: employee code, name and student type. The
-weekly hour limit stays at its 20-hour default and new workers start active.
+Scope is deliberately narrow: employee code, name and student type. The code
+is set when the worker is created and fixed from then on (D042), so editing
+covers the name and student type. The weekly hour limit stays at its 20-hour
+default and new workers start active.
 Creating a worker does NOT generate classes, shift preferences, approved
 leave or assignments - the demo course-load conventions describe generated
 demo data, not workers a supervisor enters by hand.
@@ -24,14 +26,19 @@ VALID_STUDENT_TYPES = ("undergraduate", "masters")
 # be impossible to edit afterwards. Restricting codes to letters, digits,
 # hyphens and underscores keeps every accepted code addressable.
 #
-# This is checked when saving. Codes already stored are left exactly as they
-# are; nothing here rewrites or removes them.
+# Checked when creating, which is the only time a code is entered (D036).
+# Codes already stored are left exactly as they are; nothing here rewrites or
+# removes them.
 EMPLOYEE_CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 EMPLOYEE_CODE_RULE = (
     "employee_code may contain only letters, digits, hyphens and underscores"
 )
 
-EDITABLE_FIELDS = ("employee_code", "full_name", "student_type")
+# Every field a create or update request must supply. Not all of them are
+# editable: `employee_code` is required in the payload so an update can be
+# checked against the stored code, but it is fixed once the worker exists
+# (D042). Only `full_name` and `student_type` can actually change.
+EMPLOYEE_INPUT_FIELDS = ("employee_code", "full_name", "student_type")
 
 
 class EmployeeValidationError(ValueError):
@@ -46,18 +53,28 @@ class EmployeeNotFound(LookupError):
     """No employee exists with the given employee code."""
 
 
-def clean_employee_input(payload):
+CODE_IMMUTABLE_RULE = (
+    "employee_code cannot be changed once a worker has been created"
+)
+
+
+def clean_employee_input(payload, require_url_safe_code=True):
     """Validate and normalise submitted details.
 
     Surrounding whitespace is stripped, so " SW-031 " and "SW-031" are the
     same code and a field containing only spaces counts as missing rather
     than as a valid value.
+
+    `require_url_safe_code` is off when editing, because an edit refuses to
+    change the code at all and so has nothing to validate. Applying the rule
+    there would make a worker whose code predates it permanently uneditable -
+    exactly the problem D036 was introduced to fix.
     """
     if not isinstance(payload, dict):
         raise EmployeeValidationError("Expected an object with employee details.")
 
     cleaned = {}
-    for field in EDITABLE_FIELDS:
+    for field in EMPLOYEE_INPUT_FIELDS:
         value = payload.get(field)
         if value is None:
             raise EmployeeValidationError(f"{field} is required.")
@@ -68,7 +85,9 @@ def clean_employee_input(payload):
             raise EmployeeValidationError(f"{field} cannot be blank.")
         cleaned[field] = stripped
 
-    if not EMPLOYEE_CODE_PATTERN.match(cleaned["employee_code"]):
+    if require_url_safe_code and not EMPLOYEE_CODE_PATTERN.match(
+        cleaned["employee_code"]
+    ):
         raise EmployeeValidationError(f"{EMPLOYEE_CODE_RULE}.")
 
     if cleaned["student_type"] not in VALID_STUDENT_TYPES:
@@ -85,17 +104,21 @@ def find_by_code(connection, employee_code):
     ).fetchone()
 
 
-def _assert_code_available(connection, employee_code, existing_id=None):
-    """Reject a code already used by a different employee.
+def _assert_code_available(connection, employee_code):
+    """Reject a code already used by an employee.
 
     Compared case-insensitively so 'sw-031' cannot shadow 'SW-031'; the code
     is stored exactly as typed.
+
+    Only creation calls this. It used to take the editing worker's id so a
+    rename could be screened without matching the worker against themselves;
+    codes are immutable now (D042), so there is no such case left.
     """
     row = connection.execute(
         "SELECT id FROM employees WHERE employee_code = ? COLLATE NOCASE",
         (employee_code,),
     ).fetchone()
-    if row is not None and row["id"] != existing_id:
+    if row is not None:
         raise DuplicateEmployeeCode(
             f"Employee code {employee_code} is already in use."
         )
@@ -118,36 +141,47 @@ def create_employee(connection, payload):
 
 
 def update_employee(connection, current_code, payload):
-    """Edit a worker's details, identified by their current employee code.
+    """Edit a worker's name and student type.
 
-    The row's internal id is never changed, so every course, class meeting,
-    approved leave period, shift preference and assignment that references
-    this employee keeps pointing at the same worker even when the employee
-    code itself is edited. Active status, weekly hour limit and seed origin
-    are left alone.
+    The employee code is immutable once the worker exists (D042). It is a
+    visible operational identifier that ends up in schedules, reports and
+    history, so letting it be edited would make one worker appear under two
+    identifiers and could free the old one for accidental reuse. Only the
+    name and student type are written here.
+
+    Nothing else moves either: the row's internal id, active status, weekly
+    hour limit and seed origin are untouched, so every course, class meeting,
+    approved leave period, shift preference and assignment stays attached.
+
+    There is no duplicate-code check any more. It existed only so a rename
+    could be screened against other workers; an edit that cannot change the
+    code cannot collide with one.
     """
     existing = find_by_code(connection, current_code)
     if existing is None:
+        # Checked before anything else, so an unknown worker is reported as
+        # missing rather than as an immutability problem.
         raise EmployeeNotFound(f"No employee with code {current_code}.")
 
-    details = clean_employee_input(payload)
-    _assert_code_available(connection, details["employee_code"], existing_id=existing["id"])
+    details = clean_employee_input(payload, require_url_safe_code=False)
+
+    # Compared exactly, so "sw-001" counts as a change from "SW-001" and is
+    # refused too. Accepting a case-only edit would silently rewrite the
+    # identifier people read, which is the thing this rule prevents.
+    if details["employee_code"] != existing["employee_code"]:
+        raise EmployeeValidationError(
+            f"{CODE_IMMUTABLE_RULE}. This worker is "
+            f"{existing['employee_code']}; the request asked for "
+            f"{details['employee_code']}. Edit the name or student type "
+            "instead."
+        )
 
     connection.execute(
-        """
-        UPDATE employees
-        SET employee_code = ?, full_name = ?, student_type = ?
-        WHERE id = ?
-        """,
-        (
-            details["employee_code"],
-            details["full_name"],
-            details["student_type"],
-            existing["id"],
-        ),
+        "UPDATE employees SET full_name = ?, student_type = ? WHERE id = ?",
+        (details["full_name"], details["student_type"], existing["id"]),
     )
     connection.commit()
-    return find_by_code(connection, details["employee_code"])
+    return find_by_code(connection, existing["employee_code"])
 
 
 class DeactivationBlocked(RuntimeError):
@@ -221,3 +255,126 @@ def set_active(connection, employee_code, active, reference_time=None):
     )
     connection.commit()
     return find_by_code(connection, employee_code)
+
+
+class DeletionBlocked(RuntimeError):
+    """The worker has assignments, so their history must be preserved."""
+
+
+# Records that belong to one worker and mean nothing without them. Shifts are
+# deliberately absent: a shift is a staffing requirement of a residence hall,
+# shared by everyone, and deleting a worker must never remove one.
+OWNED_RECORD_COUNTS = {
+    "courses": "SELECT COUNT(*) AS n FROM courses WHERE employee_id = ?",
+    "class_meetings": (
+        "SELECT COUNT(*) AS n FROM class_meetings m "
+        "JOIN courses c ON c.id = m.course_id WHERE c.employee_id = ?"
+    ),
+    "shift_preferences": (
+        "SELECT COUNT(*) AS n FROM shift_preferences WHERE employee_id = ?"
+    ),
+    "approved_leave": "SELECT COUNT(*) AS n FROM approved_leave WHERE employee_id = ?",
+}
+
+
+def delete_employee(connection, employee_code, retired_at=None):
+    """Permanently delete a worker and the records that belong only to them.
+
+    Allowed only when the worker has NO assignments at all - not just none
+    ahead of them. An assignment is a record that this person worked, or is
+    down to work, a particular shift; deleting the worker would leave that
+    history referring to nobody. A worker who has ever been assigned is
+    deactivated instead, which keeps everything and is reversible.
+
+    The check and the deletes share one `BEGIN IMMEDIATE` transaction. That
+    matters: `BEGIN IMMEDIATE` takes the write lock up front, so no other
+    connection can insert an assignment between the moment we find none and
+    the moment the row is gone. Checking first and deleting afterwards in
+    separate transactions would leave exactly that gap.
+
+    Any failure rolls the whole thing back, so a worker is never left with
+    half their records removed.
+
+    Shifts are untouched, and so is every other worker's data.
+
+    The employee code is written to `retired_employee_codes` in the same
+    transaction. Phase 5C's automatic allocator (D034) must never reissue a
+    number that has been used, and once the employee row is gone the code
+    would otherwise be indistinguishable from one that was never used. Only
+    the code and the time are kept - no copy of the deleted worker's details.
+
+    Returns a summary of what was removed, for the confirmation message.
+    """
+    when = retired_at if retired_at is not None else datetime.now()
+
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+
+        existing = find_by_code(connection, employee_code)
+        if existing is None:
+            raise EmployeeNotFound(f"No employee with code {employee_code}.")
+
+        employee_id = existing["id"]
+
+        assignments = connection.execute(
+            "SELECT COUNT(*) AS n FROM assignments WHERE employee_id = ?",
+            (employee_id,),
+        ).fetchone()["n"]
+
+        if assignments:
+            raise DeletionBlocked(
+                f"{existing['full_name']} ({existing['employee_code']}) has "
+                f"{assignments} assignment(s) on record and cannot be deleted. "
+                "Shift history must be preserved. Deactivate them instead - "
+                "that keeps every record and can be undone."
+            )
+
+        removed = {
+            name: connection.execute(query, (employee_id,)).fetchone()["n"]
+            for name, query in OWNED_RECORD_COUNTS.items()
+        }
+
+        # Class meetings hang off courses, so they go before the courses do.
+        connection.execute(
+            "DELETE FROM class_meetings WHERE course_id IN "
+            "(SELECT id FROM courses WHERE employee_id = ?)",
+            (employee_id,),
+        )
+        connection.execute("DELETE FROM courses WHERE employee_id = ?", (employee_id,))
+        connection.execute(
+            "DELETE FROM shift_preferences WHERE employee_id = ?", (employee_id,)
+        )
+        connection.execute(
+            "DELETE FROM approved_leave WHERE employee_id = ?", (employee_id,)
+        )
+        connection.execute("DELETE FROM employees WHERE id = ?", (employee_id,))
+
+        # REPLACE rather than IGNORE: if this code was created and deleted
+        # again, the ledger should show the most recent retirement. Either way
+        # the number stays spent.
+        connection.execute(
+            "INSERT OR REPLACE INTO retired_employee_codes "
+            "(employee_code, retired_at) VALUES (?, ?)",
+            (existing["employee_code"], when.strftime(TIME_FORMAT)),
+        )
+
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    return {
+        "employee_code": existing["employee_code"],
+        "full_name": existing["full_name"],
+        "removed": removed,
+    }
+
+
+def retired_employee_codes(connection):
+    """Every employee code that has been permanently deleted."""
+    return [
+        row["employee_code"]
+        for row in connection.execute(
+            "SELECT employee_code FROM retired_employee_codes ORDER BY employee_code"
+        )
+    ]
