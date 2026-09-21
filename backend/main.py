@@ -53,7 +53,9 @@ from eligibility import (
     UnknownExcludedWorker,
     shift_coverage,
 )
+from scheduling import get_week_schedule, prepare_week
 from synthetic_data import WEEK_START, WEEK_END
+import weeks
 
 # WEEK_END is the exclusive Monday boundary; the reporting week's last day is
 # the Sunday before it. Semester overlap is compared against that inclusive
@@ -84,7 +86,28 @@ def health_check():
 
 
 @app.get("/api/employees")
-def list_employees():
+def list_employees(week_start: str | None = None):
+    """Workforce summary for one reporting week.
+
+    No `week_start` keeps today's exact default behavior: the fixed sample
+    week (2026-10-05). Supplying one reports assigned hours and semester-
+    aware class summaries for a different Monday week instead; it must be a
+    real, strictly-formatted Monday, or this is the usual 400/string-detail
+    shape (D033). Selecting or reading a week never writes anything -
+    preparing required shifts for it is the separate, explicit
+    `POST /api/schedule/weeks/{week_start}/prepare`. Employee identity,
+    active status and stored records are unaffected either way.
+    """
+    if week_start is None:
+        active_week_start = WEEK_START
+    else:
+        try:
+            active_week_start = weeks.parse_week_start(week_start)
+        except weeks.InvalidWeekStart as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+    active_week_end = active_week_start + timedelta(days=7)
+    active_week_dates = weeks.week_dates(active_week_start)
+
     connection = get_connection()
     try:
         employees = connection.execute(
@@ -122,7 +145,9 @@ def list_employees():
         ).fetchall()
 
         try:
-            assigned_hours = assigned_hours_by_employee(connection)
+            assigned_hours = assigned_hours_by_employee(
+                connection, week_start=active_week_start, week_end=active_week_end
+            )
         except InvalidWorkDuration as error:
             # Stored shift data violates the whole-hour work rule. Report it
             # instead of returning a capacity figure derived from bad data.
@@ -141,7 +166,7 @@ def list_employees():
         # Wednesday of that week does NOT happen this week, even though the
         # semester overlaps the week - which is exactly what comparing whole
         # ranges got wrong.
-        occurrence = reporting_week_date(block["day_of_week"])
+        occurrence = active_week_dates[block["day_of_week"]]
         if not (block["start_date"] <= occurrence <= block["end_date"]):
             continue
 
@@ -154,7 +179,7 @@ def list_employees():
             block["start_time"], block["end_time"]
         )
 
-    coverage = reporting_period_coverage(schedules)
+    coverage = reporting_period_coverage(schedules, active_week_dates)
 
     def employee_payload(employee):
         assigned = assigned_hours.get(employee["id"], 0)
@@ -188,44 +213,40 @@ def list_employees():
         }
 
     return {
-        # The reporting week the capacity figures describe. Fixed to the
-        # sample week for now; it becomes a request parameter once schedules
-        # span more than one week.
-        "week_start": WEEK_START.strftime("%Y-%m-%d"),
-        # WEEK_END is the exclusive Monday boundary; show the Sunday instead.
-        "week_end": (WEEK_END - timedelta(days=1)).strftime("%Y-%m-%d"),
+        # The reporting week the capacity figures describe: the sample week
+        # by default, or the requested `week_start`.
+        "week_start": active_week_start.strftime("%Y-%m-%d"),
+        # active_week_end is the exclusive following-Monday boundary; show
+        # the Sunday instead.
+        "week_end": (active_week_end - timedelta(days=1)).strftime("%Y-%m-%d"),
         "employees": [employee_payload(employee) for employee in employees],
     }
 
 
-# The seven dates of the fixed reporting week, indexed by day_of_week with
-# 0 = Monday (D025).
-REPORTING_WEEK_DATES = [
-    (WEEK_START + timedelta(days=offset)).strftime("%Y-%m-%d") for offset in range(7)
-]
+# The seven dates of the fixed sample reporting week, indexed by day_of_week
+# with 0 = Monday (D025). Used by the employee-details view, which is not
+# parameterized by week (only `GET /api/employees` accepts `week_start`; see
+# `weeks.week_dates` for computing the same list for another Monday).
+REPORTING_WEEK_DATES = weeks.week_dates(WEEK_START)
 
 
-def reporting_week_date(day_of_week):
-    """The date a recurring weekday falls on inside the reporting week."""
-    return REPORTING_WEEK_DATES[day_of_week]
-
-
-def schedule_covered_days(schedule):
+def schedule_covered_days(schedule, week_dates):
     """Which days of the displayed reporting week one schedule covers.
 
     The single definition of "this semester applies on that day", used both
     for an individual semester's coverage state and for the employee's
     combined readiness below, so the two can never disagree about which days
-    a schedule reaches. Dates are inclusive on both ends (D035).
+    a schedule reaches. Dates are inclusive on both ends (D035). `week_dates`
+    is the displayed week's seven ISO dates (`weeks.week_dates`).
     """
     return {
         date
-        for date in REPORTING_WEEK_DATES
+        for date in week_dates
         if schedule["start_date"] <= date <= schedule["end_date"]
     }
 
 
-def week_coverage_state(covered_days):
+def week_coverage_state(covered_days, week_dates):
     """How much of the displayed reporting week a set of days accounts for.
 
     Three states, because "covers the week" and "touches the week" are not
@@ -242,12 +263,12 @@ def week_coverage_state(covered_days):
     """
     if not covered_days:
         return "outside"
-    if len(covered_days) < len(REPORTING_WEEK_DATES):
+    if len(covered_days) < len(week_dates):
         return "partial"
     return "full"
 
 
-def reporting_period_coverage(schedules):
+def reporting_period_coverage(schedules, week_dates):
     """Timetable readiness for the DISPLAYED reporting week, per employee.
 
     Readiness is about the week on screen, not about whether a worker ever
@@ -284,7 +305,7 @@ def reporting_period_coverage(schedules):
     for schedule in schedules:
         employee_id = schedule["employee_id"]
         seen.add(employee_id)
-        covered = schedule_covered_days(schedule)
+        covered = schedule_covered_days(schedule, week_dates)
         if not covered:
             continue
         any_days.setdefault(employee_id, set()).update(covered)
@@ -299,14 +320,14 @@ def reporting_period_coverage(schedules):
             status[employee_id] = "outside_period"
         elif not confirmed:
             status[employee_id] = "unconfirmed"
-        elif len(confirmed) < len(REPORTING_WEEK_DATES):
+        elif len(confirmed) < len(week_dates):
             status[employee_id] = "partial"
         else:
             status[employee_id] = "confirmed"
     return status
 
 
-def semester_payload(schedule, blocks_by_schedule):
+def semester_payload(schedule, blocks_by_schedule, week_dates):
     """One stored semester schedule, with the class blocks it owns.
 
     Three independent facts, deliberately not merged:
@@ -345,7 +366,7 @@ def semester_payload(schedule, blocks_by_schedule):
         "end_date": schedule["end_date"],
         "confirmed_at": schedule["confirmed_at"],
         "reporting_week_coverage": week_coverage_state(
-            schedule_covered_days(schedule)
+            schedule_covered_days(schedule, week_dates), week_dates
         ),
         "dates_provisional": bool(schedule["dates_provisional"]),
         "class_blocks": [
@@ -469,12 +490,13 @@ def employee_detail_payload(connection, employee_code):
             # The same five-state readiness the list shows, computed by the
             # same function over the same schedules, so the two views can
             # never disagree about the displayed week.
-            "timetable_status": reporting_period_coverage(schedules).get(
-                employee_id, "missing"
-            ),
+            "timetable_status": reporting_period_coverage(
+                schedules, REPORTING_WEEK_DATES
+            ).get(employee_id, "missing"),
         },
         "semesters": [
-            semester_payload(schedule, blocks_by_schedule) for schedule in schedules
+            semester_payload(schedule, blocks_by_schedule, REPORTING_WEEK_DATES)
+            for schedule in schedules
         ],
         "shift_preferences": [
             {
@@ -573,6 +595,56 @@ def get_shift_coverage(shift_id: int, exclude_employee_code: str | None = None):
     except CoverageShiftNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except UnknownExcludedWorker as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except InvalidWorkDuration as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Stored shift data is invalid: {error}",
+        ) from error
+    finally:
+        connection.close()
+
+
+# --------------------------------------------------------------------------
+# Week-level scheduling (Phase 7 increment 1): preparing required shifts for
+# an explicitly chosen Monday week, and reading back what is currently
+# stored for it. Neither route generates assignments or touches any other
+# week; see `scheduling.py`.
+# --------------------------------------------------------------------------
+
+
+@app.post("/api/schedule/weeks/{week_start}/prepare")
+def prepare_schedule_week(week_start: str):
+    """Insert any required shifts missing for one Monday week. Idempotent.
+
+    `week_start` must be a real, strictly-formatted 'YYYY-MM-DD' Monday, or
+    this is a 400 with a string `detail` (D033). Never deletes an existing
+    shift and never touches assignments, employees, timetables, preferences
+    or leave. This is the only way another week's required shifts come to
+    exist - reading or selecting a week never prepares it.
+    """
+    connection = get_connection()
+    try:
+        return prepare_week(connection, week_start)
+    except weeks.InvalidWeekStart as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    finally:
+        connection.close()
+
+
+@app.get("/api/schedule/weeks/{week_start}")
+def get_schedule_week(week_start: str):
+    """The stored schedule for one Monday week. Read-only.
+
+    `week_start` must be a real, strictly-formatted 'YYYY-MM-DD' Monday, or
+    this is a 400 with a string `detail` (D033). An unprepared week returns
+    an empty but valid `shifts` list - this never generates or inserts a
+    shift.
+    """
+    connection = get_connection()
+    try:
+        return get_week_schedule(connection, week_start)
+    except weeks.InvalidWeekStart as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except InvalidWorkDuration as error:
         raise HTTPException(

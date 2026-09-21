@@ -28,6 +28,8 @@ there is no request/approval workflow or pending status in Phase 5.
 import random
 from datetime import datetime, time, timedelta
 
+import weeks
+
 TIME_FORMAT = "%Y-%m-%d %H:%M"
 
 WEEK_START = datetime(2026, 10, 5)
@@ -60,30 +62,34 @@ PREFERENCE_SEED = 20261006
 # --------------------------------------------------------------------------
 
 
-def _day(offset, hour=0):
-    return WEEK_START + timedelta(days=offset, hours=hour)
+def _day(week_start, offset, hour=0):
+    return week_start + timedelta(days=offset, hours=hour)
 
 
-def hall_open_periods(hall):
-    """Periods the desk is open, clipped to the sample week."""
+def hall_open_periods(hall, week_start=WEEK_START):
+    """Periods the desk is open, clipped to the given Monday week."""
+    week_end = week_start + timedelta(days=7)
     if hall in HALLS_24_HOUR:
-        return [(WEEK_START, WEEK_END)]
+        return [(week_start, week_end)]
 
     periods = []
     for day_offset in range(-1, 7):
-        opens = _day(day_offset, LIMITED_OPEN_HOUR)
-        closes = _day(day_offset + 1, LIMITED_CLOSE_HOUR)
-        start = max(opens, WEEK_START)
-        end = min(closes, WEEK_END)
+        opens = _day(week_start, day_offset, LIMITED_OPEN_HOUR)
+        closes = _day(week_start, day_offset + 1, LIMITED_CLOSE_HOUR)
+        start = max(opens, week_start)
+        end = min(closes, week_end)
         if start < end:
             periods.append((start, end))
     return periods
 
 
-def professional_periods():
+def professional_periods(week_start=WEEK_START):
     """Monday-Friday 08:00-17:00, the same at every hall."""
     return [
-        (_day(day_offset, PROFESSIONAL_START_HOUR), _day(day_offset, PROFESSIONAL_END_HOUR))
+        (
+            _day(week_start, day_offset, PROFESSIONAL_START_HOUR),
+            _day(week_start, day_offset, PROFESSIONAL_END_HOUR),
+        )
         for day_offset in range(5)
     ]
 
@@ -127,12 +133,31 @@ def split_period(start, end):
     return shifts
 
 
-def generate_required_shifts():
-    """Every student-covered shift for the sample week, one worker each."""
+def generate_required_shifts(week_start=None):
+    """Every student-covered shift for one Monday week, one worker each.
+
+    Defaults to the sample week (2026-10-05) - the behavior demo
+    initialization, the semester migration's expected timetable, and every
+    existing verification script rely on. Passing another value generates
+    the identical hall-coverage pattern - same halls, same relative offsets,
+    same required_staff, same cross-midnight end dates - shifted onto that
+    week; nothing about the operating model itself changes. An explicitly
+    supplied `week_start` is enforced by `weeks.validate_week_start_datetime`:
+    it must be an actual naive (no timezone) `datetime` that is exactly
+    midnight on a real Monday, the same invariant `weeks.parse_week_start`
+    establishes when parsing a `week_start` string. Rejecting an invalid
+    value here, not just at the string-parsing boundary, means a caller
+    cannot silently generate a shift pattern for something that was never
+    actually a valid week start.
+    """
+    if week_start is None:
+        week_start = WEEK_START
+    else:
+        weeks.validate_week_start_datetime(week_start)
     shifts = []
-    blocks = professional_periods()
+    blocks = professional_periods(week_start)
     for hall in ALL_HALLS:
-        student_periods = subtract_periods(hall_open_periods(hall), blocks)
+        student_periods = subtract_periods(hall_open_periods(hall, week_start), blocks)
         for period_start, period_end in student_periods:
             for shift_start, shift_end in split_period(period_start, period_end):
                 shifts.append(
