@@ -48,6 +48,11 @@ from reporting import (
     minutes_between,
     remaining_capacity_hours,
 )
+from eligibility import (
+    ShiftNotFound as CoverageShiftNotFound,
+    UnknownExcludedWorker,
+    shift_coverage,
+)
 from synthetic_data import WEEK_START, WEEK_END
 
 # WEEK_END is the exclusive Monday boundary; the reporting week's last day is
@@ -170,8 +175,10 @@ def list_employees():
             # they are deliberately not collapsed.
             #
             # This describes timetable readiness only. It is not shift
-            # eligibility, which does not exist yet, and it is independent of
-            # active status.
+            # eligibility - that is a separate calculation in eligibility.py,
+            # which requires confirmed AND non-provisional dates, not merely
+            # a "confirmed" status here - and it is independent of active
+            # status.
             "timetable_status": coverage.get(employee["id"], "missing"),
             "approved_leave_count": employee["approved_leave_count"],
             # Whole hours: work shifts are whole-hour blocks, so these
@@ -265,8 +272,10 @@ def reporting_period_coverage(schedules):
                        "this worker has no classes this week", which stays
                        distinguishable from `missing`.
 
-    This is timetable readiness only. It is NOT shift eligibility, which does
-    not exist, and it is independent of whether a worker is active.
+    This is timetable readiness only. It is NOT shift eligibility - see
+    `eligibility.py`, which requires a schedule to be BOTH confirmed and
+    non-provisional before its dates count as coverage, a stricter test than
+    "confirmed" here - and it is independent of whether a worker is active.
     """
     any_days = {}
     confirmed_days = {}
@@ -513,6 +522,65 @@ def get_employee_details(employee_code: str):
     return run_employee_action(
         lambda connection: employee_detail_payload(connection, employee_code)
     )
+
+
+@app.get("/api/shifts")
+def list_shifts():
+    """Every stored shift, for the Coverage screen's shift picker.
+
+    Read-only, and deliberately the smallest possible shape: stable id, hall
+    and dated start/end, sorted by start datetime then hall then id so the
+    picker's order is deterministic. Nothing here is worker-specific - the
+    employee-details payload already lists every shift for its own picker,
+    but a shift-centric screen like Coverage has no employee code to address,
+    so it needs its own top-level read.
+    """
+    connection = get_connection()
+    try:
+        shifts = connection.execute(
+            "SELECT id, hall, start_datetime, end_datetime FROM shifts"
+            " ORDER BY start_datetime, hall, id"
+        ).fetchall()
+        return {
+            "shifts": [
+                {
+                    "id": row["id"],
+                    "hall": row["hall"],
+                    "start_datetime": row["start_datetime"],
+                    "end_datetime": row["end_datetime"],
+                }
+                for row in shifts
+            ]
+        }
+    finally:
+        connection.close()
+
+
+@app.get("/api/shifts/{shift_id}/coverage")
+def get_shift_coverage(shift_id: int, exclude_employee_code: str | None = None):
+    """"Who can cover this shift?" - deterministic eligibility, read-only.
+
+    Addressed by the shift's stable database id. `exclude_employee_code` is
+    an optional query parameter naming a worker (typically the one calling
+    out) to remove from `eligible_candidates`, though they still appear in
+    `results`. See `eligibility.shift_coverage` for the full response shape.
+    This performs no assignment, cancellation or other mutation - Phase 7
+    owns optimization and Phase 9 will consume these facts to propose one.
+    """
+    connection = get_connection()
+    try:
+        return shift_coverage(connection, shift_id, exclude_employee_code)
+    except CoverageShiftNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except UnknownExcludedWorker as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except InvalidWorkDuration as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Stored shift data is invalid: {error}",
+        ) from error
+    finally:
+        connection.close()
 
 
 # --------------------------------------------------------------------------

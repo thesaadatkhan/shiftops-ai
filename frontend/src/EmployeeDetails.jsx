@@ -7,6 +7,13 @@ import {
   timetableLabel,
   weekdayName,
 } from './employees.js'
+import {
+  datesForHall,
+  friendlyDate,
+  hallsFromShifts,
+  shiftPickerLabel,
+  shiftsForHallAndDate,
+} from './shiftPicker.js'
 
 const PREFERENCE_LABELS = {
   preferred: 'Preferred',
@@ -463,6 +470,12 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
   const [semesterForm, setSemesterForm] = useState(EMPTY_SEMESTER)
   const [blockForm, setBlockForm] = useState(EMPTY_BLOCK)
   const [preferenceForm, setPreferenceForm] = useState(EMPTY_PREFERENCE)
+  // General Set's progressive hall -> date filter, ahead of picking a
+  // concrete shift (shared with Coverage's picker, see shiftPicker.js).
+  // Meaningless in row-level Change, which is locked to one shift and shows
+  // no selector at all.
+  const [preferenceHall, setPreferenceHall] = useState('')
+  const [preferenceDate, setPreferenceDate] = useState('')
   const [leaveForm, setLeaveForm] = useState(EMPTY_LEAVE)
   // Only meaningful while confirming a semester with zero classes: the
   // deliberate acknowledgement that must be checked before that confirmation
@@ -546,6 +559,8 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     setBlockForm(EMPTY_BLOCK)
     setNoClassesChecked(false)
     setPreferenceForm(EMPTY_PREFERENCE)
+    setPreferenceHall('')
+    setPreferenceDate('')
     setLeaveForm(EMPTY_LEAVE)
   }
 
@@ -750,6 +765,10 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
   function startSetPreference() {
     // General Set: no shift preselected, the picker stays enabled so the
     // supervisor can choose any existing shift, including a neutral one.
+    // The hall/date filter starts fresh too, rather than carrying over
+    // whatever was left selected the last time this action was open.
+    setPreferenceHall('')
+    setPreferenceDate('')
     openAction(
       { kind: 'set-preference' },
       { preference: { shift_id: '', preference: 'preferred' } },
@@ -1180,6 +1199,26 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     </div>
   )
 
+  // General Set's progressive filter: choosing a hall or a date invalidates
+  // whatever concrete shift was picked under the old filter, the same
+  // dependent-reset rule Coverage's picker uses (shiftPicker.js).
+  function selectPreferenceHall(hall) {
+    if (hall === preferenceHall) {
+      return
+    }
+    setPreferenceHall(hall)
+    setPreferenceDate('')
+    setPreferenceForm({ ...preferenceForm, shift_id: '' })
+  }
+
+  function selectPreferenceDate(date) {
+    if (date === preferenceDate) {
+      return
+    }
+    setPreferenceDate(date)
+    setPreferenceForm({ ...preferenceForm, shift_id: '' })
+  }
+
   const renderPreferenceForm = () => {
     // Two distinct modes share this form. General Set lets the supervisor
     // pick any shift. Row-level Change is locked to the shift it was opened
@@ -1206,6 +1245,41 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
             </p>
           ) : (
             <>
+              <label htmlFor="preference-hall">Hall</label>
+              <select
+                id="preference-hall"
+                value={preferenceHall}
+                onChange={(event) => selectPreferenceHall(event.target.value)}
+              >
+                <option value="" disabled>
+                  Choose a hall
+                </option>
+                {hallsFromShifts(shifts).map((hall) => (
+                  <option key={hall} value={hall}>
+                    {hall}
+                  </option>
+                ))}
+              </select>
+
+              <label htmlFor="preference-date">Date</label>
+              <select
+                id="preference-date"
+                value={preferenceDate}
+                onChange={(event) => selectPreferenceDate(event.target.value)}
+                disabled={preferenceHall === ''}
+              >
+                <option value="" disabled>
+                  {preferenceHall === '' ? 'Choose a hall first' : 'Choose a date'}
+                </option>
+                {(preferenceHall === '' ? [] : datesForHall(shifts, preferenceHall)).map(
+                  (date) => (
+                    <option key={date} value={date}>
+                      {friendlyDate(date)}
+                    </option>
+                  ),
+                )}
+              </select>
+
               <label htmlFor="preference-shift">Shift</label>
               <select
                 id="preference-shift"
@@ -1213,16 +1287,30 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
                 onChange={(event) =>
                   setPreferenceForm({ ...preferenceForm, shift_id: event.target.value })
                 }
+                disabled={preferenceDate === ''}
               >
                 <option value="" disabled>
-                  Choose a shift
+                  {preferenceDate === '' ? 'Choose a date first' : 'Choose a shift'}
                 </option>
-                {shifts.map((shift) => (
+                {(preferenceHall === '' || preferenceDate === ''
+                  ? []
+                  : shiftsForHallAndDate(shifts, preferenceHall, preferenceDate)
+                ).map((shift) => (
                   <option key={shift.id} value={String(shift.id)}>
-                    {describeShift(shift)}
+                    {shiftPickerLabel(shift)}
                   </option>
                 ))}
               </select>
+
+              {preferenceHall !== '' && preferenceDate !== '' && (
+                <p className="table-note">
+                  {shiftsForHallAndDate(shifts, preferenceHall, preferenceDate).length}{' '}
+                  {shiftsForHallAndDate(shifts, preferenceHall, preferenceDate).length === 1
+                    ? 'shift'
+                    : 'shifts'}{' '}
+                  at {preferenceHall} on {friendlyDate(preferenceDate)}.
+                </p>
+              )}
             </>
           )}
           <label htmlFor="preference-level">Preference</label>

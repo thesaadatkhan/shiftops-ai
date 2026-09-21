@@ -845,8 +845,10 @@ function EmployeeList() {
         means their timetable is for a different period, &ldquo;Part of
         week&rdquo; means only some days are confirmed, and
         &ldquo;Confirmed&rdquo; with no class blocks means a deliberate
-        &ldquo;no classes this week&rdquo;. None of this is shift eligibility,
-        which does not exist yet, and it is separate from whether a worker is
+        &ldquo;no classes this week&rdquo;. None of this is shift eligibility
+        &mdash; see the Coverage section for that, which requires a
+        confirmed AND accepted (non-provisional) timetable, not merely this
+        readiness figure &mdash; and it is separate from whether a worker is
         active.
       </p>
 

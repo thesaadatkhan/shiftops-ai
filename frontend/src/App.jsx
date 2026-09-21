@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import './App.css'
 import BackendStatus from './BackendStatus.jsx'
+import Coverage from './Coverage.jsx'
 import EmployeeList from './EmployeeList.jsx'
 
 const NAV_ITEMS = [
@@ -28,7 +29,8 @@ const SECTION_CONTENT = {
   },
   coverage: {
     title: 'Coverage',
-    description: 'Shift eligibility lookups will appear here.',
+    description:
+      'Select a stored shift to see which workers are deterministically eligible to cover it, and why others are not.',
   },
   'generate-schedule': {
     title: 'Generate Schedule',
@@ -77,6 +79,7 @@ function App() {
         <p>{content.description}</p>
         {activeSection === 'dashboard' && <BackendStatus />}
         {activeSection === 'employees' && <EmployeeList />}
+        {activeSection === 'coverage' && <Coverage />}
       </main>
     </>
   )
