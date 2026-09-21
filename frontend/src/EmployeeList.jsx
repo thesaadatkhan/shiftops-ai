@@ -635,6 +635,7 @@ function EmployeeList({ weekStart }) {
       <div className="list-controls">
         <button
           type="button"
+          className="btn-danger"
           onClick={() => handleDelete(confirmingDelete)}
           disabled={pendingCode !== null}
         >
@@ -695,7 +696,7 @@ function EmployeeList({ weekStart }) {
           <option value="masters">Master&rsquo;s</option>
         </select>
 
-        <button type="submit" disabled={saving}>
+        <button type="submit" className="btn-primary" disabled={saving}>
           {saving ? 'Saving...' : 'Save'}
         </button>
         <button type="button" onClick={closeForm} disabled={saving}>
@@ -719,7 +720,7 @@ function EmployeeList({ weekStart }) {
     return (
       <>
         <div className="list-controls">
-          <button type="button" onClick={openCreateForm} disabled={anotherActionIsOpen()}>
+          <button type="button" className="btn-primary" onClick={openCreateForm} disabled={anotherActionIsOpen()}>
             Add employee
           </button>
         </div>
@@ -754,7 +755,7 @@ function EmployeeList({ weekStart }) {
   return (
     <>
       <div className="list-controls">
-        <button type="button" onClick={openCreateForm} disabled={anotherActionIsOpen()}>
+        <button type="button" className="btn-primary" onClick={openCreateForm} disabled={anotherActionIsOpen()}>
           Add employee
         </button>
       </div>

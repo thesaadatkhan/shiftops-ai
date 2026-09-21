@@ -16,8 +16,8 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 
 **Implemented:**
 
-- A React application shell (Vite + JavaScript) with sidebar navigation covering all planned sections (Dashboard, Employees, Schedule, Coverage, Generate Schedule, Workforce Planning, AI Assistant). Dashboard, Employees, Coverage, Schedule and Generate Schedule show real data, sharing one reporting-week selection between Employees, Schedule and Generate Schedule; Workforce Planning and AI Assistant remain placeholders.
-- Deterministic shift coverage (Phase 6) and a full schedule-generation pipeline (Phase 7): a read-only eligibility engine and Coverage screen; a Google OR-Tools draft optimizer; and a stored proposal/approval workflow so a supervisor must explicitly approve a generated draft, with full revalidation against current data, before any assignment becomes real. Every generated proposal persists its full coverage review (existing/proposed assignments, totals, uncovered reasons) and can be recovered by week after a refresh or navigation, not only for the browser session that generated it. An explicit worker-replacement operation and an append-only assignment-change audit trail are also implemented. The Schedule screen (also reachable from the "Generate Schedule" sidebar item, which opens the same view) surfaces all of this: preparing a week's required shifts, generating and reviewing a proposal with an explicit approval-confirmation step, approving or rejecting it, and replacing an individual assignment.
+- A React application shell (Vite + JavaScript) with sidebar navigation covering all planned sections (Dashboard, Employees, Schedule, Coverage, Workforce Planning, AI Assistant). Dashboard, Employees, Coverage, Schedule and Workforce Planning all show real data, sharing one reporting-week selection between Dashboard, Employees, Schedule and Workforce Planning; only AI Assistant remains a placeholder.
+- Deterministic shift coverage (Phase 6) and a full schedule-generation pipeline (Phase 7): a read-only eligibility engine and Coverage screen; a Google OR-Tools draft optimizer; and a stored proposal/approval workflow so a supervisor must explicitly approve a generated draft, with full revalidation against current data, before any assignment becomes real. Every generated proposal persists its full coverage review (existing/proposed assignments, totals, uncovered reasons) and can be recovered by week after a refresh or navigation, not only for the browser session that generated it. An explicit worker-replacement operation and an append-only assignment-change audit trail are also implemented. The Schedule screen surfaces all of this: preparing a week's required shifts, generating and reviewing a proposal with an explicit approval-confirmation step, approving or rejecting it, and replacing an individual assignment.
 - A FastAPI backend covering the employee lifecycle and semester timetables across fourteen endpoints:
 
   | Endpoint | Purpose |
@@ -38,7 +38,12 @@ ShiftOps AI is in early active development. It currently runs locally only and i
   | `DELETE /api/employees/{code}/semesters/{id}/blocks/{id}` | remove a class |
 
   Every write returns errors in one consistent `{"detail": ...}` shape.
-- Frontend/backend integration: when the Dashboard opens it calls `GET /api/health` once and displays the resulting connection status (loading, connected, or unavailable); the Employees section loads the workforce from `GET /api/employees` with the same loading and error handling. CORS is configured on the backend for the local frontend origin.
+- Frontend/backend integration: the Employees section loads the workforce from `GET /api/employees`; the Dashboard and Workforce Planning sections load `GET /api/analytics/weeks/{week_start}` (see Phase 8 below). All three share the same loading, retry-on-error, and malformed-response handling. CORS is configured on the backend for the local frontend origin.
+- **Phase 8 - Dashboard and Workforce Planning analytics**, read-only throughout, built on one endpoint: `GET /api/analytics/weeks/{week_start}`, validated the same way every other week-scoped endpoint validates a Monday. Reading analytics never prepares a week's shifts. It reuses the existing eligibility/reporting rules rather than re-deriving them - the same accepted (confirmed, non-provisional) timetable-readiness rule `eligibility.py` requires, and the same whole-hour, start-week assigned-hours accounting `reporting.py` already established.
+  - **Coverage metrics**: stored shift count; required and filled positions (filled capped per shift at `required_staff`, so overstaffing can never inflate it); uncovered positions; unfilled shift count; excess assignments (the overstaffed remainder, reported rather than dropped); required coverage hours (`sum(duration x required_staff)`); scheduled coverage hours (`sum(duration x min(assigned_count, required_staff))`); recorded assignment hours (uncapped); and a coverage percentage defined as exactly 100% when required hours are zero, rather than an undefined division. Historical coverage is preserved even for an assignment held by a worker who is now inactive.
+  - **Workforce metrics**: total, active, timetable-ready and active-and-timetable-ready worker counts; active theoretical capacity (the sum of active workers' own weekly hour limits - never equated with eligibility, and never reduced by class or leave hours); active assigned hours; theoretical remaining active capacity (`max(0, active capacity - active assigned hours)`); recorded assigned hours across all workers, including inactive ones; and a per-worker utilization row (identity, active/readiness state, weekly limit, assigned hours, remaining capacity, utilization percentage).
+  - **The Dashboard screen** shows both sets of metrics as cards, a coverage progress bar, and a worker-utilization table, for the same App-owned reporting week Employees and Schedule already share. An unprepared week is shown honestly (zero stored shifts, an explicit note), never as an error and never as a reason to prepare one on its own.
+  - **The Workforce Planning screen** shows the current week's actual operational feasibility (coverage percentage and uncovered positions from the real stored schedule) separately from a read-only, aggregate workforce-size scenario calculator: given an explicit hypothetical worker count and weekly hours per worker (both supervisor-entered, never inferred), it reports hypothetical theoretical capacity, the capacity surplus or shortfall against required coverage hours, a theoretical minimum worker count (`ceil(required coverage hours / weekly hours per worker)`, undefined rather than zero when weekly hours is zero), and whether aggregate capacity is sufficient - with a permanent, prominent disclaimer that this is an aggregate lower bound only, never a proof that a feasible schedule exists, and never a hiring/firing recommendation. The scenario math runs entirely client-side against the one already-fetched `required_coverage_hours` figure; it mirrors `backend/analytics.py`'s `workforce_scenario` formula exactly and needs no second network round trip per keystroke.
 - An Employees view listing one summary row per worker: employee ID, name, student type, class-block count, weekly class hours, timetable status, weekly hour limit, and a count of approved leave periods. The details screen shows the records behind those figures and offers semester and class editing, timetable confirmation, shift-preference editing and approved-leave editing.
 - Class timetables are stored as **semester schedules owned by a worker**, each holding recurring weekly class blocks (a weekday plus a start and end time). Course names are no longer needed to run the application. Class-block counts and class hours count only the classes that actually fall inside the displayed week: a Monday class counts only if that Monday is within the worker's semester, so a semester starting on the Wednesday does not retrospectively add the Monday and Tuesday. Class hours stay fractional, because a class is 75 or 165 minutes rather than a whole number of hours.
 - Timetable status describes **the week on screen**, not whether a worker ever had a confirmed timetable. A semester confirmed last spring says nothing about October, so it is not reported as confirmed while October is displayed. There are five states:
@@ -79,11 +84,9 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 
 **Not yet implemented:**
 
-- Constraint-based schedule optimization, and therefore any actual shift assignments
-- Workforce capacity analytics
 - The AI scheduling agent: multi-step investigation, replacement proposals, supervisor-approved execution, audit history and result verification
 - Cloud deployment
-- Anything that acts on a worker's active status beyond eligibility. Deactivating a worker records that status and hides them from the default list view; the eligibility logic above now excludes inactive workers from eligible candidates, but the schedule generator that would actually assign shifts does not exist yet, and no assignments have been made.
+- Active status affects only future eligibility, never past records. Deactivating a worker records that status and hides them from the default list view, and the eligibility logic above excludes inactive workers from eligible candidates for new assignments; it does not touch anything already recorded. Phase 7's schedule generator, proposal approval, and replacement workflow are implemented (see above), and a worker's historical assignments and coverage figures remain visible even after that worker later becomes inactive.
 
 ## Running Locally
 
@@ -189,15 +192,16 @@ employee IDs, the semester/class-block migration, the employee-details view,
 semester/class editing, timetable confirmation, shift-preference editing and
 approved-leave editing are all built. **Phase 6 (deterministic eligibility
 and Coverage) and Phase 7 (schedule optimization, proposal/approval,
-replacement, and the Schedule/Generate Schedule frontend) are both complete
-as well** - see the bullet list below. Phase 8 (dashboard/workforce-planning
-analytics) and Phase 9 (the approved AI scheduling agent) are next; neither
-exists yet. Later phases must use the managed workforce and confirmed
-semester data, not fixed demo counts. Full checklists live in the project
-context; public cross-phase requirements are in `docs/PROJECT_SPEC.md`
-section 10.
+replacement, and the Schedule frontend) are both complete
+as well** - see the bullet list below. **Phase 8 (Dashboard and Workforce
+Planning analytics) is also complete.** Later phases must use the managed
+workforce and confirmed semester data, not fixed demo counts. Full
+checklists live in the project context; public cross-phase requirements are
+in `docs/PROJECT_SPEC.md` section 10.
 
-Goals for the finished application are listed below. Employee records, shift preferences and approved leave are stored and editable, and the workforce summary and individual details are viewable. Semester and class editing, timetable confirmation, and preference and leave editing are all implemented. Deterministic eligibility/coverage and schedule evaluation/generation (optimizer draft, stored proposal, explicit approval, and explicit replacement) are also implemented; only the dashboard/analytics and AI-agent goals below remain planned.
+Phase 9 (the approved AI scheduling agent) is next; it does not exist yet.
+
+Goals for the finished application are listed below. Employee records, shift preferences and approved leave are stored and editable, and the workforce summary and individual details are viewable. Semester and class editing, timetable confirmation, and preference and leave editing are all implemented. Deterministic eligibility/coverage and schedule evaluation/generation (optimizer draft, stored proposal, explicit approval, and explicit replacement) are also implemented. Dashboard and Workforce Planning analytics are implemented; only the AI-agent goal below remains planned.
 
 - Workforce and coverage dashboard
 - Complete employee setup, **built**: supervisor entry of semester dates and recurring class times without course names; explicit confirmation that a timetable is complete, including a deliberate "no classes"; editing shift preferences on any existing shift; and adding, editing and removing approved leave. Incomplete class information will block scheduling until confirmed.

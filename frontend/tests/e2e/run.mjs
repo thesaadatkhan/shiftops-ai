@@ -187,15 +187,15 @@ async function waitForHealth(url, timeoutMs) {
 }
 
 /** The sidebar nav is a <nav><ul>...</ul></nav>, so its buttons have role
- * "list" as an ancestor - scoping to it is what disambiguates "Schedule"
- * and "Generate Schedule" (also nav labels) from the identically-labeled
- * in-page action buttons Schedule.jsx renders for the same words. */
+ * "list" as an ancestor - scoping to it is what disambiguates the "Schedule"
+ * nav item from Schedule.jsx's identically-labeled in-page action buttons
+ * ("Schedule"/"Generate Schedule" both also appear as in-page text). */
 function navButton(page, label) {
   return page.getByRole('list').getByRole('button', { name: label, exact: true })
 }
 
 /** Every in-page action button, scoped to <main> to avoid the sidebar's
- * identically-labeled nav buttons ("Schedule", "Generate Schedule"). */
+ * identically-labeled "Schedule" nav button. */
 function mainButton(page, label) {
   return page.getByRole('main').getByRole('button', { name: label, exact: true })
 }
@@ -312,7 +312,24 @@ async function main() {
     })
 
     await page.goto(FRONTEND_ORIGIN)
+    // Phase 8 acceptance correction: "Schedule" and "Generate Schedule" used
+    // to be two separate sidebar entries into the identical Schedule.jsx
+    // workflow - now there is exactly one "Schedule" nav item, and
+    // generating a proposal is reachable via the in-page button inside it.
+    check(
+      (await navButton(page, 'Schedule').count()) === 1,
+      'there is exactly one "Schedule" navigation item, not a duplicate "Generate Schedule" entry',
+    )
+    check(
+      (await page.getByRole('list').getByRole('button', { name: 'Generate Schedule', exact: true }).count()) === 0,
+      'the sidebar no longer has a separate "Generate Schedule" navigation item',
+    )
     await navButton(page, 'Schedule').click()
+    await mainButton(page, 'Generate Schedule').waitFor({ timeout: 10000 })
+    check(
+      await mainButton(page, 'Generate Schedule').isVisible(),
+      'the Generate Schedule action remains accessible inside the single Schedule screen',
+    )
     if (process.env.E2E_DEBUG) {
       await sleep(1000)
       console.log('[debug] body text:', (await page.locator('body').innerText()).slice(0, 800))
@@ -326,6 +343,7 @@ async function main() {
     await journeyMutualExclusion(page)
     await journeyCorruptedApprovalResponse(page)
     await journeyWeekChangeDuringDelayedRefresh(page)
+    await journeyDashboardAndWorkforcePlanning(page)
 
     check(consoleErrors.length === 0, `no uncaught page errors occurred (${consoleErrors.join('; ')})`)
   } catch (error) {
@@ -732,6 +750,94 @@ async function journeyWeekChangeDuringDelayedRefresh(page) {
   await page.route(`${REAL_BACKEND_ORIGIN}/**`, (route) => {
     route.continue({ url: toIsolatedUrl(route.request().url()) })
   })
+}
+
+/** Phase 8: switching weeks visibly changes dashboard metrics; Workforce
+ * Planning's scenario calculator reacts to explicit supervisor inputs and
+ * shows the required aggregate-lower-bound feasibility warning; browsing to
+ * a never-prepared week never prepares it. Entering this journey, the
+ * shared reporting week is WEEK_B (2026-10-12), left behind by the previous
+ * journey. */
+async function journeyDashboardAndWorkforcePlanning(page) {
+  function metricValue(label) {
+    return page.locator('.metric-card', { hasText: label }).locator('.metric-value')
+  }
+
+  // Dashboard does not remount on a week change (see App.jsx) - it re-fetches
+  // in place, so the OLD card is already attached and visible the instant
+  // after clicking a week-navigation button. Waiting only for the locator to
+  // exist would read the stale pre-fetch value; this polls until the text
+  // actually changes (or times out), the same race `waitFor` alone cannot
+  // catch.
+  async function waitForValueChange(locator, previousText, timeoutMs) {
+    const deadline = Date.now() + timeoutMs
+    let current = previousText
+    while (Date.now() < deadline) {
+      current = await locator.innerText()
+      if (current !== previousText) {
+        return current
+      }
+      await sleep(100)
+    }
+    return current
+  }
+
+  await navButton(page, 'Dashboard').click()
+  await metricValue('Filled positions').waitFor({ timeout: 10000 })
+  const weekBFilled = await metricValue('Filled positions').innerText()
+
+  await mainButton(page, '← Previous week').click()
+  await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
+  const weekAFilled = await waitForValueChange(metricValue('Filled positions'), weekBFilled, 10000)
+
+  check(
+    weekAFilled !== weekBFilled,
+    `dashboard metrics visibly change between reporting weeks (week A filled=${weekAFilled}, week B filled=${weekBFilled})`,
+  )
+
+  // --------------------------------------------------- Workforce Planning
+  await navButton(page, 'Workforce Planning').click()
+  await page.getByText(/Required coverage hours for this week:\s*\d+/).waitFor({ timeout: 10000 })
+  check(true, 'Workforce Planning shows the current week\'s required coverage hours')
+
+  const workerCountInput = page.locator('label', { hasText: 'Hypothetical worker count' }).locator('input')
+  const hoursInput = page.locator('label', { hasText: 'Weekly hours per hypothetical worker' }).locator('input')
+
+  await workerCountInput.fill('1')
+  await hoursInput.fill('5')
+  await page.getByText('Capacity shortfall').waitFor({ timeout: 10000 })
+  check(
+    (await metricValue('Aggregate capacity sufficient?').innerText()) === 'No',
+    'a deliberately insufficient hypothetical workforce reports capacity as NOT sufficient',
+  )
+  check(
+    await page.getByText(/aggregate lower bound/i).isVisible(),
+    'the required feasibility warning (aggregate lower bound, not a proof) is visible',
+  )
+
+  await workerCountInput.fill('80')
+  await hoursInput.fill('20')
+  await page.getByText('Capacity surplus').waitFor({ timeout: 10000 })
+  check(
+    (await metricValue('Aggregate capacity sufficient?').innerText()) === 'Yes',
+    'a large hypothetical workforce reports capacity as sufficient, with a surplus rather than a shortfall',
+  )
+
+  // ----------------------------------------- browsing never prepares a week
+  await navButton(page, 'Dashboard').click()
+  await mainButton(page, 'Next week →').click() // back to WEEK_B
+  await mainButton(page, 'Next week →').click() // WEEK_C, 2026-10-19 - never prepared by any fixture or journey
+  await page.getByText('October 19, 2026').first().waitFor({ timeout: 5000 })
+  await page.getByText(/No shifts are prepared for this week yet/).waitFor({ timeout: 10000 })
+  check(true, 'an unprepared week is shown honestly on the dashboard - zero stored shifts, not an error')
+
+  const weekC = await backendJson('/api/schedule/weeks/2026-10-19')
+  check(weekC.shifts.length === 0, 'browsing the dashboard for a never-prepared week never prepares it')
+
+  // Back to WEEK_A, in case anything runs after this journey.
+  await mainButton(page, '← Previous week').click()
+  await mainButton(page, '← Previous week').click()
+  await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
 }
 
 main().catch((error) => {

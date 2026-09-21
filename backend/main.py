@@ -47,6 +47,8 @@ from reporting import (
     assigned_hours_for_employee,
     minutes_between,
     remaining_capacity_hours,
+    reporting_period_coverage,
+    schedule_covered_days,
 )
 from eligibility import (
     ShiftNotFound as CoverageShiftNotFound,
@@ -70,6 +72,7 @@ from proposals import (
     reject_proposal,
     replace_assignment,
 )
+from analytics import week_analytics
 from scheduling import get_week_schedule, prepare_week
 from synthetic_data import WEEK_START
 import weeks
@@ -241,22 +244,6 @@ def list_employees(week_start: str | None = None):
     }
 
 
-def schedule_covered_days(schedule, week_dates):
-    """Which days of the displayed reporting week one schedule covers.
-
-    The single definition of "this semester applies on that day", used both
-    for an individual semester's coverage state and for the employee's
-    combined readiness below, so the two can never disagree about which days
-    a schedule reaches. Dates are inclusive on both ends (D035). `week_dates`
-    is the displayed week's seven ISO dates (`weeks.week_dates`).
-    """
-    return {
-        date
-        for date in week_dates
-        if schedule["start_date"] <= date <= schedule["end_date"]
-    }
-
-
 def week_coverage_state(covered_days, week_dates):
     """How much of the displayed reporting week a set of days accounts for.
 
@@ -277,88 +264,6 @@ def week_coverage_state(covered_days, week_dates):
     if len(covered_days) < len(week_dates):
         return "partial"
     return "full"
-
-
-def reporting_period_coverage(schedules, week_dates):
-    """Timetable readiness for the DISPLAYED reporting week, per employee.
-
-    Readiness is about the week on screen, not about whether a worker ever
-    had a confirmed timetable. A spring semester confirmed months ago says
-    nothing about October, and reporting it as "confirmed" while October is
-    displayed would be actively misleading.
-
-    Returns `{employee_id: {"status": ..., "scheduling_ready": bool}}`.
-
-    `status` is one of five states, each answering a different question:
-
-      missing        - no semester schedule at all. Nobody has said anything
-                       about this worker's classes.
-      outside_period - schedules exist, but none of them covers any day of
-                       the reporting week. Their information is about some
-                       other period: an expired semester, or one still ahead.
-      unconfirmed    - a schedule covers part of the week, but no confirmed
-                       schedule covers any of it. Something has been entered
-                       and nobody has checked it is complete.
-      partial        - confirmed schedules cover some days of the week but
-                       not all seven. The week is only partly accounted for.
-      confirmed      - confirmed schedules cover all seven days. Combined
-                       with a class-block count of zero, that is a deliberate
-                       "this worker has no classes this week", which stays
-                       distinguishable from `missing`. **`confirmed` alone
-                       does not mean scheduling-ready** - a schedule can be
-                       confirmed while its dates are still `dates_provisional`
-                       (the Phase 5C migration can leave one that way; see
-                       `database.migrate_class_schedules`), meaning nobody
-                       has actually accepted those assumed dates.
-
-    `scheduling_ready` is the separate, stricter fact Phase 6 eligibility
-    (`eligibility.py`) actually requires and Phase 8 must reuse: whether
-    ACCEPTED schedules - `confirmed_at IS NOT NULL AND dates_provisional = 0`
-    - cover all seven days of the displayed week. Codex review found this
-    project reporting a provisional-but-confirmed worker as plain
-    `"confirmed"` everywhere, which reads as available when
-    `evaluate_shift_eligibility` would still correctly refuse them
-    (`timetable_not_confirmed`) until a supervisor actually confirms the
-    real dates. `status` keeps recording confirmation history honestly (a
-    provisional confirmation IS a real, historical fact - it is not
-    weakened or hidden here); `scheduling_ready` is the field that must
-    never treat provisional dates as accepted availability.
-    """
-    any_days = {}
-    confirmed_days = {}
-    accepted_days = {}
-    seen = set()
-
-    for schedule in schedules:
-        employee_id = schedule["employee_id"]
-        seen.add(employee_id)
-        covered = schedule_covered_days(schedule, week_dates)
-        if not covered:
-            continue
-        any_days.setdefault(employee_id, set()).update(covered)
-        if schedule["confirmed_at"] is not None:
-            confirmed_days.setdefault(employee_id, set()).update(covered)
-            if not schedule["dates_provisional"]:
-                accepted_days.setdefault(employee_id, set()).update(covered)
-
-    result = {}
-    for employee_id in seen:
-        covered = any_days.get(employee_id, set())
-        confirmed = confirmed_days.get(employee_id, set())
-        accepted = accepted_days.get(employee_id, set())
-        if not covered:
-            status = "outside_period"
-        elif not confirmed:
-            status = "unconfirmed"
-        elif len(confirmed) < len(week_dates):
-            status = "partial"
-        else:
-            status = "confirmed"
-        result[employee_id] = {
-            "status": status,
-            "scheduling_ready": len(accepted) == len(week_dates),
-        }
-    return result
 
 
 def semester_payload(schedule, blocks_by_schedule, week_dates):
@@ -703,6 +608,33 @@ def get_schedule_week(week_start: str):
     connection = get_connection()
     try:
         return get_week_schedule(connection, week_start)
+    except weeks.InvalidWeekStart as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except InvalidWorkDuration as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Stored shift data is invalid: {error}",
+        ) from error
+    finally:
+        connection.close()
+
+
+@app.get("/api/analytics/weeks/{week_start}")
+def get_week_analytics(week_start: str):
+    """Coverage and workforce-capacity analytics for one Monday week. Read-only.
+
+    `week_start` is validated exactly like every other week-scoped endpoint
+    (`weeks.parse_week_start`) - a 400 with a string `detail` for anything
+    that is not a real, strictly-formatted Monday (D033). An unprepared week
+    is a completely valid answer (zero stored shifts, zero required
+    positions), never an error and never a reason to call
+    `scheduling.prepare_week` on the caller's behalf - reading a dashboard
+    must never have the side effect of preparing a week. See `analytics.py`
+    for the exact formulas.
+    """
+    connection = get_connection()
+    try:
+        return week_analytics(connection, week_start)
     except weeks.InvalidWeekStart as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except InvalidWorkDuration as error:

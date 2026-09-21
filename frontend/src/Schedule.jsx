@@ -4,10 +4,10 @@
 // stored proposal (never real assignments on its own), recovers and reviews
 // any proposal already stored for this week, requires an explicit
 // confirmation step before approval, and offers an explicit
-// worker-replacement flow for an existing assignment. This same component is
-// what both the "Schedule" and "Generate Schedule" sidebar items render
-// (see App.jsx), so there is exactly one copy of this workflow's state and
-// logic, not two independently maintained ones.
+// worker-replacement flow for an existing assignment. This is what the
+// "Schedule" sidebar item renders (see App.jsx) - one component and one
+// copy of this workflow's state for both viewing the schedule and
+// generating a proposal for it, not two separately maintained screens.
 
 import { useEffect, useRef, useState } from 'react'
 
@@ -522,7 +522,7 @@ export default function Schedule({ weekStart }) {
       {isUnprepared ? (
         <div className="schedule-unprepared">
           <p>No shifts are prepared for the week of {friendlyDate(data.week_start)}.</p>
-          <button type="button" disabled={preparing} onClick={handlePrepare}>
+          <button type="button" className="btn-primary" disabled={preparing} onClick={handlePrepare}>
             {preparing ? 'Preparing…' : 'Prepare week'}
           </button>
           {prepareError && <p role="alert">{describeError(prepareError)}</p>}
@@ -530,7 +530,12 @@ export default function Schedule({ weekStart }) {
       ) : (
         <>
           <div className="schedule-actions">
-            <button type="button" disabled={anyActionInFlight || generateBlocked} onClick={handleGenerate}>
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={anyActionInFlight || generateBlocked}
+              onClick={handleGenerate}
+            >
               {generating ? 'Generating…' : 'Generate Schedule'}
             </button>
             {proposalsState.list.length > 1 && (
@@ -650,7 +655,12 @@ export default function Schedule({ weekStart }) {
                     has changed, nothing is created and you will see exactly what changed below.
                   </p>
                   <div className="list-controls">
-                    <button type="button" disabled={decisionStatus !== 'idle'} onClick={confirmApprove}>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      disabled={decisionStatus !== 'idle'}
+                      onClick={confirmApprove}
+                    >
                       {decisionStatus === 'approving' ? 'Approving…' : 'Confirm approval'}
                     </button>
                     <button type="button" disabled={decisionStatus !== 'idle'} onClick={cancelApprovalConfirm}>
@@ -795,6 +805,7 @@ export default function Schedule({ weekStart }) {
           <div className="list-controls">
             <button
               type="button"
+              className="btn-primary"
               disabled={
                 !replaceChoice ||
                 replaceStatus === 'loading' ||

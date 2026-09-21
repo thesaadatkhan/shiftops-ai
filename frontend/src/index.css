@@ -12,6 +12,10 @@
   --success-bg: rgba(34, 197, 94, 0.15);
   --error-text: #b91c1c;
   --error-bg: rgba(239, 68, 68, 0.15);
+  /* Text color placed ON a solid --accent fill (a primary button) - kept as
+     its own token rather than assuming white, because the dark-mode accent
+     is a light lavender that would fail contrast against white text. */
+  --accent-contrast: #fff;
   --shadow:
     rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
 
@@ -49,6 +53,9 @@
     --success-bg: rgba(74, 222, 128, 0.15);
     --error-text: #f87171;
     --error-bg: rgba(248, 113, 113, 0.15);
+    /* The dark-mode accent is a light lavender - dark text keeps a primary
+       button's label readable, where white text would not. */
+    --accent-contrast: #1a0b2e;
     --shadow:
       rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
   }
@@ -115,4 +122,41 @@ code {
   line-height: 135%;
   padding: 4px 8px;
   background: var(--code-bg);
+}
+
+/* A consistent baseline for every plain <button> in the app - most of
+   Schedule.jsx's action buttons carry no className at all, so without this
+   they render as bare, inconsistent browser defaults. Anything more
+   specific (`.nav-item`, `.list-controls button`, `.btn-primary`, etc.)
+   already overrides what it needs to and is unaffected. */
+button {
+  font: inherit;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text-h);
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* Visible keyboard focus everywhere, not just on the mouse-only :hover
+   states above - :focus-visible skips the ring for a mouse click while
+   keeping it for keyboard/assistive-tech navigation. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

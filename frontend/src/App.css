@@ -1,5 +1,5 @@
 .sidebar {
-  width: 220px;
+  width: 232px;
   flex-shrink: 0;
   padding: 24px 16px;
   background: var(--code-bg);
@@ -14,9 +14,27 @@
 }
 
 .app-title {
-  font-size: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 19px;
+  font-weight: 600;
   letter-spacing: normal;
-  margin: 0 0 24px;
+  margin: 0 0 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-h);
+}
+
+/* A small solid accent mark standing in for a logo - no image asset, no
+   icon package, just a shape that gives the sidebar a brand anchor. */
+.app-title::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--accent);
 }
 
 .sidebar nav ul {
@@ -25,7 +43,7 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .nav-item {
@@ -38,26 +56,78 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  border-left: 3px solid transparent;
 }
 
-.nav-item:hover {
+.nav-item:hover:not(.active) {
   background: var(--social-bg);
+  color: var(--text-h);
 }
 
 .nav-item.active {
   background: var(--accent-bg);
   color: var(--accent);
   font-weight: 600;
+  border-left-color: var(--accent);
 }
 
 .main-content {
   flex-grow: 1;
   padding: 32px;
   box-sizing: border-box;
+  max-width: 1100px;
 
   @media (max-width: 700px) {
     padding: 20px;
   }
+}
+
+/* One consistent title/description block, reused by every section (see
+   App.jsx) so switching screens never jumps between different heading
+   spacing or typographic weight. */
+.page-header {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-header h2 {
+  margin-bottom: 6px;
+}
+
+.page-header p {
+  max-width: 70ch;
+  color: var(--text);
+  font-size: 15px;
+  line-height: 145%;
+}
+
+/* Button variants - additive to the base `button` reset in index.css.
+   Plain, unclassed buttons (Cancel, Retry, Reload, view/set/change actions)
+   already read as neutral/secondary from that base style; these two mark
+   the actual primary call-to-action and a genuinely destructive one, so
+   they are visually distinct rather than every button looking identical. */
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  border-color: var(--accent);
+}
+
+.btn-danger {
+  background: var(--error-bg);
+  border-color: var(--error-text);
+  color: var(--error-text);
+  font-weight: 600;
+}
+
+.btn-danger:hover:not(:disabled) {
+  filter: brightness(0.96);
 }
 
 .backend-status {
@@ -132,6 +202,25 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--code-bg);
+  box-shadow: var(--shadow);
+}
+
+/* A confirmation or in-progress panel (delete confirmation, approval
+   confirmation, replace panel) is content the supervisor must act on before
+   moving on. This is a complete, self-sufficient panel treatment - not just
+   an override - because the approval-confirmation block in Schedule.jsx
+   carries no panel class of its own (`.table-note` alone, which has no
+   border or background), so without this it renders as plain, unstyled
+   text. Elements that already have `.proposal-panel`/`.replace-panel`/
+   `.employee-form` styling receive the same values again here, which is
+   harmless, plus a stronger accent border and shadow marking it as
+   something to act on, without an actual modal overlay. */
+[role='alertdialog'] {
+  padding: 16px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  box-shadow: var(--shadow);
 }
 
 .employee-form h3 {
@@ -196,6 +285,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--code-bg);
+  box-shadow: var(--shadow);
 }
 
 .detail-panel h5 {
@@ -232,6 +322,11 @@
 .data-table th {
   color: var(--text-h);
   font-weight: 600;
+  border-bottom: 2px solid var(--border);
+}
+
+.data-table tbody tr:hover {
+  background: var(--social-bg);
 }
 
 /* Phase 7 increment 4: shared week selector, Schedule view, and its
@@ -266,6 +361,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--code-bg);
+  box-shadow: var(--shadow);
 }
 
 .proposal-panel,
@@ -275,6 +371,7 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--code-bg);
+  box-shadow: var(--shadow);
 }
 
 .proposal-panel h3,
@@ -321,4 +418,89 @@
   margin: 0;
   padding-left: 0;
   list-style: none;
+}
+
+/* Phase 8: Dashboard and Workforce Planning. Cards and a plain progress bar
+   only - deliberately no chart library, per the interview-friendly,
+   readable-over-elaborate goal. */
+
+.reporting-period {
+  margin-top: 4px;
+  font-size: 14px;
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.dashboard-section {
+  margin-top: 24px;
+}
+
+.dashboard-section h3 {
+  margin-bottom: 4px;
+  font-size: 16px;
+  color: var(--text-h);
+}
+
+.dashboard-section h4 {
+  margin: 16px 0 0;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.metric-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.metric-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+  box-shadow: var(--shadow);
+}
+
+.metric-label {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.metric-value {
+  margin: 4px 0 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.metric-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.progress-bar {
+  margin-top: 8px;
+  height: 10px;
+  border-radius: 6px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+}
+
+.scenario-disclaimer {
+  max-width: 70ch;
+  margin-top: 8px;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 145%;
+  background: var(--accent-bg);
+  color: var(--text-h);
 }

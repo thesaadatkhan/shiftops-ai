@@ -182,21 +182,28 @@ Shifts that cross midnight must be represented using correct start and end date-
 
 ## 8. Application Features
 
-### Dashboard
+### Dashboard (Implemented, Phase 8)
 
-Provide a high-level operational overview.
+Provides a high-level operational overview for one reporting week, backed by
+`GET /api/analytics/weeks/{week_start}` (`backend/analytics.py`). It uses the
+same App-owned reporting week as Employees, Schedule and Workforce Planning,
+and never prepares a week's shifts merely by being viewed.
 
-Potential metrics include:
+Metrics shown:
 
-- Number of active desks
-- Number of student workers
-- Required weekly coverage hours
-- Maximum theoretical workforce capacity
-- Scheduled hours
-- Unfilled shifts
-- Coverage percentage
+- Stored shift count for the week
+- Required coverage hours: `sum(duration x required_staff)` over every stored shift
+- Scheduled coverage hours: `sum(duration x min(assigned_count, required_staff))`
+- Coverage percentage: scheduled / required coverage hours x 100, defined as exactly 100% when required hours are zero
+- Required, filled (capped per shift at `required_staff`) and uncovered positions
+- Unfilled shift count and excess assignments (assigned beyond a shift's requirement)
+- Total, active, timetable-ready and active-and-timetable-ready worker counts
+- Active theoretical capacity, active assigned hours, and theoretical remaining active capacity
+- A per-worker utilization table (identity, active/readiness state, weekly limit, assigned hours, remaining capacity, utilization percentage)
 
-When week selection is implemented, weekly dashboard metrics should use the same reporting week as Employees and Schedule. This alignment is planned for Phase 8.
+An unprepared week (zero stored shifts) is shown honestly as such, not as an
+error. Historical coverage and assigned hours are preserved for an assignment
+held by a worker who is now inactive.
 
 ### Employees
 
@@ -233,7 +240,7 @@ Implemented list controls (Phase 5B):
 - A deleted employee code is retained as a retired code, holding the code and the time only and no copy of the deleted worker's details. Automatic employee-code allocation reads this record when working out the next code, so a code that has already been used is never reissued. Codes can no longer be entered by hand, so there is no other route to reusing one either.
 
 Employee management and schedule generation, complete:
-- Excluding inactive workers from schedule generation. The active flag is stored and editable; the Phase 6 eligibility logic consumes it (an inactive worker is reported ineligible). A Phase 7 draft optimizer computes a proposed draft, reusing the Phase 6 eligibility logic directly, leaving historical assignments attached. A supervisor must explicitly approve a stored proposal, through an explicit confirmation step naming exactly how many assignments will be created, before any assignment is created; approval revalidates every proposed assignment against current state and refuses the whole operation on any conflict, writing nothing partial. Each proposal persists an immutable coverage-review snapshot (existing/proposed assignments, coverage totals, uncovered reasons) at creation time, so it can be recovered and reviewed again - by week, newest first - after a refresh or navigation. An explicit replacement operation and an audit trail of assignment changes both exist. The Schedule frontend and shared reporting-week selector (also reachable from the "Generate Schedule" sidebar item) are implemented.
+- Excluding inactive workers from schedule generation. The active flag is stored and editable; the Phase 6 eligibility logic consumes it (an inactive worker is reported ineligible). A Phase 7 draft optimizer computes a proposed draft, reusing the Phase 6 eligibility logic directly, leaving historical assignments attached. A supervisor must explicitly approve a stored proposal, through an explicit confirmation step naming exactly how many assignments will be created, before any assignment is created; approval revalidates every proposed assignment against current state and refuses the whole operation on any conflict, writing nothing partial. Each proposal persists an immutable coverage-review snapshot (existing/proposed assignments, coverage totals, uncovered reasons) at creation time, so it can be recovered and reviewed again - by week, newest first - after a refresh or navigation. An explicit replacement operation and an audit trail of assignment changes both exist. The Schedule frontend and shared reporting-week selector are implemented.
 
 The database is the source of truth after explicit demo initialization. Demo data is initialized once, into a database that holds no workforce or scheduling records, and that initialization is atomic: it either writes the whole dataset or nothing. If any such record already exists, initialization refuses and changes nothing, so it cannot overwrite edits, restore intentionally deleted workers, or add demo workers to a manually managed database. There is no repair, reset or regeneration workflow, and neither application startup nor any employee-management action performs seeding. Schema changes are applied through repeatable migrations that preserve existing records and relationships. Most are purely additive; where a change must reshape existing data, it is carried out transactionally with the information preserved, never by resetting or reseeding the database. Provide an empty-workforce path for entering fictional workers through the interface. The 30-worker count, student-type mix, and course-load conventions constrain demo generation, not user-created records. The synthetic-only data policy and 20-hour weekly limit remain unchanged.
 
@@ -485,7 +492,7 @@ Display generated or existing assignments by:
 - Time
 - Employee
 
-Schedule shows every stored shift for the selected week, grouped by day and hall, with assignments and uncovered positions (Phase 7 increment 4). Employees, Schedule and Generate Schedule share one reporting-week selection, owned at the application level, so moving between them preserves the reporting period; "Generate Schedule" is a second sidebar entry into the same Schedule view, not a separate screen with its own copy of the workflow. Backend requests use that same week and return clear reporting dates, retaining D025's start-week accounting for cross-midnight assignments. Changing the selected week never creates shifts, generates assignments, or edits data - preparing a week's shifts and generating a schedule proposal are both separate, explicit actions the supervisor takes deliberately. Any proposal already stored for the selected week is recovered automatically (newest first, selectable when more than one exists), so a refresh or navigating away and back never loses track of a pending or recently decided proposal. Approving a proposal requires an explicit confirmation step naming how many assignments will be created before the approval request is sent.
+Schedule shows every stored shift for the selected week, grouped by day and hall, with assignments and uncovered positions (Phase 7 increment 4). Employees and Schedule share one reporting-week selection, owned at the application level, so moving between them preserves the reporting period. The single Schedule screen also holds the Generate Schedule action, proposal review, approval and replacement flows - there is no separate screen for these. Backend requests use that same week and return clear reporting dates, retaining D025's start-week accounting for cross-midnight assignments. Changing the selected week never creates shifts, generates assignments, or edits data - preparing a week's shifts and generating a schedule proposal are both separate, explicit actions the supervisor takes deliberately. Any proposal already stored for the selected week is recovered automatically (newest first, selectable when more than one exists), so a refresh or navigating away and back never loses track of a pending or recently decided proposal. Approving a proposal requires an explicit confirmation step naming how many assignments will be created before the approval request is sent.
 
 ### Coverage
 
@@ -507,16 +514,33 @@ Use constraint-based optimization to assign eligible workers to required shifts.
 
 The scheduling engine should respect all hard constraints and identify cases where complete coverage cannot be achieved. Within those constraints, prioritize coverage and favor preferred shifts over low-preference shifts. A low preference alone must not make a shift uncovered or a worker ineligible.
 
-### Workforce Planning
+### Workforce Planning (Implemented, Phase 8)
 
-Provide capacity analysis and allow workforce-size scenarios to be evaluated.
+Provides capacity analysis and a workforce-size scenario calculator, backed
+by the same `GET /api/analytics/weeks/{week_start}` endpoint as the
+Dashboard, plus a pure, client-side scenario calculation
+(`frontend/src/analytics.js`'s `workforceScenario`, mirroring
+`backend/analytics.py`'s `workforce_scenario` formula exactly).
 
-The application should distinguish between:
+The application distinguishes between:
 
-1. Theoretical staffing capacity
-2. Actual staffing feasibility under class schedules, approved leave, and other hard scheduling constraints
+1. Theoretical staffing capacity (the scenario calculator, below)
+2. Actual staffing feasibility under the current stored schedule - shown separately as the week's real coverage percentage and uncovered positions, never conflated with the theoretical scenario
 
-For example, `ceil(required_hours / weekly_hour_limit)` provides a theoretical lower bound, but does not prove that a feasible schedule exists.
+The scenario calculator takes two explicit supervisor inputs - a
+hypothetical worker count and weekly hours per hypothetical worker - and
+reports hypothetical theoretical capacity, the capacity surplus or
+shortfall against the week's required coverage hours, and a theoretical
+minimum worker count:
+
+`ceil(required_coverage_hours / weekly_hours_per_worker)`
+
+(undefined, not zero, when `weekly_hours_per_worker` is zero and required
+hours are positive). This is a theoretical lower bound only; it does not
+prove that a feasible schedule exists, is never labeled a feasible
+workforce size, and the interface states this prominently. Nothing here
+generates workers, runs a hiring/firing recommendation, or modifies any
+stored record.
 
 #### Remaining Weekly Capacity
 
