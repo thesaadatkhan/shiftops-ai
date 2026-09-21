@@ -78,8 +78,15 @@ function isValidEmployeesResponse(data) {
 // against the stored code, which it is never allowed to change (D042).
 const EMPTY_FORM = { full_name: '', student_type: 'undergraduate' }
 
-async function fetchEmployees() {
-  const response = await fetch(EMPLOYEES_URL)
+// `weekStart` is optional (Phase 7 increment 4): omitting it keeps the
+// backend's own default sample week exactly as before this parameter
+// existed. Selecting or reading a week never prepares shifts or mutates
+// anything - this is a plain GET either way.
+async function fetchEmployees(weekStart) {
+  const url = weekStart
+    ? `${EMPLOYEES_URL}?week_start=${encodeURIComponent(weekStart)}`
+    : EMPLOYEES_URL
+  const response = await fetch(url)
   if (!response.ok) {
     throw new Error(`Backend responded with status ${response.status}`)
   }
@@ -131,7 +138,7 @@ const FEEDBACK_CLASSES = {
   notice: 'backend-status backend-status-loading',
 }
 
-function EmployeeList() {
+function EmployeeList({ weekStart }) {
   const [status, setStatus] = useState('loading')
   const [employees, setEmployees] = useState([])
   const [week, setWeek] = useState({ start: '', end: '' })
@@ -169,7 +176,7 @@ function EmployeeList() {
 
     async function loadEmployees() {
       try {
-        const data = await fetchEmployees()
+        const data = await fetchEmployees(weekStart)
 
         if (!cancelled) {
           setEmployees(data.employees)
@@ -188,7 +195,7 @@ function EmployeeList() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [weekStart])
 
   // One action owns the interface at a time. An open form, a write already
   // in flight, an open delete confirmation and an open details view each
@@ -292,7 +299,7 @@ function EmployeeList() {
     // touched here, so a refresh leaves the user's selections exactly as they
     // were - which is also why the row they acted on may drop out of view.
     try {
-      const data = await fetchEmployees()
+      const data = await fetchEmployees(weekStart)
       setEmployees(data.employees)
       setWeek({ start: data.week_start, end: data.week_end })
       setListError(null)

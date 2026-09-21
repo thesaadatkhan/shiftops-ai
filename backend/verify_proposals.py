@@ -44,11 +44,13 @@ from proposals import (
     ProposalNotFound,
     ProposalNotPending,
     ProposalRevalidationFailed,
+    ProposalSnapshotCorrupted,
     ProposalValidationError,
     ReplacementInvalid,
     approve_proposal,
     create_proposal,
     get_proposal,
+    list_proposals_for_week,
     reject_proposal,
     replace_assignment,
 )
@@ -153,6 +155,129 @@ def check_proposal_content_bound_and_retrievable():
     check(created == fetched, "the freshly created proposal and a separate read of it are identical")
     check(created["status"] == "pending", f"a new proposal starts pending ({created['status']})")
     check(len(created["assignments"]) > 0, "the fixture actually proposed at least one assignment")
+    connection.close()
+
+
+def check_draft_snapshot_persisted_and_recoverable():
+    """Phase 7 increment 4: the immutable review snapshot is stored at
+    creation, survives a fresh read, matches the coverage data the draft
+    actually computed, and stays attached through approval/rejection."""
+    connection = fixture_database()
+    confirmed_worker(connection, "SW-001")
+    prepare_week(connection, WEEK)
+
+    created = create_proposal(connection, WEEK)
+    check(created["review"] is not None, "a freshly created proposal carries a review snapshot")
+    check(
+        isinstance(created["review"].get("shifts"), list)
+        and isinstance(created["review"].get("summary"), dict),
+        "the review snapshot has the expected shifts/summary shape",
+    )
+    check(
+        created["review"]["summary"]["proposed_filled_positions"] == len(created["assignments"]),
+        "the snapshot's proposed-position total matches the number of stored proposal_assignments rows",
+    )
+
+    fetched = get_proposal(connection, created["id"])
+    check(fetched["review"] == created["review"], "re-reading the proposal returns the identical review snapshot")
+
+    approved = approve_proposal(connection, created["id"], approval_payload(created))
+    check(approved["review"] == created["review"], "approval returns the same review snapshot, unchanged")
+    connection.close()
+
+
+def check_legacy_proposal_without_snapshot_still_readable():
+    """A proposal row created before `draft_snapshot` existed (or any row
+    with a NULL snapshot) must still be fully readable, with `review: None`
+    rather than an error - additive migrations must not break old rows."""
+    connection = fixture_database()
+    confirmed_worker(connection, "SW-001")
+    prepare_week(connection, WEEK)
+    shift = shift_id_for(connection, "2026-11-02 17:00")
+    employee_id = connection.execute(
+        "SELECT id FROM employees WHERE employee_code = 'SW-001'"
+    ).fetchone()["id"]
+
+    connection.execute(
+        "INSERT INTO schedule_proposals (week_start, created_at, status, draft_snapshot)"
+        " VALUES (?, '2026-01-01 00:00', 'pending', NULL)",
+        (WEEK,),
+    )
+    proposal_id = connection.execute("SELECT last_insert_rowid() AS id").fetchone()["id"]
+    connection.execute(
+        "INSERT INTO proposal_assignments (proposal_id, shift_id, employee_id) VALUES (?, ?, ?)",
+        (proposal_id, shift, employee_id),
+    )
+    connection.commit()
+
+    fetched = get_proposal(connection, proposal_id)
+    check(fetched["review"] is None, "a legacy proposal with no stored snapshot reads back with review=None")
+    check(len(fetched["assignments"]) == 1, "its normalized proposal_assignments content still reads correctly")
+    connection.close()
+
+
+def check_malformed_snapshot_fails_clearly():
+    """A corrupted `draft_snapshot` value must raise the dedicated, controlled
+    error rather than a raw JSON/attribute error or a fabricated review."""
+    connection = fixture_database()
+    confirmed_worker(connection, "SW-001")
+    prepare_week(connection, WEEK)
+    created = create_proposal(connection, WEEK)
+
+    connection.execute(
+        "UPDATE schedule_proposals SET draft_snapshot = 'not json at all' WHERE id = ?",
+        (created["id"],),
+    )
+    connection.commit()
+    try:
+        get_proposal(connection, created["id"])
+        check(False, "a non-JSON snapshot raises ProposalSnapshotCorrupted")
+    except ProposalSnapshotCorrupted:
+        check(True, "a non-JSON snapshot raises ProposalSnapshotCorrupted")
+
+    connection.execute(
+        "UPDATE schedule_proposals SET draft_snapshot = '{\"nope\": true}' WHERE id = ?",
+        (created["id"],),
+    )
+    connection.commit()
+    try:
+        get_proposal(connection, created["id"])
+        check(False, "a JSON snapshot missing shifts/summary raises ProposalSnapshotCorrupted")
+    except ProposalSnapshotCorrupted:
+        check(True, "a JSON snapshot missing shifts/summary raises ProposalSnapshotCorrupted")
+    connection.close()
+
+
+def check_list_proposals_for_week_ordered_and_filtered():
+    """`list_proposals_for_week` returns only that week's proposals, newest
+    first, and lets a caller recover a pending proposal after losing its
+    in-memory reference - the refresh/remount recovery path."""
+    connection = fixture_database()
+    confirmed_worker(connection, "SW-001")
+    other_week = "2026-11-09"
+    prepare_week(connection, WEEK)
+    prepare_week(connection, other_week)
+
+    first = create_proposal(connection, WEEK)
+    second = create_proposal(connection, WEEK)
+    other_week_proposal = create_proposal(connection, other_week)
+
+    listed = list_proposals_for_week(connection, WEEK)
+    check(
+        [p["id"] for p in listed] == [second["id"], first["id"]],
+        "proposals for the week come back newest-first, deterministically ordered",
+    )
+    check(
+        other_week_proposal["id"] not in [p["id"] for p in listed],
+        "a proposal belonging to a different week is not included",
+    )
+
+    reject_proposal(connection, first["id"])
+    recovered = list_proposals_for_week(connection, WEEK)
+    check(
+        {p["id"]: p["status"] for p in recovered} == {second["id"]: "pending", first["id"]: "rejected"},
+        "recovering the week's proposals after a decision shows both, with current status - simulating refresh recovery",
+    )
     connection.close()
 
 
@@ -702,6 +827,10 @@ def check_concurrent_approval_no_duplicate():
 
 def main_entry():
     check_proposal_content_bound_and_retrievable()
+    check_draft_snapshot_persisted_and_recoverable()
+    check_legacy_proposal_without_snapshot_still_readable()
+    check_malformed_snapshot_fails_clearly()
+    check_list_proposals_for_week_ordered_and_filtered()
     check_create_writes_no_assignments()
     check_successful_approval_persists_and_audits()
     check_repeated_approval_idempotent()

@@ -233,3 +233,92 @@
   color: var(--text-h);
   font-weight: 600;
 }
+
+/* Phase 7 increment 4: shared week selector, Schedule view, and its
+   proposal/replacement panels. Reuses .employee-form's panel look and
+   .list-controls' button row rather than inventing a second style. */
+.week-selector {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+  font-size: 14px;
+}
+
+.week-selector-range {
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+.week-selector-jump {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-actions {
+  margin: 12px 0;
+}
+
+.schedule-unprepared {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+}
+
+.proposal-panel,
+.replace-panel {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+}
+
+.proposal-panel h3,
+.replace-panel h3 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  color: var(--text-h);
+}
+
+.schedule-day {
+  margin-top: 24px;
+}
+
+.schedule-day h3 {
+  margin-bottom: 8px;
+  color: var(--text-h);
+}
+
+.schedule-hall {
+  margin-top: 12px;
+}
+
+.schedule-hall h4 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.schedule-hall table {
+  border-collapse: collapse;
+  font-size: 14px;
+  width: 100%;
+}
+
+.schedule-hall th,
+.schedule-hall td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.schedule-hall ul {
+  margin: 0;
+  padding-left: 0;
+  list-style: none;
+}

@@ -64,6 +64,7 @@ assignments were created; a specific shift's assignment was replaced) - no
 solver internals, no hidden reasoning.
 """
 
+import json
 from datetime import datetime
 
 from eligibility import evaluate_shift_eligibility
@@ -101,6 +102,12 @@ class ProposalRevalidationFailed(RuntimeError):
     def __init__(self, conflicts):
         self.conflicts = conflicts
         super().__init__(f"{len(conflicts)} conflict(s) found during revalidation.")
+
+
+class ProposalSnapshotCorrupted(RuntimeError):
+    """A stored draft review snapshot could not be parsed as the expected
+    shape. Maps to HTTP 500 - a controlled refusal to fabricate review data,
+    never a raw JSON/attribute error surfaced to the caller."""
 
 
 class AssignmentNotFound(LookupError):
@@ -154,15 +161,48 @@ def _overlaps(a_start, a_end, b_start, b_end):
     return a_start < b_end and b_start < a_end
 
 
+def _parse_review_snapshot(proposal_id, raw_text):
+    """Parse and validate a stored `draft_snapshot` column back into the
+    review shape the frontend renders.
+
+    `None` (a proposal created before this column existed, or a legacy row)
+    is a legitimate "no review available" answer, not corruption. Anything
+    else must parse as JSON and have the shape `optimizer.generate_draft`
+    always produces - a dict with a `shifts` list and a `summary` dict -
+    or `ProposalSnapshotCorrupted` is raised rather than handing the caller
+    a malformed or partial review silently.
+    """
+    if raw_text is None:
+        return None
+    try:
+        snapshot = json.loads(raw_text)
+    except (TypeError, ValueError) as error:
+        raise ProposalSnapshotCorrupted(
+            f"Proposal {proposal_id}'s stored review data is not valid JSON."
+        ) from error
+    if (
+        not isinstance(snapshot, dict)
+        or not isinstance(snapshot.get("shifts"), list)
+        or not isinstance(snapshot.get("summary"), dict)
+    ):
+        raise ProposalSnapshotCorrupted(
+            f"Proposal {proposal_id}'s stored review data is missing the "
+            "expected 'shifts'/'summary' structure."
+        )
+    return snapshot
+
+
 def proposal_payload(connection, proposal_id):
     """The stored proposal exactly as persisted. Read-only."""
     proposal = connection.execute(
-        "SELECT id, week_start, created_at, status, decided_at"
+        "SELECT id, week_start, created_at, status, decided_at, draft_snapshot"
         " FROM schedule_proposals WHERE id = ?",
         (proposal_id,),
     ).fetchone()
     if proposal is None:
         raise ProposalNotFound(f"No proposal {proposal_id}.")
+
+    review = _parse_review_snapshot(proposal_id, proposal["draft_snapshot"])
 
     rows = connection.execute(
         """
@@ -183,6 +223,7 @@ def proposal_payload(connection, proposal_id):
         "created_at": proposal["created_at"],
         "status": proposal["status"],
         "decided_at": proposal["decided_at"],
+        "review": review,
         "assignments": [
             {
                 "shift_id": row["shift_id"],
@@ -220,9 +261,10 @@ def create_proposal(connection, week_start_text, reference_time=None):
     def work():
         now = _now(reference_time)
         cursor = connection.execute(
-            "INSERT INTO schedule_proposals (week_start, created_at, status)"
-            " VALUES (?, ?, 'pending')",
-            (week_start, now),
+            "INSERT INTO schedule_proposals"
+            " (week_start, created_at, status, draft_snapshot)"
+            " VALUES (?, ?, 'pending', ?)",
+            (week_start, now, json.dumps(draft)),
         )
         proposal_id = cursor.lastrowid
         for shift_id, employee_id in pairs:
@@ -249,6 +291,27 @@ def create_proposal(connection, week_start_text, reference_time=None):
 def get_proposal(connection, proposal_id):
     """Read-only: the stored proposal exactly as persisted."""
     return proposal_payload(connection, proposal_id)
+
+
+def list_proposals_for_week(connection, week_start_text):
+    """Every stored proposal for one Monday week, newest first. Read-only.
+
+    Ordered by id DESC (equivalently creation order, since ids are assigned
+    in insertion order) so the result is deterministic and a caller that
+    lost its in-memory proposal state - a refresh, a remount, navigating
+    away and back - can always recover it: the most recently generated
+    proposal is always first, and every earlier one for the same week
+    (including already-decided ones) is still listed alongside it.
+    """
+    parse_week_start(week_start_text)  # raises InvalidWeekStart if malformed
+    ids = [
+        row["id"]
+        for row in connection.execute(
+            "SELECT id FROM schedule_proposals WHERE week_start = ? ORDER BY id DESC",
+            (week_start_text,),
+        )
+    ]
+    return [proposal_payload(connection, proposal_id) for proposal_id in ids]
 
 
 def _parse_submitted_assignments(connection, payload):

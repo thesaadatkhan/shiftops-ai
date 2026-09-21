@@ -189,7 +189,8 @@ SCHEMA_STATEMENTS = [
         created_at TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'pending'
             CHECK (status IN ('pending', 'approved', 'rejected')),
-        decided_at TEXT
+        decided_at TEXT,
+        draft_snapshot TEXT
     )
     """,
     # One row per proposed (not existing) assignment a draft contained at
@@ -394,6 +395,23 @@ def migrate_schema(connection):
                         (f"{MIGRATION_NOTE_PREFIX}%",),
                     )
                 applied.append("semester_schedules.dates_provisional")
+
+            if table_exists(
+                connection, "schedule_proposals"
+            ) and "draft_snapshot" not in table_columns(
+                connection, "schedule_proposals"
+            ):
+                # The immutable draft review snapshot (Phase 7 increment 4):
+                # the full `optimizer.generate_draft` response, stored
+                # verbatim as JSON text at creation time, so a supervisor can
+                # see existing/proposed assignments, coverage totals, and
+                # uncovered reasons again after a refresh without recomputing
+                # anything. NULL for any proposal created before this column
+                # existed - those still work, they simply have no `review`.
+                connection.execute(
+                    "ALTER TABLE schedule_proposals ADD COLUMN draft_snapshot TEXT"
+                )
+                applied.append("schedule_proposals.draft_snapshot")
 
             # Created here rather than alongside the CREATE TABLE statements:
             # those run before this function, so on a database that predates

@@ -157,6 +157,29 @@ def run():
         check(status == 404, f"reading an unknown proposal id is 404 ({status})")
         check(isinstance(json.loads(body).get("detail"), str), "with a string detail")
 
+        # ---------------------------------------- review snapshot + week list
+        check(proposal.get("review") is not None, "the created proposal carries a review snapshot over HTTP")
+        check(
+            isinstance(proposal["review"].get("shifts"), list)
+            and isinstance(proposal["review"].get("summary"), dict),
+            "the review snapshot has the expected shifts/summary shape over HTTP",
+        )
+
+        status, _, body = request("GET", "/api/schedule/weeks/2026-11-02/proposals")
+        check(status == 200, f"listing a week's proposals is 200 ({status})")
+        listed = json.loads(body)
+        check(
+            [p["id"] for p in listed] == [proposal["id"]],
+            "the week's proposal list contains exactly the one proposal created for it, recoverable after a refresh",
+        )
+
+        status, _, body = request("GET", "/api/schedule/weeks/2026-11-09/proposals")
+        check(status == 200, f"listing an unrelated week's proposals is still 200 ({status})")
+        check(json.loads(body) == [], "a week with no proposals lists empty, not an error")
+
+        status, _, body = request("GET", "/api/schedule/weeks/not-a-date/proposals")
+        check(status == 400, f"listing proposals for a malformed week is 400 ({status})")
+
         # -------------------------------------------------- approve mismatch
         status, _, body = request(
             "POST", f"/api/schedule/proposals/{proposal['id']}/approve", body={"assignments": []}

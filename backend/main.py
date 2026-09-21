@@ -60,11 +60,13 @@ from proposals import (
     ProposalNotFound,
     ProposalNotPending,
     ProposalRevalidationFailed,
+    ProposalSnapshotCorrupted,
     ProposalValidationError,
     ReplacementInvalid,
     approve_proposal,
     create_proposal,
     get_proposal,
+    list_proposals_for_week,
     reject_proposal,
     replace_assignment,
 )
@@ -738,6 +740,28 @@ def create_schedule_proposal(week_start: str):
             status_code=500,
             detail=f"Stored shift data is invalid: {error}",
         ) from error
+    except ProposalSnapshotCorrupted as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
+    finally:
+        connection.close()
+
+
+@app.get("/api/schedule/weeks/{week_start}/proposals")
+def list_schedule_proposals(week_start: str):
+    """Every stored proposal for one Monday week, newest first. Read-only.
+
+    Lets the Schedule UI recover a pending or recently decided proposal
+    after a refresh or remount, rather than only ever knowing about the one
+    it generated in the current browser session. `week_start` must be a
+    real, strictly-formatted 'YYYY-MM-DD' Monday, or this is a 400.
+    """
+    connection = get_connection()
+    try:
+        return list_proposals_for_week(connection, week_start)
+    except weeks.InvalidWeekStart as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ProposalSnapshotCorrupted as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
     finally:
         connection.close()
 
@@ -750,6 +774,8 @@ def get_schedule_proposal(proposal_id: int):
         return get_proposal(connection, proposal_id)
     except ProposalNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except ProposalSnapshotCorrupted as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
     finally:
         connection.close()
 
@@ -784,6 +810,8 @@ def approve_schedule_proposal(
             status_code=409,
             detail={"message": str(error), "conflicts": error.conflicts},
         ) from error
+    except ProposalSnapshotCorrupted as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
     finally:
         connection.close()
 
@@ -798,6 +826,8 @@ def reject_schedule_proposal(proposal_id: int):
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ProposalNotPending as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProposalSnapshotCorrupted as error:
+        raise HTTPException(status_code=500, detail=str(error)) from error
     finally:
         connection.close()
 

@@ -16,7 +16,8 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 
 **Implemented:**
 
-- A React application shell (Vite + JavaScript) with sidebar navigation covering all planned sections (Dashboard, Employees, Schedule, Coverage, Generate Schedule, Workforce Planning, AI Assistant). Dashboard and Employees show real data; the remaining five sections are still placeholders.
+- A React application shell (Vite + JavaScript) with sidebar navigation covering all planned sections (Dashboard, Employees, Schedule, Coverage, Generate Schedule, Workforce Planning, AI Assistant). Dashboard, Employees, Coverage, Schedule and Generate Schedule show real data, sharing one reporting-week selection between Employees, Schedule and Generate Schedule; Workforce Planning and AI Assistant remain placeholders.
+- Deterministic shift coverage (Phase 6) and a full schedule-generation pipeline (Phase 7): a read-only eligibility engine and Coverage screen; a Google OR-Tools draft optimizer; and a stored proposal/approval workflow so a supervisor must explicitly approve a generated draft, with full revalidation against current data, before any assignment becomes real. Every generated proposal persists its full coverage review (existing/proposed assignments, totals, uncovered reasons) and can be recovered by week after a refresh or navigation, not only for the browser session that generated it. An explicit worker-replacement operation and an append-only assignment-change audit trail are also implemented. The Schedule screen (also reachable from the "Generate Schedule" sidebar item, which opens the same view) surfaces all of this: preparing a week's required shifts, generating and reviewing a proposal with an explicit approval-confirmation step, approving or rejecting it, and replacing an individual assignment.
 - A FastAPI backend covering the employee lifecycle and semester timetables across fourteen endpoints:
 
   | Endpoint | Purpose |

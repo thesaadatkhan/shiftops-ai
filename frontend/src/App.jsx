@@ -3,6 +3,9 @@ import './App.css'
 import BackendStatus from './BackendStatus.jsx'
 import Coverage from './Coverage.jsx'
 import EmployeeList from './EmployeeList.jsx'
+import Schedule from './Schedule.jsx'
+import WeekSelector from './WeekSelector.jsx'
+import { DEFAULT_WEEK_START } from './weeks.js'
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -25,7 +28,8 @@ const SECTION_CONTENT = {
   },
   schedule: {
     title: 'Schedule',
-    description: 'Generated and existing assignments will appear here.',
+    description:
+      'The stored schedule for the selected week: every prepared shift, who is assigned, and what remains uncovered. Generate, review, and approve a proposal from here too.',
   },
   coverage: {
     title: 'Coverage',
@@ -34,7 +38,8 @@ const SECTION_CONTENT = {
   },
   'generate-schedule': {
     title: 'Generate Schedule',
-    description: 'Schedule generation controls will appear here.',
+    description:
+      'Generate a coverage-maximizing proposal for the selected week, review exactly what it would change, and approve or reject it. This is the same Schedule view as the Schedule tab.',
   },
   'workforce-planning': {
     title: 'Workforce Planning',
@@ -48,7 +53,14 @@ const SECTION_CONTENT = {
 
 function App() {
   const [activeSection, setActiveSection] = useState('dashboard')
+  // One reporting week, shared across every section that reads it (Phase 7
+  // increment 4), so switching between Employees and Schedule never resets
+  // which week is on screen. Changing it here never calls the backend on
+  // its own - it only changes what the two screens ask for next.
+  const [weekStart, setWeekStart] = useState(DEFAULT_WEEK_START)
   const content = SECTION_CONTENT[activeSection]
+  const showsSchedule = activeSection === 'schedule' || activeSection === 'generate-schedule'
+  const showWeekSelector = activeSection === 'employees' || showsSchedule
 
   return (
     <>
@@ -77,8 +89,14 @@ function App() {
       <main className="main-content">
         <h2>{content.title}</h2>
         <p>{content.description}</p>
+        {showWeekSelector && <WeekSelector weekStart={weekStart} onChange={setWeekStart} />}
         {activeSection === 'dashboard' && <BackendStatus />}
-        {activeSection === 'employees' && <EmployeeList />}
+        {activeSection === 'employees' && <EmployeeList weekStart={weekStart} />}
+        {/* "Schedule" and "Generate Schedule" are two sidebar entries into
+            the same workflow (see Schedule.jsx) - one mounted instance kept
+            alive across both, remounted only when the shared week changes,
+            so there is exactly one copy of its proposal/replace state. */}
+        {showsSchedule && <Schedule key={weekStart} weekStart={weekStart} />}
         {activeSection === 'coverage' && <Coverage />}
       </main>
     </>
