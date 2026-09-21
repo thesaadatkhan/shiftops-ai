@@ -58,7 +58,9 @@ def shift_duration_hours(start, end, label=""):
     return int(seconds // SECONDS_PER_HOUR)
 
 
-def assigned_hours_by_employee(connection, week_start=WEEK_START, week_end=WEEK_END):
+def assigned_hours_by_employee(
+    connection, week_start=WEEK_START, week_end=WEEK_END, employee_id=None
+):
     """Whole hours each employee is assigned during one Monday-to-Sunday week.
 
     Follows D025's start-week convention: a shift counts entirely towards the
@@ -69,18 +71,35 @@ def assigned_hours_by_employee(connection, week_start=WEEK_START, week_end=WEEK_
     Only stored assignments count. Class meetings and approved leave are not
     work and are deliberately not included here.
 
-    Raises InvalidWorkDuration if any assigned shift in the week is not a
-    positive whole number of hours, so a bad row can never quietly corrupt a
-    capacity figure.
+    Raises InvalidWorkDuration if any assigned shift **that this call reads**
+    is not a positive whole number of hours, so a bad row can never quietly
+    corrupt a capacity figure.
+
+    `employee_id` narrows the query to one worker's own assignments. That
+    matters for more than speed: which rows are read decides which rows can
+    raise. A report about the whole workforce has to validate every
+    assignment, because it reports on every worker. A report about one worker
+    must not, or a corrupt shift belonging to somebody else would make that
+    worker's page fail - a fault in a record they have nothing to do with.
     """
+    # Every fragment below is a fixed literal written here; the only thing
+    # that varies is how many of them there are. Values never go into the SQL
+    # text - they are all bound parameters, as everywhere else (D024).
+    filters = ["s.start_datetime >= ?", "s.start_datetime < ?"]
+    parameters = [week_start.strftime(TIME_FORMAT), week_end.strftime(TIME_FORMAT)]
+
+    if employee_id is not None:
+        filters.append("a.employee_id = ?")
+        parameters.append(employee_id)
+
     rows = connection.execute(
-        """
+        f"""
         SELECT a.employee_id, s.hall, s.start_datetime, s.end_datetime
         FROM assignments a
         JOIN shifts s ON s.id = a.shift_id
-        WHERE s.start_datetime >= ? AND s.start_datetime < ?
+        WHERE {' AND '.join(filters)}
         """,
-        (week_start.strftime(TIME_FORMAT), week_end.strftime(TIME_FORMAT)),
+        tuple(parameters),
     ).fetchall()
 
     hours = {}
@@ -90,6 +109,22 @@ def assigned_hours_by_employee(connection, week_start=WEEK_START, week_end=WEEK_
         duration = shift_duration_hours(start, end, label=f"at {row['hall']}")
         hours[row["employee_id"]] = hours.get(row["employee_id"], 0) + duration
     return hours
+
+
+def assigned_hours_for_employee(
+    connection, employee_id, week_start=WEEK_START, week_end=WEEK_END
+):
+    """One employee's assigned whole hours for the week, as a number.
+
+    Everything `assigned_hours_by_employee` documents applies - the same
+    start-week accounting, the same whole-hour rule, the same exception for a
+    shift that breaks it - restricted to this worker's own assignments. A
+    worker with none is 0, which is the same answer as a worker who exists but
+    has not been assigned anything.
+    """
+    return assigned_hours_by_employee(
+        connection, week_start, week_end, employee_id=employee_id
+    ).get(employee_id, 0)
 
 
 def remaining_capacity_hours(weekly_hour_limit, assigned):

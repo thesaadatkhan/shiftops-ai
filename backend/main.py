@@ -3,7 +3,7 @@ from datetime import timedelta
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import ensure_schema, get_connection
+from database import MIGRATION_NOTE_PREFIX, ensure_schema, get_connection
 from employees import (
     CodeAllocationError,
     DeactivationBlocked,
@@ -13,12 +13,14 @@ from employees import (
     EmployeeValidationError,
     create_employee,
     delete_employee,
+    find_by_code,
     set_active,
     update_employee,
 )
 from reporting import (
     InvalidWorkDuration,
     assigned_hours_by_employee,
+    assigned_hours_for_employee,
     minutes_between,
     remaining_capacity_hours,
 )
@@ -177,6 +179,43 @@ def reporting_week_date(day_of_week):
     return REPORTING_WEEK_DATES[day_of_week]
 
 
+def schedule_covered_days(schedule):
+    """Which days of the displayed reporting week one schedule covers.
+
+    The single definition of "this semester applies on that day", used both
+    for an individual semester's coverage state and for the employee's
+    combined readiness below, so the two can never disagree about which days
+    a schedule reaches. Dates are inclusive on both ends (D035).
+    """
+    return {
+        date
+        for date in REPORTING_WEEK_DATES
+        if schedule["start_date"] <= date <= schedule["end_date"]
+    }
+
+
+def week_coverage_state(covered_days):
+    """How much of the displayed reporting week a set of days accounts for.
+
+    Three states, because "covers the week" and "touches the week" are not
+    the same claim and review found the earlier boolean blurring them:
+
+      outside - none of the seven days.
+      partial - some of them, but not all seven. A semester that starts on
+                the Wednesday overlaps this week without covering it.
+      full    - all seven days.
+
+    This describes DATES ONLY. It says nothing about whether anybody
+    confirmed the timetable, which is a separate field, and nothing about the
+    employee's combined readiness across all their semesters.
+    """
+    if not covered_days:
+        return "outside"
+    if len(covered_days) < len(REPORTING_WEEK_DATES):
+        return "partial"
+    return "full"
+
+
 def reporting_period_coverage(schedules):
     """Timetable readiness for the DISPLAYED reporting week, per employee.
 
@@ -212,11 +251,7 @@ def reporting_period_coverage(schedules):
     for schedule in schedules:
         employee_id = schedule["employee_id"]
         seen.add(employee_id)
-        covered = {
-            date
-            for date in REPORTING_WEEK_DATES
-            if schedule["start_date"] <= date <= schedule["end_date"]
-        }
+        covered = schedule_covered_days(schedule)
         if not covered:
             continue
         any_days.setdefault(employee_id, set()).update(covered)
@@ -238,6 +273,200 @@ def reporting_period_coverage(schedules):
     return status
 
 
+def semester_payload(schedule, blocks_by_schedule):
+    """One stored semester schedule, with the class blocks it owns.
+
+    Three independent facts, deliberately not merged:
+
+      `confirmed_at`      - whether anybody confirmed THIS semester, and when.
+      `reporting_week_coverage` - how much of the displayed week its DATES
+                            reach: outside, partial or full. Nothing to do
+                            with confirmation.
+      the employee's `timetable_status` (elsewhere in this payload) - their
+                            combined readiness across every semester they have.
+
+    A semester confirmed for the spring is genuinely confirmed and still lies
+    wholly outside October; two unconfirmed half-semesters can cover the whole
+    week between them without either covering it alone. Collapsing any pair of
+    these into one field loses a distinction somebody needs.
+
+    `dates_provisional` is derived from stored provenance, never guessed. The
+    migration is the only thing that writes a `source_note`, and it assigns
+    every schedule it creates the same assumed demo-semester dates because the
+    legacy model recorded none. A block carrying a migration note is therefore
+    the only evidence the database holds that these dates were assumed rather
+    than entered by a supervisor.
+
+    The notes themselves are NOT returned. They are internal provenance
+    strings, and a supervisor needs to know that the dates want checking, not
+    to read the sentence the migration happened to write. Keeping them out
+    also stops product wording being coupled to their exact stored text.
+    """
+    blocks = blocks_by_schedule.get(schedule["id"], [])
+    return {
+        "start_date": schedule["start_date"],
+        "end_date": schedule["end_date"],
+        "confirmed_at": schedule["confirmed_at"],
+        "reporting_week_coverage": week_coverage_state(
+            schedule_covered_days(schedule)
+        ),
+        "dates_provisional": any(
+            block["source_note"] is not None
+            and block["source_note"].startswith(MIGRATION_NOTE_PREFIX)
+            for block in blocks
+        ),
+        "class_blocks": [
+            {
+                "day_of_week": block["day_of_week"],
+                "start_time": block["start_time"],
+                "end_time": block["end_time"],
+                # Classes keep their real lengths, so these stay fractional.
+                # The whole-hour rule is about work shifts only.
+                "hours": round(
+                    minutes_between(block["start_time"], block["end_time"]) / 60, 2
+                ),
+            }
+            for block in blocks
+        ],
+    }
+
+
+def employee_detail_payload(connection, employee_code):
+    """Everything stored about one worker, read-only.
+
+    Every query filters on this worker's own internal id - the class blocks
+    reach it through their semester schedule - so no other worker's records
+    can appear here. Nothing is created, updated or deleted: reading a
+    worker's details must never be a write.
+
+    Legacy `courses` and `class_meetings` are deliberately NOT returned. They
+    are retained provenance for the migration, not a timetable; exposing them
+    here would present a second, contradictory set of class times.
+    """
+    employee = find_by_code(connection, employee_code)
+    if employee is None:
+        raise EmployeeNotFound(f"No employee with code {employee_code}.")
+
+    employee_id = employee["id"]
+
+    schedules = connection.execute(
+        "SELECT id, employee_id, start_date, end_date, confirmed_at"
+        " FROM semester_schedules WHERE employee_id = ?"
+        " ORDER BY start_date, end_date, id",
+        (employee_id,),
+    ).fetchall()
+
+    # Ordered here rather than in the frontend so the sequence is the same for
+    # every caller: by weekday, then by time of day, then by insertion order
+    # so two identical blocks keep a stable relative position.
+    blocks = connection.execute(
+        """
+        SELECT b.schedule_id, b.day_of_week, b.start_time, b.end_time, b.source_note
+        FROM class_blocks b
+        JOIN semester_schedules s ON s.id = b.schedule_id
+        WHERE s.employee_id = ?
+        ORDER BY b.day_of_week, b.start_time, b.end_time, b.id
+        """,
+        (employee_id,),
+    ).fetchall()
+
+    blocks_by_schedule = {}
+    for block in blocks:
+        blocks_by_schedule.setdefault(block["schedule_id"], []).append(block)
+
+    # Only the shifts this worker actually expressed a preference about.
+    # Neutral is the absence of a row (D025), so listing every neutral shift
+    # would mean inventing 99 rows a supervisor never recorded.
+    preferences = connection.execute(
+        """
+        SELECT p.preference, s.hall, s.start_datetime, s.end_datetime
+        FROM shift_preferences p
+        JOIN shifts s ON s.id = p.shift_id
+        WHERE p.employee_id = ?
+        ORDER BY s.start_datetime, s.end_datetime, s.hall
+        """,
+        (employee_id,),
+    ).fetchall()
+
+    leave = connection.execute(
+        "SELECT start_datetime, end_datetime FROM approved_leave"
+        " WHERE employee_id = ? ORDER BY start_datetime, end_datetime",
+        (employee_id,),
+    ).fetchall()
+
+    try:
+        # This worker's own assignments only. Reading the whole workforce
+        # here meant a corrupt shift belonging to somebody else made THIS
+        # worker's details return 500 - a page failing because of a record it
+        # has no connection to. The list endpoint still validates everything,
+        # because it reports on everyone.
+        assigned = assigned_hours_for_employee(connection, employee_id)
+    except InvalidWorkDuration as error:
+        # This worker's own assigned shift is unusable. Still a controlled
+        # 500 rather than a guessed number.
+        raise HTTPException(
+            status_code=500,
+            detail=f"Stored shift data is invalid: {error}",
+        ) from error
+
+    return {
+        "week_start": WEEK_START.strftime("%Y-%m-%d"),
+        "week_end": REPORTING_WEEK_END.strftime("%Y-%m-%d"),
+        "employee": {
+            "employee_code": employee["employee_code"],
+            "full_name": employee["full_name"],
+            "student_type": employee["student_type"],
+            "is_active": bool(employee["is_active"]),
+            "weekly_hour_limit": employee["weekly_hour_limit"],
+            "assigned_hours": assigned,
+            "remaining_capacity_hours": remaining_capacity_hours(
+                employee["weekly_hour_limit"], assigned
+            ),
+            # The same five-state readiness the list shows, computed by the
+            # same function over the same schedules, so the two views can
+            # never disagree about the displayed week.
+            "timetable_status": reporting_period_coverage(schedules).get(
+                employee_id, "missing"
+            ),
+        },
+        "semesters": [
+            semester_payload(schedule, blocks_by_schedule) for schedule in schedules
+        ],
+        "shift_preferences": [
+            {
+                "preference": row["preference"],
+                "hall": row["hall"],
+                # Full dated start and end, so an overnight shift shows both
+                # of its dates rather than looking like it ends before it
+                # starts.
+                "start_datetime": row["start_datetime"],
+                "end_datetime": row["end_datetime"],
+            }
+            for row in preferences
+        ],
+        "approved_leave": [
+            {
+                "start_datetime": row["start_datetime"],
+                "end_datetime": row["end_datetime"],
+            }
+            for row in leave
+        ],
+    }
+
+
+@app.get("/api/employees/{employee_code}")
+def get_employee_details(employee_code: str):
+    """One worker's stored details, classes, preferences and approved leave.
+
+    Read-only. It shares `run_employee_action`'s error mapping so an unknown
+    code is a 404 in the same `{"detail": ...}` shape as every other employee
+    route (D033).
+    """
+    return run_employee_action(
+        lambda connection: employee_detail_payload(connection, employee_code)
+    )
+
+
 def employee_response(row):
     """The stored row as the frontend sees it after a save."""
     return {
@@ -250,10 +479,12 @@ def employee_response(row):
 
 
 def run_employee_action(action):
-    """Run an employee write and turn its errors into clear HTTP responses.
+    """Run an employee operation and turn its errors into HTTP responses.
 
-    Every employee write shares this mapping, so the frontend only ever has
-    to read one `{"detail": ...}` shape (D033).
+    Every employee route shares this mapping, so the frontend only ever has
+    to read one `{"detail": ...}` shape (D033). The read-only details route
+    uses it too, for exactly one of these cases: an unknown employee code is
+    a 404 there for the same reason it is everywhere else.
     """
     connection = get_connection()
     try:

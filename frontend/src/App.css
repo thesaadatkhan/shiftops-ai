@@ -151,6 +151,66 @@
   line-height: 145%;
 }
 
+.detail-title {
+  margin: 20px 0 0;
+  font-size: 17px;
+  color: var(--text-h);
+}
+
+/* Label/value pairs. Two columns when there is room, stacking into one on a
+   narrow screen so a long label never squeezes its value into a sliver. */
+.detail-list {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+  gap: 6px 20px;
+  margin: 12px 0 0;
+  font-size: 14px;
+
+  @media (max-width: 700px) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+}
+
+.detail-list dt {
+  color: var(--text-h);
+  font-weight: 600;
+}
+
+.detail-list dd {
+  margin: 0;
+
+  @media (max-width: 700px) {
+    margin-bottom: 8px;
+  }
+}
+
+.detail-hint {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.detail-panel {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--code-bg);
+}
+
+.detail-panel h5 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text-h);
+}
+
+.table-caption {
+  padding-bottom: 6px;
+  font-size: 13px;
+  text-align: left;
+  color: var(--text);
+}
+
 .table-wrapper {
   margin-top: 16px;
   overflow-x: auto;

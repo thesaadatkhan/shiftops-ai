@@ -181,6 +181,20 @@ DEMO_SEMESTER_END = "2026-12-11"
 # not depend on when they run.
 DEMO_SEMESTER_CONFIRMED_AT = "2026-08-24 00:00"
 
+# What a migrated class block records about where it came from. Kept as
+# constants because the details view reads them back: a schedule holding a
+# block with one of these notes was created by the migration, which means its
+# semester dates are the assumed demo ones above rather than dates a
+# supervisor entered. That is the only evidence the database has for calling
+# those dates provisional, so both sides must agree on the exact text.
+MIGRATION_NOTE_PREFIX = "migrated from"
+DEMO_MIGRATION_NOTE = (
+    f"{MIGRATION_NOTE_PREFIX} demo course data, matched the generated timetable"
+)
+LEGACY_MIGRATION_NOTE = (
+    f"{MIGRATION_NOTE_PREFIX} legacy course data, timetable unconfirmed"
+)
+
 
 def get_connection(database_path=None):
     """Open a connection, defaulting to the project's database file.
@@ -417,11 +431,7 @@ def migrate_class_schedules(connection):
                     (employee_id, DEMO_SEMESTER_START, DEMO_SEMESTER_END),
                 ).fetchone()["id"]
 
-                note = (
-                    "migrated from demo course data, matched the generated timetable"
-                    if from_demo
-                    else "migrated from legacy course data, timetable unconfirmed"
-                )
+                note = DEMO_MIGRATION_NOTE if from_demo else LEGACY_MIGRATION_NOTE
                 connection.execute(
                     """
                     INSERT INTO class_blocks

@@ -42,6 +42,7 @@ from database import create_schema, get_connection
 from reporting import (
     InvalidWorkDuration,
     assigned_hours_by_employee,
+    assigned_hours_for_employee,
     remaining_capacity_hours,
 )
 from synthetic_data import TIME_FORMAT, WEEK_END, WEEK_START
@@ -269,6 +270,83 @@ def main():
                 f"{label} shift is rejected rather than rounded into a valid one",
             )
         bad.close()
+
+    # 12. Narrowing the report to one employee narrows what it VALIDATES.
+    #
+    #     A report about the whole workforce has to read every assignment, so
+    #     any invalid one makes it fail - that is correct and is checked
+    #     above. A report about one worker must read only their own, or a
+    #     corrupt shift belonging to somebody else would break a page that has
+    #     nothing to do with it.
+    scoped = fixture_database()
+    target = add_employee(scoped, "FX-ONE")
+    other = add_employee(scoped, "FX-TWO")
+
+    # The target: a weekday evening shift plus a Sunday-night shift crossing
+    # into Monday, which D025 charges entirely to the week it starts in.
+    assign(scoped, target, WEEK_START + timedelta(hours=17), WEEK_START + timedelta(hours=22))
+    assign(
+        scoped,
+        target,
+        WEEK_START + timedelta(days=6, hours=22),
+        WEEK_START + timedelta(days=7, hours=3),
+    )
+    # The other worker: a shift that breaks the whole-hour rule.
+    assign(
+        scoped,
+        other,
+        WEEK_START + timedelta(days=1, hours=17),
+        WEEK_START + timedelta(days=1, hours=22, minutes=30),
+    )
+
+    hours = assigned_hours_for_employee(scoped, target)
+    check(
+        hours == 10,
+        f"one worker's own hours are 5 + 5 with the cross-midnight shift charged "
+        f"to its starting week (got {hours})",
+    )
+    check(
+        isinstance(hours, int),
+        "the per-employee figure is a whole number of hours",
+    )
+    check(
+        remaining_capacity_hours(20, hours) == 10,
+        "and remaining capacity follows from it",
+    )
+
+    try:
+        assigned_hours_for_employee(scoped, other)
+        check(False, "the owner of the invalid shift still raises")
+    except InvalidWorkDuration as error:
+        check(
+            "whole number of hours" in str(error),
+            "the owner of the invalid shift still raises InvalidWorkDuration",
+        )
+
+    try:
+        assigned_hours_by_employee(scoped)
+        check(False, "the whole-workforce report still raises on the same row")
+    except InvalidWorkDuration:
+        check(True, "the whole-workforce report still raises on the same row")
+
+    check(
+        assigned_hours_for_employee(scoped, add_employee(scoped, "FX-NONE")) == 0,
+        "a worker with no assignments is zero, not an error",
+    )
+
+    # Another week's assignment is not read, so its validity is irrelevant.
+    next_week_only = add_employee(scoped, "FX-LATER")
+    assign(
+        scoped,
+        next_week_only,
+        WEEK_END + timedelta(hours=17),
+        WEEK_END + timedelta(hours=22, minutes=30),
+    )
+    check(
+        assigned_hours_for_employee(scoped, next_week_only) == 0,
+        "an assignment outside the reporting week is neither counted nor validated",
+    )
+    scoped.close()
 
     if failures:
         print(f"\nFAILED ({len(failures)}):")

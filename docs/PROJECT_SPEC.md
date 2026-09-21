@@ -212,12 +212,12 @@ Allow supervisors to view synthetic workers and relevant scheduling information,
 Implemented list controls (Phase 5B):
 
 - Search by employee name or employee code, ignoring letter case.
-- Sort by name, employee code, student type, course count, weekly class hours, or remaining weekly capacity, ascending or descending, with a stable employee-code tie-breaker. Numeric columns sort by value, so 10 follows 9 rather than preceding it.
+- Sort by name, employee code, student type, class-block count, weekly class hours, or remaining weekly capacity, ascending or descending, with a stable employee-code tie-breaker. Numeric columns sort by value, so 10 follows 9 rather than preceding it.
 - Filter by Active, Inactive, or All, showing active workers by default. Filtering changes only which rows are displayed; it does not alter status, eligibility, or records.
 - Show the number of matching workers, a message when nothing matches, and a control that resets every list control at once.
 
 - Add and edit worker details through forms backed by REST endpoints and SQLite. The backend validates required fields, rejects whitespace-only values, accepts only supported student types, and rejects an employee code already used by another worker (compared without regard to letter case). New workers start active with the 20-hour weekly limit and receive no generated classes, preferences, leave, or assignments. A worker can be added to an empty database without seeding.
-- An existing employee code cannot be edited. The Edit interface displays the stored code read-only, and the update operation rejects any submitted code that differs from it, including a change of letter case only, returning the standard validation error with an explanation. An unknown code in the request path is still reported as not found rather than as an immutability failure. Editing a worker's name or student type preserves their employee code, internal database identity, active status, courses, class meetings, shift preferences, approved leave and assignments. There is no rename workflow, and editing never retires a code; retirement applies to permanent deletion only.
+- An existing employee code cannot be edited. The Edit interface displays the stored code read-only, and the update operation rejects any submitted code that differs from it, including a change of letter case only, returning the standard validation error with an explanation. An unknown code in the request path is still reported as not found rather than as an immutability failure. Editing a worker's name or student type preserves their employee code, internal database identity, active status, semester schedules, class blocks, any legacy course records, shift preferences, approved leave and assignments. There is no rename workflow, and editing never retires a code; retirement applies to permanent deletion only.
 - Employee codes are assigned by the backend when a worker is created. The create request carries the worker's name and student type only; a request that supplies a code is rejected with a validation error explaining that codes are assigned automatically, rather than having the supplied value silently ignored. The response reports the code that was issued.
 - Codes follow a single sequence: `SW-` and at least three digits, zero-padded, continuing to more digits when the sequence passes 999. A database that has never issued a code starts at SW-001. Otherwise the sequence continues above the highest number already reserved by a live or retired code, and never fills a gap left by a deletion. Allocation progress is stored, so it survives restarts and the deletion of the highest-numbered worker.
 - Codes are allocated and the worker created in one transaction, serialized by the database's own write locking, so simultaneous creates cannot receive the same code and a failure leaves neither a partially created worker nor an advanced counter.
@@ -229,6 +229,7 @@ Implemented list controls (Phase 5B):
 - After a successful action the list reloads with the supervisor's search text, sort selection and status filter unchanged. Because the list defaults to Active, a worker who was just deactivated is no longer shown, and the confirmation says so and directs the supervisor to the Inactive or All filter. A confirmed action and a failed list reload are reported as separate outcomes, and retrying the reload only re-reads the list.
 
 - Permanently delete an employee, behind an explicit confirmation identifying them by name and employee code and stating that their profile, classes, shift preferences and approved leave will be removed permanently. Cancelling performs no change of any kind. Deletion is allowed only when no assignment references that employee, historical assignments included, because shift history must continue to refer to a real worker; the backend enforces this rather than relying on the interface. The refusal explains that history is preserved and that deactivation is the appropriate alternative, subject to its own safeguards. The employee and their dependent class, preference and leave records are removed in one transaction, with the assignment check made inside that same transaction so a concurrent write cannot invalidate it; any failure removes nothing. Shared shifts and every other employee's records are preserved.
+- Open one worker from the list to inspect everything stored about them, through a read-only details request addressed by employee code. An unknown code is reported as not found in the standard error shape. The view is read-only in the strict sense: it performs no write of any kind, and it shows no editing controls, because the editors do not exist yet. Its contents are specified under Complete Employee Setup below.
 - A deleted employee code is retained as a retired code, holding the code and the time only and no copy of the deleted worker's details. Automatic employee-code allocation reads this record when working out the next code, so a code that has already been used is never reissued. Codes can no longer be entered by hand, so there is no other route to reusing one either.
 
 Remaining employee management is planned scope, not yet implemented:
@@ -236,15 +237,83 @@ Remaining employee management is planned scope, not yet implemented:
 
 The database is the source of truth after explicit demo initialization. Demo data is initialized once, into a database that holds no workforce or scheduling records, and that initialization is atomic: it either writes the whole dataset or nothing. If any such record already exists, initialization refuses and changes nothing, so it cannot overwrite edits, restore intentionally deleted workers, or add demo workers to a manually managed database. There is no repair, reset or regeneration workflow, and neither application startup nor any employee-management action performs seeding. Schema changes are applied through repeatable migrations that preserve existing records and relationships. Most are purely additive; where a change must reshape existing data, it is carried out transactionally with the information preserved, never by resetting or reseeding the database. Provide an empty-workforce path for entering fictional workers through the interface. The 30-worker count, student-type mix, and course-load conventions constrain demo generation, not user-created records. The synthetic-only data policy and 20-hour weekly limit remain unchanged.
 
-Phase 5B initially covers list controls and worker identity/status management. Phase 5C, before eligibility implementation, is a required milestone for complete employee setup. The requirements below are planned, not implemented by the current basic Add/Edit form.
+Phase 5B initially covers list controls and worker identity/status management. Phase 5C, before eligibility implementation, is a required milestone for complete employee setup. Of the requirements below, automatic code allocation, the semester/class-block model with its migration, and the read-only details view are implemented; every requirement about *entering, editing or confirming* that information is still planned.
 
 #### Complete Employee Setup (Phase 5C)
 
-Two parts of this section are implemented and described above: automatic
-employee-code allocation, and the semester/class-block data model with its
-migration. The supervisor-facing entry and editing interface, explicit
-timetable confirmation controls, and the preference and leave editors remain
-planned and are not implemented.
+Three parts of this section are implemented: automatic employee-code
+allocation and the semester/class-block data model with its migration, both
+described above, and the read-only employee-details view described
+immediately below. The supervisor-facing entry and editing interface,
+explicit timetable confirmation controls, and the preference and leave
+editors remain planned and are not implemented. Employee setup is therefore
+not complete.
+
+**Supervisors can inspect one worker's stored setup.** Opening a worker from
+the employee list shows, without any ability to change them:
+
+- Their basic details: employee code, name, student type, active status and
+  weekly hour limit, together with assigned hours and remaining capacity for
+  the identified reporting period and the existing explanation that capacity
+  is not eligibility. The employee code is displayed, never offered for
+  editing.
+- Every semester schedule stored for them, in a predictable order, with its
+  inclusive start and end dates, its own confirmation state and timestamp,
+  and its recurring class blocks as readable weekday, start and end times,
+  also in a predictable order. Each schedule is also described by how much of
+  the displayed reporting period **its dates** cover, in three states:
+  *outside* it, *partial* — some but not all of its days — or *full*. A
+  schedule that begins part-way through the period overlaps it without
+  covering it, and must not be described as though it covered it. Schedules
+  lying wholly outside the period are shown, not hidden.
+- Their stored shift preferences, each naming the hall and the full dated
+  start and end of the shift so that an overnight shift shows both of its
+  dates, with the explanation that unspecified shifts are neutral and that
+  preferences are soft rather than declarations of unavailability. Neutral
+  shifts are not listed, because neutral is the absence of a stored
+  preference.
+- Their approved leave periods with actual start and end datetimes, and a
+  clear statement when none is stored. No pending requests, approval actions
+  or inferred leave appear, because none exist.
+
+A semester's own confirmation, its coverage of the displayed period, and the
+worker's combined five-state readiness across all their semesters are three
+separate facts and are presented separately. They answer different questions:
+a semester confirmed for an earlier period is genuinely confirmed and still
+tells the reader nothing about the period on screen; an unconfirmed semester
+can cover the whole period; and two semesters that each cover only part of it
+can leave the worker fully ready between them while neither is individually
+full.
+
+A missing schedule, an unconfirmed schedule with no class blocks, and a
+confirmed schedule with no class blocks are described in three different
+ways, so that "nobody has told us" is never presented as "this worker has no
+classes".
+
+Where a timetable was produced by migrating the older course-linked records,
+its semester dates are identified as provisional and needing review, because
+the old model stored no semester dates and the migration had to assume them.
+That statement is made only where the stored class information itself records
+that it was migrated; where the database holds no such evidence, no claim is
+made about where the dates came from. The migrated class days and times are
+unchanged.
+
+The provenance the application records internally is not published. The
+supervisor is told that the dates are assumed and should be checked, and why;
+the internal text the migration wrote against each class is not part of the
+response and is not displayed. Product wording is therefore independent of
+whatever those internal records happen to say.
+
+Legacy course records are not presented as a second timetable. They are
+retained as migration provenance only, and the details view does not expose
+them.
+
+Viewing a worker's details creates, updates, confirms and deletes nothing.
+While the details view is open no employee write can be started, and while a
+form or a deletion confirmation is open the details view cannot be opened,
+under the same one-action-at-a-time rule the write controls already follow.
+Opening and closing details leaves the list's search text, sort selection and
+status filter unchanged.
 
 **Class timetables are stored as semester schedules owned by a worker.** A
 schedule records inclusive semester start and end dates and whether a
@@ -309,7 +378,7 @@ fractional; the whole-hour rule applies to work shifts only.
 - Supervisors explicitly confirm that the semester timetable is complete, including a deliberate confirmation when the worker has no classes. Missing, unconfirmed or expired class information must not be interpreted as unrestricted availability. Changes to class blocks or semester dates require reconfirmation. Phase 6 eligibility and Phase 7 generation must require confirmed timetable coverage for the full candidate shift and explain missing coverage.
 - Expand recurring class blocks into actual occurrences only within their semester dates. Any positive overlap with a class blocks the whole shift; touching endpoints do not overlap. Preserve the current local-clock convention and keep the full calendar and shared reporting-week selector in Phase 7.
 - Preferences remain preferred/low/neutral against existing dated shifts (hall and start/end shown); unspecified is neutral. Approved leave uses actual start/end datetimes and blocks overlaps. There is no general self-declared unavailability field or new request/approval workflow.
-- Existing and newly added workers use the same details sections to view, add, edit and remove class blocks, preferences and approved leave. Weekly class hours reflect semester applicability in the displayed week. Replace the course-count column/sort with class-block summaries when the new model ships.
+- Existing and newly added workers use the same details sections to view, add, edit and remove class blocks, preferences and approved leave. Viewing is implemented; adding, editing and removing are not. Weekly class hours reflect semester applicability in the displayed week. The course-count column and sort have been replaced by class-block summaries, as required once the new model shipped.
 - Migrate existing course-linked meetings to employee semester schedules without losing their times or relationships, resetting the database, or changing unrelated leave, preferences or assignments. Document fictional demo semester dates containing the sample week. Adapt seeding and tests to the new model; historical course labels may remain in example documentation but are not scheduling inputs.
 
 Employees is a worker-management and summary view, not a full shift calendar. A simple reporting-week selector (previous/next week or a date picker) is planned alongside the Schedule interface in Phase 7. It will update assigned hours and remaining weekly capacity for the selected week; it must not change stored worker identity, student type, active status, or records. The currently displayed fixed sample week is sufficient for Phase 5B.

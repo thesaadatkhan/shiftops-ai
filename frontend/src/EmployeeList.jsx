@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
 
-const EMPLOYEES_URL = 'http://127.0.0.1:8000/api/employees'
-
-const STUDENT_TYPE_LABELS = {
-  undergraduate: 'Undergraduate',
-  masters: "Master's",
-}
+import EmployeeDetails from './EmployeeDetails.jsx'
+import {
+  EMPLOYEES_URL,
+  studentTypeLabel,
+  timetableLabel,
+} from './employees.js'
 
 const SORT_FIELDS = [
   { value: 'employee_code', label: 'Employee ID' },
@@ -35,10 +35,6 @@ const STATUS_FILTERS = [
 const DEFAULT_SORT_FIELD = 'employee_code'
 const DEFAULT_SORT_DIRECTION = 'asc'
 const DEFAULT_STATUS_FILTER = 'active'
-
-function studentTypeLabel(employee) {
-  return STUDENT_TYPE_LABELS[employee.student_type] ?? employee.student_type
-}
 
 function sortValue(employee, field) {
   // Sort student type by the label shown in the table, so the ordering the
@@ -129,26 +125,6 @@ function hiddenReason(employee, statusFilter, query) {
   return null
 }
 
-// Timetable readiness FOR THE DISPLAYED WEEK, which is NOT shift eligibility
-// and NOT active status. Each label answers a different question, and they
-// are deliberately not collapsed:
-//
-//   Not set up          nobody has entered any semester for this worker.
-//   Other semester only they have a timetable, but for a different period -
-//                       an expired one, or one still ahead of this week.
-//   Awaiting confirm.   something covers this week but nobody has checked it.
-//   Part of week        confirmed for some days of this week, not all seven.
-//   Confirmed           confirmed for the whole week. With zero class blocks
-//                       that is a deliberate "no classes this week", which
-//                       stays distinct from "Not set up".
-const TIMETABLE_LABELS = {
-  missing: 'Not set up',
-  outside_period: 'Other semester only',
-  unconfirmed: 'Awaiting confirmation',
-  partial: 'Part of week',
-  confirmed: 'Confirmed',
-}
-
 const FEEDBACK_CLASSES = {
   success: 'backend-status backend-status-success',
   error: 'backend-status backend-status-error',
@@ -174,6 +150,11 @@ function EmployeeList() {
   // rather than a boolean means the confirmation can name exactly who it is
   // about, and opening it performs no request of any kind.
   const [confirmingDelete, setConfirmingDelete] = useState(null)
+  // The employee_code whose details are open, or null. Only the code is held:
+  // the details view fetches the worker's records itself, so what is shown is
+  // always read fresh from the database rather than from a row that may have
+  // been sitting in this list since before someone else edited it.
+  const [detailCode, setDetailCode] = useState(null)
   const [formError, setFormError] = useState(null)
   const [feedback, setFeedback] = useState(null)
   const [listError, setListError] = useState(null)
@@ -205,20 +186,44 @@ function EmployeeList() {
   }, [])
 
   // One action owns the interface at a time. An open form, a write already
-  // in flight, and an open delete confirmation each block the others.
+  // in flight, an open delete confirmation and an open details view each
+  // block the others.
   //
   // Checked here as well as through the `disabled` attribute on the buttons,
   // so a forced click, a very fast double click, or anything else that
   // bypasses the markup still cannot start a second, conflicting action.
   // Search, sorting and the status filter are deliberately not blocked -
   // they only change what is displayed and mutate nothing.
+  //
+  // Details are read-only, so including them is not about protecting the
+  // database. It is about the interface staying one thing at a time: opening
+  // details over a half-filled form or an open deletion confirmation would
+  // hide the decision the supervisor was in the middle of, and starting a
+  // write from behind an open details view would act on a worker whose row
+  // is not on screen.
   function anotherActionIsOpen() {
     return (
       formMode !== null ||
       saving ||
       pendingCode !== null ||
-      confirmingDelete !== null
+      confirmingDelete !== null ||
+      detailCode !== null
     )
+  }
+
+  function openDetails(employee) {
+    if (anotherActionIsOpen()) {
+      return
+    }
+    setDetailCode(employee.employee_code)
+    setFeedback(null)
+  }
+
+  function closeDetails() {
+    // The details view unmounts, which cancels any request still in flight
+    // inside it. Search text, sorting and the status filter live out here and
+    // are not touched, so the list comes back exactly as it was left.
+    setDetailCode(null)
   }
 
   function openCreateForm() {
@@ -524,6 +529,25 @@ function EmployeeList() {
     )
   }
 
+  // The details view replaces the table rather than sitting above it, so a
+  // narrow screen shows one readable thing instead of two competing ones.
+  // Nothing about the list is unmounted conceptually - its search, sort and
+  // filter state is component state out here, untouched while details are
+  // open and still in place when Back closes them.
+  //
+  // `key` is the employee code on purpose: opening a different worker mounts
+  // a brand-new details component rather than reusing the last one, so no
+  // state - and no request in flight - can survive from the previous worker.
+  if (detailCode !== null) {
+    return (
+      <EmployeeDetails
+        key={detailCode}
+        employeeCode={detailCode}
+        onClose={closeDetails}
+      />
+    )
+  }
+
   const query = searchText.trim().toLowerCase()
 
   // filter() returns a new array, so the sort below never reorders the
@@ -564,9 +588,15 @@ function EmployeeList() {
         Permanently delete {confirmingDelete.full_name} (
         {confirmingDelete.employee_code})?
       </h3>
+      {/* What the supervisor is about to lose, in their own terms. It named
+          courses and class meetings, which is the old storage model and left
+          out the semester timetables and class blocks that actually hold a
+          worker's classes now. The exact records removed are reported
+          afterwards by describeRemoved(); this warning says what it means. */}
       <p className="table-note">
-        This removes their profile, courses, class meetings, shift preferences
-        and approved leave from the database for good. It cannot be undone.
+        This removes their profile, every semester timetable and class they
+        have on record, their shift preferences and their approved leave from
+        the database for good. It cannot be undone.
       </p>
       <p className="table-note">
         Their employee ID, {confirmingDelete.employee_code}, is retired. New
@@ -839,22 +869,31 @@ function EmployeeList() {
                   <td>{employee.is_active ? 'Active' : 'Inactive'}</td>
                   <td>{studentTypeLabel(employee)}</td>
                   <td>{employee.class_block_count}</td>
-                  <td>{TIMETABLE_LABELS[employee.timetable_status] ?? employee.timetable_status}</td>
+                  <td>{timetableLabel(employee.timetable_status)}</td>
                   <td>{employee.weekly_class_hours}</td>
                   <td>{employee.weekly_hour_limit} h</td>
                   <td>{employee.assigned_hours} h</td>
                   <td>{employee.remaining_capacity_hours} h</td>
                   <td>{employee.approved_leave_count}</td>
                   <td>
+                    {/* Every row's button reads the same, so the accessible
+                        name carries which worker it opens. */}
+                    <button
+                      type="button"
+                      onClick={() => openDetails(employee)}
+                      disabled={anotherActionIsOpen()}
+                      aria-label={`View details for ${employee.full_name}`}
+                    >
+                      View details
+                    </button>{' '}
                     <button
                       type="button"
                       onClick={() => openEditForm(employee)}
                       disabled={anotherActionIsOpen()}
+                      aria-label={`Edit ${employee.full_name}`}
                     >
                       Edit
                     </button>{' '}
-                    {/* Every row's button reads the same, so the accessible
-                        name carries which worker it acts on. */}
                     <button
                       type="button"
                       onClick={() => handleStatusChange(employee, !employee.is_active)}
