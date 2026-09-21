@@ -53,6 +53,7 @@ from eligibility import (
     UnknownExcludedWorker,
     shift_coverage,
 )
+from optimizer import DraftNotOptimal, WeekNotPrepared, generate_draft
 from scheduling import get_week_schedule, prepare_week
 from synthetic_data import WEEK_START, WEEK_END
 import weeks
@@ -646,6 +647,41 @@ def get_schedule_week(week_start: str):
         return get_week_schedule(connection, week_start)
     except weeks.InvalidWeekStart as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+    except InvalidWorkDuration as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Stored shift data is invalid: {error}",
+        ) from error
+    finally:
+        connection.close()
+
+
+@app.post("/api/schedule/weeks/{week_start}/draft")
+def draft_schedule_week(week_start: str):
+    """Compute (never store) a coverage-maximizing draft for one Monday week.
+
+    Read-only and computational: every existing assignment is preserved
+    exactly, and only currently unfilled required-staff positions receive a
+    proposal, using Phase 6's own `eligibility.evaluate_shift_eligibility`
+    for every hard rule (see `optimizer.py`). `week_start` must be a real,
+    strictly-formatted 'YYYY-MM-DD' Monday, or this is a 400 with a string
+    `detail` (D033). A week with no prepared shifts is a 409 - this never
+    prepares one on its own. Every optimization tier must solve to a proven
+    OPTIMAL status; anything else (a timeout, `FEASIBLE`, `INFEASIBLE`,
+    `UNKNOWN`) is a 503 rather than an unproven draft presented as an
+    optimized one. See `optimizer.generate_draft` for the full response
+    shape. Nothing here is bound, approved or persisted; that is Phase 7
+    increment 3's scope.
+    """
+    connection = get_connection()
+    try:
+        return generate_draft(connection, week_start)
+    except weeks.InvalidWeekStart as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except WeekNotPrepared as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except DraftNotOptimal as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     except InvalidWorkDuration as error:
         raise HTTPException(
             status_code=500,
