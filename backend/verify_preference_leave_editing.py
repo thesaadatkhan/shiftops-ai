@@ -177,6 +177,25 @@ def check_preference_lifecycle():
         "a body missing preference is refused",
     )
 
+    # A non-string preference (e.g. a list) used to escape as an unhandled
+    # TypeError from `value not in VALID_PREFERENCES` - `in` on a set tries
+    # to hash its operand. One representative wrong-type case is enough; a
+    # list, a dict, a number and a boolean all fail the same `isinstance`
+    # guard, so this is not a case worth multiplying.
+    error = expect_status(
+        400,
+        lambda: main.set_shift_preference("SW-001", shift_id, {"preference": []}),
+        "a non-string preference value is a clean 400, not a crash",
+    )
+    check(
+        error is not None and isinstance(error.detail, str),
+        "with a string-valued detail",
+    )
+    check(
+        preferences_of("SW-001") == [],
+        "and the stored preference for this shift is unchanged (still absent)",
+    )
+
     expect_status(
         404,
         lambda: main.set_shift_preference("SW-001", 999999, {"preference": "low"}),

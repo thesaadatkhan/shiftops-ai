@@ -571,6 +571,22 @@ def run():
         )
         check(status == 400, f"an invalid preference value is a real HTTP 400 ({status})")
 
+        # A non-string preference used to raise an unhandled TypeError
+        # (`in` on a set tries to hash its operand) instead of a clean 400.
+        status, _, body = request(
+            "PUT",
+            f"/api/employees/SW-001/preferences/{shift_id}",
+            {"preference": []},
+        )
+        check(
+            status == 400,
+            f"a non-string preference value is a real HTTP 400, not a 500 ({status})",
+        )
+        check(
+            isinstance(json.loads(body).get("detail"), str),
+            "with a string-valued detail",
+        )
+
         # ------------------------------------------- 404 (unknown shift)
         status, _, body = request(
             "PUT",

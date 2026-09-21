@@ -57,7 +57,11 @@ def clean_preference(payload):
     if not isinstance(payload, dict):
         raise PreferenceValidationError("Expected an object with preference.")
     value = payload.get("preference")
-    if value not in VALID_PREFERENCES:
+    # The type check must come first: `in` on a set tries to hash its
+    # operand, and an unhashable value (a list, a dict) raised TypeError
+    # here instead of the intended PreferenceValidationError, escaping
+    # `run_employee_action`'s mapping as an unhandled 500.
+    if not isinstance(value, str) or value not in VALID_PREFERENCES:
         raise PreferenceValidationError(
             "preference must be one of 'preferred', 'low' or 'neutral'."
         )

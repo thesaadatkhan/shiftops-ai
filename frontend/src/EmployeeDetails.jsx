@@ -747,13 +747,25 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     openAction({ kind: 'confirm-semester', semester })
   }
 
-  function startSetPreference(shiftId, currentPreference) {
+  function startSetPreference() {
+    // General Set: no shift preselected, the picker stays enabled so the
+    // supervisor can choose any existing shift, including a neutral one.
     openAction(
       { kind: 'set-preference' },
+      { preference: { shift_id: '', preference: 'preferred' } },
+    )
+  }
+
+  function startChangePreference(shiftId, currentPreference) {
+    // Row-level Change: locked to the shift this row is already about. The
+    // form must never let this action be resubmitted against a different
+    // shift - see D043's row-level-lock correction.
+    openAction(
+      { kind: 'change-preference' },
       {
         preference: {
-          shift_id: shiftId === undefined ? '' : String(shiftId),
-          preference: currentPreference ?? 'preferred',
+          shift_id: String(shiftId),
+          preference: currentPreference,
         },
       },
     )
@@ -1168,57 +1180,82 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     </div>
   )
 
-  const renderPreferenceForm = () => (
-    <form className="employee-form" onSubmit={savePreference}>
-      <h5>Set a shift preference</h5>
-      <div className="list-controls">
-        <label htmlFor="preference-shift">Shift</label>
-        <select
-          id="preference-shift"
-          value={preferenceForm.shift_id}
-          onChange={(event) =>
-            setPreferenceForm({ ...preferenceForm, shift_id: event.target.value })
-          }
-        >
-          <option value="" disabled>
-            Choose a shift
-          </option>
-          {shifts.map((shift) => (
-            <option key={shift.id} value={String(shift.id)}>
-              {describeShift(shift)}
-            </option>
-          ))}
-        </select>
-        <label htmlFor="preference-level">Preference</label>
-        <select
-          id="preference-level"
-          value={preferenceForm.preference}
-          onChange={(event) =>
-            setPreferenceForm({ ...preferenceForm, preference: event.target.value })
-          }
-        >
-          <option value="preferred">Preferred</option>
-          <option value="low">Low preference</option>
-          <option value="neutral">Neutral (no preference)</option>
-        </select>
-        <button type="submit" disabled={saving || preferenceForm.shift_id === ''}>
-          {saving ? 'Saving...' : 'Save'}
-        </button>
-        <button type="button" onClick={closeAction} disabled={saving}>
-          Cancel
-        </button>
-      </div>
-      <p className="table-note">
-        Preferences are soft: a low-preference shift is still one the worker
-        can be assigned to, and a preferred one is not a claim on it. Neutral
-        removes any stored preference for this shift rather than recording a
-        third value. This does not create a shift or a recurring template.
-      </p>
-      {formError !== null && (
-        <p className="backend-status backend-status-error">{formError}</p>
-      )}
-    </form>
-  )
+  const renderPreferenceForm = () => {
+    // Two distinct modes share this form. General Set lets the supervisor
+    // pick any shift. Row-level Change is locked to the shift it was opened
+    // for - the selector is replaced with a static display of that shift, so
+    // there is no control that could resubmit the action against a
+    // different one (the earlier version left the <select> editable while
+    // preselecting a row's shift, which let Save silently retarget it).
+    const locked = action.kind === 'change-preference'
+    const lockedShift = locked
+      ? shifts.find((shift) => String(shift.id) === preferenceForm.shift_id)
+      : undefined
+
+    return (
+      <form className="employee-form" onSubmit={savePreference}>
+        <h5>
+          {locked
+            ? `Change the preference for ${lockedShift ? describeShift(lockedShift) : `shift ${preferenceForm.shift_id}`}`
+            : 'Set a shift preference'}
+        </h5>
+        <div className="list-controls">
+          {locked ? (
+            <p className="table-note">
+              Shift: {lockedShift ? describeShift(lockedShift) : preferenceForm.shift_id}
+            </p>
+          ) : (
+            <>
+              <label htmlFor="preference-shift">Shift</label>
+              <select
+                id="preference-shift"
+                value={preferenceForm.shift_id}
+                onChange={(event) =>
+                  setPreferenceForm({ ...preferenceForm, shift_id: event.target.value })
+                }
+              >
+                <option value="" disabled>
+                  Choose a shift
+                </option>
+                {shifts.map((shift) => (
+                  <option key={shift.id} value={String(shift.id)}>
+                    {describeShift(shift)}
+                  </option>
+                ))}
+              </select>
+            </>
+          )}
+          <label htmlFor="preference-level">Preference</label>
+          <select
+            id="preference-level"
+            value={preferenceForm.preference}
+            onChange={(event) =>
+              setPreferenceForm({ ...preferenceForm, preference: event.target.value })
+            }
+          >
+            <option value="preferred">Preferred</option>
+            <option value="low">Low preference</option>
+            <option value="neutral">Neutral (no preference)</option>
+          </select>
+          <button type="submit" disabled={saving || preferenceForm.shift_id === ''}>
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+          <button type="button" onClick={closeAction} disabled={saving}>
+            Cancel
+          </button>
+        </div>
+        <p className="table-note">
+          Preferences are soft: a low-preference shift is still one the worker
+          can be assigned to, and a preferred one is not a claim on it. Neutral
+          removes any stored preference for this shift rather than recording a
+          third value. This does not create a shift or a recurring template.
+        </p>
+        {formError !== null && (
+          <p className="backend-status backend-status-error">{formError}</p>
+        )}
+      </form>
+    )
+  }
 
   const renderLeaveForm = () => (
     <form className="employee-form" onSubmit={saveLeave}>
@@ -1303,6 +1340,7 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
           'delete-block': renderDeleteBlock,
           'confirm-semester': renderConfirmSemester,
           'set-preference': renderPreferenceForm,
+          'change-preference': renderPreferenceForm,
           'add-leave': renderLeaveForm,
           'edit-leave': renderLeaveForm,
           'delete-leave': renderDeleteLeave,
@@ -1431,7 +1469,9 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
         </button>
       </div>
 
-      {action !== null && action.kind === 'set-preference' && openPanel}
+      {action !== null &&
+        (action.kind === 'set-preference' || action.kind === 'change-preference') &&
+        openPanel}
 
       {shift_preferences.length === 0 ? (
         <p className="backend-status backend-status-loading">
@@ -1466,7 +1506,7 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
                   <td>
                     <button
                       type="button"
-                      onClick={() => startSetPreference(row.shift_id, row.preference)}
+                      onClick={() => startChangePreference(row.shift_id, row.preference)}
                       disabled={busy()}
                       aria-label={`Change the preference for ${row.hall} ${row.start_datetime} to ${row.end_datetime}`}
                     >
