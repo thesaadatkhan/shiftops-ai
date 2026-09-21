@@ -32,6 +32,13 @@ Checks:
     are cleared when a supervisor supplies the semester's dates.
 14. Unrelated workers and records are left byte-for-byte unchanged.
 15. The employee list's summaries and readiness follow the edits.
+16. Explicit supervisor confirmation: a populated timetable, deliberate
+    confirmed-no-classes, refusal without the no-classes acknowledgement,
+    unknown/cross-worker ownership, malformed and stale request bodies,
+    accepting provisional dates as correct, idempotent reconfirmation,
+    persistence, confirmation withdrawn by a later edit, unrelated data left
+    unchanged, transaction rollback, and independence from active/inactive
+    status.
 
 Run with:  python verify_timetable_editing.py
 Exits non-zero if any check fails.
@@ -907,6 +914,415 @@ def check_confirmation_invalidation():
 
 
 # --------------------------------------------------------------------------
+# 16. Explicit supervisor confirmation of a semester timetable.
+# --------------------------------------------------------------------------
+def semester_row(code, schedule_id):
+    return next(s for s in semesters_of(code) if s["id"] == schedule_id)
+
+
+def block_snapshot(semester):
+    """The exact-class-snapshot shape `confirm_schedule` now requires."""
+    return [
+        {
+            "id": block["id"],
+            "day_of_week": block["day_of_week"],
+            "start_time": block["start_time"],
+            "end_time": block["end_time"],
+        }
+        for block in semester["class_blocks"]
+    ]
+
+
+def check_confirmation():
+    connection = fresh_database()
+    add_worker(connection, "SW-001", "Maria Alvarez")
+    add_worker(connection, "SW-002", "Jordan Kim")
+    connection.close()
+    path = database.DATABASE_PATH
+
+    schedule_id = main.add_semester(
+        "SW-001", {"start_date": "2026-08-24", "end_date": "2026-12-11"}
+    )["id"]
+    main.add_class_block(
+        "SW-001", schedule_id, {"day_of_week": 0, "start_time": "09:00", "end_time": "10:15"}
+    )
+
+    # --- creating a semester, or adding/removing its only class, never
+    # implies confirmation. ------------------------------------------------
+    check(
+        semester_row("SW-001", schedule_id)["confirmed_at"] is None,
+        "creating a semester with a class never confirms it",
+    )
+    solo = main.add_class_block(
+        "SW-001", schedule_id, {"day_of_week": 4, "start_time": "11:00", "end_time": "12:00"}
+    )
+    main.remove_class_block("SW-001", schedule_id, solo["id"])
+    check(
+        semester_row("SW-001", schedule_id)["confirmed_at"] is None,
+        "adding then removing a class never confirms the semester either",
+    )
+
+    # --- confirming a populated timetable ----------------------------------
+    snapshot_1 = block_snapshot(semester_row("SW-001", schedule_id))
+    result = main.confirm_semester(
+        "SW-001",
+        schedule_id,
+        {
+            "start_date": "2026-08-24",
+            "end_date": "2026-12-11",
+            "class_blocks": snapshot_1,
+            "acknowledge_no_classes": False,
+        },
+    )
+    check(result["id"] == schedule_id, "confirming returns the schedule's id")
+    check(result["confirmed_at"] is not None, "and a real confirmation timestamp")
+    check(result["dates_provisional"] is False, "and reports dates_provisional as false")
+    check(result["class_count"] == 1, "and the confirmed class count")
+    check(
+        semester_row("SW-001", schedule_id)["confirmed_at"] is not None,
+        "the stored semester is now confirmed",
+    )
+    status = main.get_employee_details("SW-001")["employee"]["timetable_status"]
+    check(
+        status in ("confirmed", "partial"),
+        f"the worker's readiness reflects the confirmation ({status})",
+    )
+
+    # --- a stale class SNAPSHOT is a conflict even when the count matches --
+    # Codex-reported gap: a class moving to a different day/time while the
+    # count stays the same must still be caught. Withdraw and reconfirm to
+    # set up a clean precondition, then edit the block without touching the
+    # count, then try to confirm with the OLD snapshot.
+    main.edit_semester(
+        "SW-001", schedule_id, {"start_date": "2026-08-24", "end_date": "2026-12-11"}
+    )
+    stale_snapshot = block_snapshot(semester_row("SW-001", schedule_id))
+    moved_block_id = stale_snapshot[0]["id"]
+    main.edit_class_block(
+        "SW-001",
+        schedule_id,
+        moved_block_id,
+        {"day_of_week": 2, "start_time": "15:00", "end_time": "16:00"},
+    )
+    check(
+        len(semester_row("SW-001", schedule_id)["class_blocks"]) == len(stale_snapshot),
+        "the class count is unchanged after the edit (setup for the stale-snapshot check)",
+    )
+    expect_status(
+        409,
+        lambda: main.confirm_semester(
+            "SW-001",
+            schedule_id,
+            {
+                "start_date": "2026-08-24",
+                "end_date": "2026-12-11",
+                "class_blocks": stale_snapshot,
+                "acknowledge_no_classes": False,
+            },
+        ),
+        "confirming a stale class snapshot is refused even though the count still matches",
+    )
+    check(
+        semester_row("SW-001", schedule_id)["confirmed_at"] is None,
+        "and nothing was confirmed - the moved-class edit's own withdrawal still stands",
+    )
+    # Confirming the CURRENT snapshot succeeds.
+    current_snapshot = block_snapshot(semester_row("SW-001", schedule_id))
+    main.confirm_semester(
+        "SW-001",
+        schedule_id,
+        {
+            "start_date": "2026-08-24",
+            "end_date": "2026-12-11",
+            "class_blocks": current_snapshot,
+            "acknowledge_no_classes": False,
+        },
+    )
+    check(
+        semester_row("SW-001", schedule_id)["confirmed_at"] is not None,
+        "confirming the classes actually shown succeeds",
+    )
+
+    # --- a second semester, to exercise the deliberate no-classes path -----
+    other_id = main.add_semester(
+        "SW-001", {"start_date": "2027-01-11", "end_date": "2027-05-07"}
+    )["id"]
+
+    expect_status(
+        400,
+        lambda: main.confirm_semester(
+            "SW-001",
+            other_id,
+            {
+                "start_date": "2027-01-11",
+                "end_date": "2027-05-07",
+                "class_blocks": [],
+                "acknowledge_no_classes": False,
+            },
+        ),
+        "confirming an empty semester without acknowledge_no_classes is refused",
+    )
+    check(
+        semester_row("SW-001", other_id)["confirmed_at"] is None,
+        "and it remains unconfirmed",
+    )
+
+    empty_result = main.confirm_semester(
+        "SW-001",
+        other_id,
+        {
+            "start_date": "2027-01-11",
+            "end_date": "2027-05-07",
+            "class_blocks": [],
+            "acknowledge_no_classes": True,
+        },
+    )
+    check(
+        empty_result["confirmed_at"] is not None and empty_result["class_count"] == 0,
+        "the deliberate no-classes acknowledgement confirms an empty semester",
+    )
+
+    expect_status(
+        400,
+        lambda: main.confirm_semester(
+            "SW-001",
+            schedule_id,
+            {
+                "start_date": "2026-08-24",
+                "end_date": "2026-12-11",
+                "class_blocks": current_snapshot,
+                "acknowledge_no_classes": True,
+            },
+        ),
+        "acknowledge_no_classes cannot be true when classes are actually stored",
+    )
+
+    # --- stale dates is a conflict, never a silent confirm ------------------
+    expect_status(
+        409,
+        lambda: main.confirm_semester(
+            "SW-001",
+            schedule_id,
+            {
+                "start_date": "2026-08-25",
+                "end_date": "2026-12-11",
+                "class_blocks": current_snapshot,
+                "acknowledge_no_classes": False,
+            },
+        ),
+        "confirming with stale dates is a 409",
+    )
+
+    # --- malformed, missing and wrong-shaped bodies - a few representative
+    # shapes, not a permutation of every field. -----------------------------
+    bad_bodies = [
+        ("None", None),
+        ("a list", []),
+        ("missing start_date", {"end_date": "2026-12-11", "class_blocks": []}),
+        (
+            "class_blocks not a list",
+            {"start_date": "2026-08-24", "end_date": "2026-12-11", "class_blocks": "none"},
+        ),
+        (
+            "a class_blocks entry missing id",
+            {
+                "start_date": "2026-08-24",
+                "end_date": "2026-12-11",
+                "class_blocks": [{"day_of_week": 0, "start_time": "09:00", "end_time": "10:15"}],
+            },
+        ),
+        (
+            "a non-boolean acknowledge_no_classes",
+            {
+                "start_date": "2026-08-24",
+                "end_date": "2026-12-11",
+                "class_blocks": current_snapshot,
+                "acknowledge_no_classes": "yes",
+            },
+        ),
+    ]
+    for label, bad_payload in bad_bodies:
+        expect_status(
+            400,
+            lambda bad_payload=bad_payload: main.confirm_semester(
+                "SW-001", schedule_id, bad_payload
+            ),
+            f"a confirmation body that is {label} is refused, not confirmed",
+        )
+    check(
+        semester_row("SW-001", schedule_id)["confirmed_at"] is not None,
+        "the malformed attempts above left the earlier confirmation standing",
+    )
+
+    # --- unknown employee, unknown semester, cross-worker ownership --------
+    valid_body = {
+        "start_date": "2026-08-24",
+        "end_date": "2026-12-11",
+        "class_blocks": current_snapshot,
+        "acknowledge_no_classes": False,
+    }
+    expect_status(
+        404,
+        lambda: main.confirm_semester("SW-999", schedule_id, valid_body),
+        "confirming for an unknown employee is a 404",
+    )
+    expect_status(
+        404,
+        lambda: main.confirm_semester("SW-001", 999999, valid_body),
+        "confirming an unknown schedule id is a 404",
+    )
+    expect_status(
+        404,
+        lambda: main.confirm_semester("SW-002", schedule_id, valid_body),
+        "confirming another worker's schedule id is a 404, not a 403",
+    )
+
+    # --- editing after confirmation withdraws it, through the real routes --
+    main.edit_semester(
+        "SW-001", schedule_id, {"start_date": "2026-08-24", "end_date": "2026-12-18"}
+    )
+    check(
+        semester_row("SW-001", schedule_id)["confirmed_at"] is None,
+        "editing a confirmed semester's dates withdraws the confirmation",
+    )
+    # Re-confirm the new dates for the checks that follow.
+    reconfirm_snapshot = block_snapshot(semester_row("SW-001", schedule_id))
+    main.confirm_semester(
+        "SW-001",
+        schedule_id,
+        {
+            "start_date": "2026-08-24",
+            "end_date": "2026-12-18",
+            "class_blocks": reconfirm_snapshot,
+            "acknowledge_no_classes": False,
+        },
+    )
+
+    # --- repeated confirmation: idempotent success, not a refusal. Stored
+    # timestamps have minute precision (D025), so a second confirmation may
+    # legitimately record the SAME timestamp - only that it succeeds is
+    # asserted here, not that it visibly changes. -----------------------
+    reconfirmed = main.confirm_semester(
+        "SW-001",
+        schedule_id,
+        {
+            "start_date": "2026-08-24",
+            "end_date": "2026-12-18",
+            "class_blocks": reconfirm_snapshot,
+            "acknowledge_no_classes": False,
+        },
+    )
+    check(
+        reconfirmed["confirmed_at"] is not None,
+        "reconfirming identical, already-confirmed content succeeds "
+        "(idempotent success, not a refusal)",
+    )
+
+    # --- persistence across a fresh connection ------------------------------
+    reopened = database.get_connection(path)
+    row = stored(reopened, schedule_id)
+    check(
+        row["confirmed_at"] is not None and row["dates_provisional"] == 0,
+        "the confirmation survives reopening the database",
+    )
+    reopened.close()
+
+    # --- unrelated data is left byte-for-byte unchanged by a confirmation --
+    before_conn = database.get_connection(path)
+    before = {table: snapshot(before_conn)[table] for table in SNAPSHOT_TABLES}
+    before_conn.close()
+
+    main.confirm_semester(
+        "SW-001",
+        schedule_id,
+        {
+            "start_date": "2026-08-24",
+            "end_date": "2026-12-18",
+            "class_blocks": reconfirm_snapshot,
+            "acknowledge_no_classes": False,
+        },
+    )
+
+    after_conn = database.get_connection(path)
+    after = {table: snapshot(after_conn)[table] for table in SNAPSHOT_TABLES}
+    after_conn.close()
+
+    for table in SNAPSHOT_TABLES:
+        if table == "semester_schedules":
+            continue
+        check(
+            before[table] == after[table],
+            f"confirming a semester leaves {table} byte-for-byte unchanged",
+        )
+
+    def without_confirmed_at(rows):
+        # column order: id, employee_id, start_date, end_date, confirmed_at,
+        # dates_provisional (see database.py's semester_schedules DDL).
+        return {row[0]: row[:4] + row[5:] for row in rows}
+
+    check(
+        without_confirmed_at(before["semester_schedules"])
+        == without_confirmed_at(after["semester_schedules"]),
+        "and every semester row is unchanged apart from the reconfirmed row's timestamp",
+    )
+    check(
+        len(before["employees"]) == len(after["employees"]) == 2,
+        "SW-002, who owns none of this, is completely untouched",
+    )
+
+    # --- transaction rollback on failure -------------------------------
+    import timetables
+
+    raw = database.get_connection(path)
+    failing = FailingConnection(raw, "UPDATE semester_schedules SET confirmed_at")
+    before_rollback = stored(raw, other_id)
+    try:
+        timetables.confirm_schedule(
+            failing,
+            "SW-001",
+            other_id,
+            {
+                "start_date": "2027-01-11",
+                "end_date": "2027-05-07",
+                "class_blocks": [],
+                "acknowledge_no_classes": True,
+            },
+        )
+        check(False, "the injected failure while confirming propagated")
+    except sqlite3.OperationalError:
+        check(True, "the injected failure while confirming propagated")
+    raw.close()
+
+    after_rollback_conn = database.get_connection(path)
+    after_rollback = stored(after_rollback_conn, other_id)
+    after_rollback_conn.close()
+    check(
+        tuple(before_rollback) == tuple(after_rollback),
+        "a failure inside the confirmation transaction leaves the row unchanged",
+    )
+
+    # --- active/inactive status is independent of timetable confirmation ---
+    main.deactivate_employee("SW-001")
+    check(
+        semester_row("SW-001", schedule_id)["confirmed_at"] is not None,
+        "deactivating a worker does not disturb an existing confirmation",
+    )
+    main.reactivate_employee("SW-001")
+    other_confirmed = main.confirm_semester(
+        "SW-001", other_id, {
+            "start_date": "2027-01-11",
+            "end_date": "2027-05-07",
+            "class_blocks": [],
+            "acknowledge_no_classes": True,
+        },
+    )
+    check(
+        other_confirmed["confirmed_at"] is not None,
+        "confirming an inactive-then-reactivated worker's semester still works",
+    )
+
+
+# --------------------------------------------------------------------------
 # 13. Provisional dates survive block edits; supplying dates clears them.
 # --------------------------------------------------------------------------
 def migrated_fixture():
@@ -1026,6 +1442,53 @@ def check_provisional_provenance():
         "source_note" not in serialized and database.MIGRATION_NOTE_PREFIX not in serialized,
         "and no migration note text appears in the response",
     )
+
+
+def check_confirmation_provisional():
+    """Confirming accepts migrated (provisional) dates as correct.
+
+    Uses its own migrated fixture, like `check_provisional_provenance`: the
+    migration path only exists through `migrated_fixture()`, which builds a
+    fresh database of its own.
+    """
+    migrated_fixture()
+    semester = semesters_of("SW-001")[0]
+    check(
+        semester["dates_provisional"] is True,
+        "the migrated fixture's dates start out provisional",
+    )
+    schedule_id = semester["id"]
+
+    confirmed = main.confirm_semester(
+        "SW-001",
+        schedule_id,
+        {
+            "start_date": semester["start_date"],
+            "end_date": semester["end_date"],
+            "class_blocks": block_snapshot(semester),
+            "acknowledge_no_classes": False,
+        },
+    )
+    check(
+        confirmed["dates_provisional"] is False,
+        "confirming accepts the migrated dates as correct and clears the flag",
+    )
+    check(
+        semesters_of("SW-001")[0]["dates_provisional"] is False,
+        "which is reflected back in the details view",
+    )
+    check(
+        semesters_of("SW-001")[0]["confirmed_at"] is not None,
+        "and the semester is confirmed",
+    )
+
+    reopened = database.get_connection(database.DATABASE_PATH)
+    row = stored(reopened, schedule_id)
+    check(
+        row["confirmed_at"] is not None and row["dates_provisional"] == 0,
+        "both survive reopening the database",
+    )
+    reopened.close()
 
 
 def check_migration_backfill():
@@ -1258,6 +1721,8 @@ def run():
     check_ownership_and_unknowns()
     check_rollback()
     check_confirmation_invalidation()
+    check_confirmation()
+    check_confirmation_provisional()
     check_provisional_provenance()
     check_migration_backfill()
     check_isolation_and_summaries()

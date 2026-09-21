@@ -38,7 +38,7 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 
   Every write returns errors in one consistent `{"detail": ...}` shape.
 - Frontend/backend integration: when the Dashboard opens it calls `GET /api/health` once and displays the resulting connection status (loading, connected, or unavailable); the Employees section loads the workforce from `GET /api/employees` with the same loading and error handling. CORS is configured on the backend for the local frontend origin.
-- An Employees view listing one summary row per worker: employee ID, name, student type, class-block count, weekly class hours, timetable status, weekly hour limit, and a count of approved leave periods. The details screen shows the records behind those figures and offers semester and class editing. Shift preferences and approved leave can be inspected; their editors are still planned.
+- An Employees view listing one summary row per worker: employee ID, name, student type, class-block count, weekly class hours, timetable status, weekly hour limit, and a count of approved leave periods. The details screen shows the records behind those figures and offers semester and class editing, timetable confirmation, shift-preference editing and approved-leave editing.
 - Class timetables are stored as **semester schedules owned by a worker**, each holding recurring weekly class blocks (a weekday plus a start and end time). Course names are no longer needed to run the application. Class-block counts and class hours count only the classes that actually fall inside the displayed week: a Monday class counts only if that Monday is within the worker's semester, so a semester starting on the Wednesday does not retrospectively add the Monday and Tuesday. Class hours stay fractional, because a class is 75 or 165 minutes rather than a whole number of hours.
 - Timetable status describes **the week on screen**, not whether a worker ever had a confirmed timetable. A semester confirmed last spring says nothing about October, so it is not reported as confirmed while October is displayed. There are five states:
 
@@ -51,16 +51,16 @@ ShiftOps AI is in early active development. It currently runs locally only and i
   | Confirmed | Confirmed for the whole week |
 
   **Confirmed with no class blocks** means a deliberate "no classes this week", which stays distinct from **Not set up**. This describes timetable readiness only. It is not shift eligibility, which does not exist yet, and it is separate from whether a worker is active.
-- **A details view for one worker**, opened with the View details button on their row and closed with Back to employee list. It shows their basic details, every semester timetable stored for them with its recurring class blocks, their shift preferences and their approved leave. Semester dates and class times can be **edited** here; shift preferences and approved leave are still shown read-only, because their editors are not built yet.
+- **A details view for one worker**, opened with the View details button on their row and closed with Back to employee list. It shows their basic details, every semester timetable stored for them with its recurring class blocks, their shift preferences and their approved leave. Semester dates and class times can be **edited** here, a semester's timetable can be **confirmed**, shift preferences can be **set** on any existing shift, and approved leave can be **added, edited and removed**. This completes Phase 5C's employee-setup editing.
 - **Supervisor entry and editing of semester timetables.** From the details view a supervisor can add a semester with inclusive start and end dates, change those dates, delete a semester behind an explicit confirmation, and add, edit and remove the recurring weekly classes inside it. Entry is entirely structured &mdash; a date picker for the semester, and a weekday plus start and end times for each class. There are no course names, no course IDs, no document uploads and no text for an AI to interpret.
   - The backend is authoritative and validates everything again: real ISO dates with the start on or before the end; no two of a worker's semesters sharing even one calendar date, because the dates are inclusive; a weekday from Monday to Sunday; real 24-hour times; a class that ends after it starts on the same day; and no class duplicating or overlapping another in the same semester, though one class may start exactly when another ends. Each operation runs in a single transaction, so a failure part-way leaves the database exactly as it was.
-  - **Editing a timetable withdraws its confirmation.** Adding, changing or removing a class, or changing a semester's dates, all clear that semester's confirmation, because a supervisor confirmed the timetable they saw rather than the one it has become. Nothing here ever confirms a timetable, including an empty one &mdash; confirming is a separate action that is not built yet, so a freshly entered timetable reads as awaiting confirmation until it exists.
+  - **Editing a timetable withdraws its confirmation, and confirming is a separate, deliberate action.** Adding, changing or removing a class, or changing a semester's dates, all clear that semester's confirmation, because a supervisor confirmed the timetable they saw rather than the one it has become; none of those edits, and none of creating a semester or emptying it, ever confirms anything on their own. A "Confirm timetable" control lets a supervisor confirm a populated semester as complete, and a separate, explicitly checked acknowledgement lets them confirm that a semester genuinely has no classes &mdash; the two are worded apart so neither can be mistaken for the other, and a plain or malformed submission cannot confirm either. Confirming also accepts the semester's current dates as correct, clearing a provisional-dates notice the same way editing the dates does. Confirming the same, unchanged content again is accepted, not refused, and simply records that a supervisor checked again.
   - Semester timetables are listed in date order, with inclusive start and end dates, each semester's **own** confirmation state and timestamp, and its classes as readable weekday, start and end times. A semester's own confirmation is a different question from the Timetable readiness line above it, which describes only the displayed reporting week — a semester confirmed for the spring is genuinely confirmed, and still says nothing about October.
   - Each semester also says exactly how much of the displayed week **its dates** reach: outside it, part of it, or all seven days of it. That is deliberately three states rather than a yes/no, because a semester beginning on the Wednesday overlaps the week without covering it, and two half-semesters can cover the week between them while neither covers it alone. It is a statement about dates only — separate from whether that semester was confirmed, and separate again from the worker's combined readiness across every semester they have.
   - Three easily confused situations are worded apart: **no semester at all** (missing information, not a statement that the worker has no classes), **a semester with no classes that nobody has confirmed** (still missing information), and **a confirmed semester with no classes** (a deliberate "this worker has no classes").
   - Where a timetable was moved across from the older course-based records, the semester dates are labelled **provisional**, because the old records stored no semester dates and the migration had to assume them. That fact is stored on the semester itself, so editing or even deleting every migrated class leaves it standing: losing the last migrated class must not quietly erase the knowledge that nobody chose those dates. Saving the semester's dates is what clears it, because that is a supervisor supplying them. The class days and times themselves were carried across unchanged.
-  - Shift preferences list the hall and the full dated start and end of each shift, so an overnight shift shows both of its dates. Only shifts the worker has expressed a preference about are listed: every other shift is neutral, which is stored as the absence of a preference rather than as a third value, and the view says so rather than listing 99 neutral shifts. Preferences are soft — a low-preference shift is still one the worker can be assigned to.
-  - Approved leave shows the actual dates and times each period covers, with a clear message when none is stored.
+  - Shift preferences list the hall and the full dated start and end of each shift, so an overnight shift shows both of its dates. Only shifts the worker has a stored preference for are listed: every other shift is neutral, which is stored as the absence of a preference rather than as a third value, and the view says so rather than listing 99 neutral shifts. Preferences are soft — a low-preference shift is still one the worker can be assigned to. **Set a shift preference** opens a picker over every existing shift and a preferred/low/neutral choice; choosing neutral deletes the stored row rather than writing a third value, and each stored row also offers **Change** to revisit it. Nothing here creates a shift or a recurring template.
+  - Approved leave shows the actual dates and times each period covers, with a clear message when none is stored, and can be **added, edited and removed**. A period must end after it starts. This is leave that has already been approved, not a request; there is no approval workflow, and saving does not change or remove any assignment — reconciling leave against assignments is Phase 6 work.
   - Opening details does not disturb the list: the search text, sort selection and status filter are all exactly as you left them when you go back. While the details view is open it is the only thing you can act on, and while a form or delete confirmation is open you cannot open details — the same one-action-at-a-time rule the write controls already follow.
 - Adding and editing workers from the Employees view: Add asks for a name and student type, Edit also shows the read-only employee ID, backed by `POST /api/employees` and `PUT /api/employees/{employee_code}`. The backend validates required fields, whitespace-only input and supported student types, returning clear validation and not-found errors. Duplicate IDs cannot arise on Add, because the ID is issued by the backend rather than typed. New workers start active with the 20-hour weekly limit, and no classes, preferences, leave or assignments are invented for them. A worker can be added to a completely empty database without seeding.
 - **An employee ID cannot be changed once the worker exists.** Editing shows the ID read-only and offers the name and student type instead; the backend refuses any edit that submits a different ID, including one that differs only in capitalisation. The ID is what identifies a worker in schedules and reports, so renaming it would make one person appear to be two and could leave the old ID free for accidental reuse. Editing a worker's name or student type keeps their ID, their internal database identity, their active status and all of their classes, preferences, leave and assignments exactly as they were.
@@ -81,7 +81,6 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 - Workforce capacity analytics
 - The AI scheduling agent: multi-step investigation, replacement proposals, supervisor-approved execution, audit history and result verification
 - Cloud deployment
-- The rest of a worker's setup. Semester dates and class times can now be entered and edited, but three things are still missing and employee setup is **not** complete: explicit supervisor confirmation that a timetable is complete (including a deliberate "no classes"), an editor for shift preferences, and an editor for approved leave. Preferences and leave can be inspected but not changed, so the only ones that exist came from the demo data. Until confirmation controls exist, a timetable entered by hand stays "Awaiting confirmation" indefinitely, which is accurate rather than a defect: nobody has confirmed it.
 - Anything that acts on a worker's active status. Deactivating a worker records that status and hides them from the default list view, but no other part of the application reads it yet, because neither the eligibility logic nor the schedule generator exists. Excluding inactive workers from new assignments is a requirement for those later phases, not current behaviour.
 
 ## Running Locally
@@ -156,8 +155,9 @@ python verify_semester_migration.py  # migrating class meetings into semester sc
 python verify_timetable_reporting.py # class summaries and timetable readiness for the reporting week
 python verify_employee_details.py    # the details payload: ownership, semesters, preferences, leave
 python verify_details_http.py        # the details route over a real socket: status codes, JSON, CORS
-python verify_timetable_editing.py   # entering and editing semesters and classes: validation, clashes, rollback, confirmation
-python verify_timetable_editing_http.py # all six editing routes over HTTP, including rejected request bodies
+python verify_timetable_editing.py   # entering, editing and confirming semesters and classes: validation, clashes, rollback, confirmation
+python verify_timetable_editing_http.py # timetable, preference and leave mutation routes over HTTP, including rejected request bodies
+python verify_preference_leave_editing.py # setting shift preferences and editing approved leave: validation, ownership, rollback
 ```
 
 Each script uses its own in-memory or temporary database and never opens
@@ -169,28 +169,30 @@ exercise HTTP routing, wire serialization, or CORS. `verify_details_http.py`
 and `verify_timetable_editing_http.py` start real Uvicorn servers on
 operating-system-assigned free ports against temporary databases. They cover
 routing, status codes, JSON serialization and CORS for the details route and
-the six semester/class mutation routes. The editing checks also verify that
-non-object JSON and missing bodies receive 400 with a string `detail` on all
-four create/update routes, without changing stored records. Malformed JSON
-syntax and invalid path-parameter types remain FastAPI validation errors (422).
+the timetable, confirmation, preference and leave mutation routes. The
+editing checks also verify that non-object JSON and missing bodies receive
+400 with a string `detail` on the create/update routes, without changing
+stored records. Malformed JSON syntax and invalid path-parameter types remain
+FastAPI validation errors (422).
 Migration concurrency checks use separate SQLite connections in threads;
 they cover concurrent execution without guaranteeing a particular interleaving.
 
 ## Planned Capabilities
 
 Development order: Phase 5B employee lifecycle controls are complete, and
-Phase 5C includes automatic employee IDs, the semester/class-block migration, the
-employee-details view and semester/class editing. The rest of Phase 5C -
-timetable confirmation and the preference and leave editors - comes next, then eligibility,
-optimization, reporting and AI. None of those later stages exist yet. Later phases must use the managed workforce
-and confirmed semester data, not fixed demo counts. Full checklists live in
-the project context; public cross-phase requirements are in
-`docs/PROJECT_SPEC.md` section 10.
+**Phase 5C - complete employee setup - is functionally complete**: automatic
+employee IDs, the semester/class-block migration, the employee-details view,
+semester/class editing, timetable confirmation, shift-preference editing and
+approved-leave editing are all built. Eligibility, optimization, reporting and
+AI are next; none of those later stages exist yet. Later phases must use the
+managed workforce and confirmed semester data, not fixed demo counts. Full
+checklists live in the project context; public cross-phase requirements are
+in `docs/PROJECT_SPEC.md` section 10.
 
-Goals for the finished application are listed below. Employee records, shift preferences and approved leave are stored, and the workforce summary and individual details are viewable. Semester and class editing is implemented; timetable confirmation, preference and leave editors, and schedule evaluation and generation remain planned.
+Goals for the finished application are listed below. Employee records, shift preferences and approved leave are stored and editable, and the workforce summary and individual details are viewable. Semester and class editing, timetable confirmation, and preference and leave editing are all implemented; schedule evaluation and generation remain planned.
 
 - Workforce and coverage dashboard
-- Complete employee setup. Supervisor entry of semester dates and recurring class times without course names is **built**. Still to come: explicit confirmation that a timetable is complete, including a deliberate "no classes"; and editing shift preferences and already-approved leave. Incomplete class information will block scheduling until confirmed.
+- Complete employee setup, **built**: supervisor entry of semester dates and recurring class times without course names; explicit confirmation that a timetable is complete, including a deliberate "no classes"; editing shift preferences on any existing shift; and adding, editing and removing approved leave. Incomplete class information will block scheduling until confirmed.
 - Class schedule conflict detection
 - Shift eligibility analysis
 - Automated schedule generation

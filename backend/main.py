@@ -22,12 +22,24 @@ from timetables import (
     TimetableConflict,
     TimetableNotFound,
     TimetableValidationError,
+    confirm_schedule,
     create_block,
     create_schedule,
     delete_block,
     delete_schedule,
     update_block,
     update_schedule,
+)
+from preferences import (
+    LeaveConflict,
+    LeaveNotFound,
+    LeaveValidationError,
+    PreferenceValidationError,
+    ShiftNotFound,
+    add_leave,
+    delete_leave,
+    set_preference,
+    update_leave,
 )
 from reporting import (
     InvalidWorkDuration,
@@ -393,7 +405,7 @@ def employee_detail_payload(connection, employee_code):
     # would mean inventing 99 rows a supervisor never recorded.
     preferences = connection.execute(
         """
-        SELECT p.preference, s.hall, s.start_datetime, s.end_datetime
+        SELECT p.shift_id, p.preference, s.hall, s.start_datetime, s.end_datetime
         FROM shift_preferences p
         JOIN shifts s ON s.id = p.shift_id
         WHERE p.employee_id = ?
@@ -402,8 +414,17 @@ def employee_detail_payload(connection, employee_code):
         (employee_id,),
     ).fetchall()
 
+    # Every existing shift, so a supervisor can set a preference on one that
+    # is currently neutral - which, being the absence of a row, would not
+    # otherwise appear anywhere in this payload. Small (99 rows) and reused
+    # as-is; nothing here creates a shift.
+    all_shifts = connection.execute(
+        "SELECT id, hall, start_datetime, end_datetime FROM shifts"
+        " ORDER BY start_datetime, end_datetime, hall"
+    ).fetchall()
+
     leave = connection.execute(
-        "SELECT start_datetime, end_datetime FROM approved_leave"
+        "SELECT id, start_datetime, end_datetime FROM approved_leave"
         " WHERE employee_id = ? ORDER BY start_datetime, end_datetime",
         (employee_id,),
     ).fetchall()
@@ -448,6 +469,7 @@ def employee_detail_payload(connection, employee_code):
         ],
         "shift_preferences": [
             {
+                "shift_id": row["shift_id"],
                 "preference": row["preference"],
                 "hall": row["hall"],
                 # Full dated start and end, so an overnight shift shows both
@@ -458,8 +480,20 @@ def employee_detail_payload(connection, employee_code):
             }
             for row in preferences
         ],
+        # Every existing shift, for setting a preference on one that is
+        # currently neutral. Not itself a preference record.
+        "shifts": [
+            {
+                "id": row["id"],
+                "hall": row["hall"],
+                "start_datetime": row["start_datetime"],
+                "end_datetime": row["end_datetime"],
+            }
+            for row in all_shifts
+        ],
         "approved_leave": [
             {
+                "id": row["id"],
                 "start_datetime": row["start_datetime"],
                 "end_datetime": row["end_datetime"],
             }
@@ -486,13 +520,15 @@ def get_employee_details(employee_code: str):
 #
 # Addressed by employee code first, then by the id of the record within that
 # worker, so ownership is part of the route rather than something the handler
-# has to remember to check. All six share `run_employee_action`'s error
+# has to remember to check. All seven share `run_employee_action`'s error
 # mapping, so they answer in the same `{"detail": ...}` shape as every other
 # employee route (D033).
 #
-# None of these confirm a timetable. Confirmation controls are the next
-# increment; here, every change that alters what a timetable says withdraws
-# any confirmation it had.
+# Six of these change what a timetable says, and withdraw any confirmation it
+# had. The seventh, `confirm_schedule`, is the only one that ever grants
+# confirmation, and only when the caller submits the semester's current dates
+# and exact class blocks back for the backend to check against what is
+# actually stored.
 # --------------------------------------------------------------------------
 
 
@@ -558,6 +594,69 @@ def remove_class_block(employee_code: str, schedule_id: int, block_id: int):
     )
 
 
+@app.post("/api/employees/{employee_code}/semesters/{schedule_id}/confirm")
+def confirm_semester(
+    employee_code: str, schedule_id: int, payload: Annotated[Any, Body()] = None
+):
+    """Confirm that one semester's timetable, as currently stored, is complete.
+
+    The caller must submit the semester's current dates and exact class blocks back;
+    `confirm_schedule` checks them against what is actually stored before
+    granting confirmation, so a stale or malformed request cannot confirm
+    content nobody has actually seen. See `timetables.confirm_schedule` for
+    the full contract, including the deliberate no-classes acknowledgement.
+    """
+    return run_employee_action(
+        lambda connection: confirm_schedule(
+            connection, employee_code, schedule_id, payload
+        )
+    )
+
+
+# --------------------------------------------------------------------------
+# Shift preferences and approved leave (final Phase 5C functional batch).
+#
+# Preferences are addressed by employee code and shift id - there is no
+# separate preference id, because a worker can hold at most one preference
+# per shift (the table's own unique constraint). Leave is addressed by
+# employee code and its own id, the same shape semesters use.
+# --------------------------------------------------------------------------
+
+
+@app.put("/api/employees/{employee_code}/preferences/{shift_id}")
+def set_shift_preference(
+    employee_code: str, shift_id: int, payload: Annotated[Any, Body()] = None
+):
+    return run_employee_action(
+        lambda connection: set_preference(connection, employee_code, shift_id, payload)
+    )
+
+
+@app.post("/api/employees/{employee_code}/leave", status_code=201)
+def add_approved_leave(
+    employee_code: str, payload: Annotated[Any, Body()] = None
+):
+    return run_employee_action(
+        lambda connection: add_leave(connection, employee_code, payload)
+    )
+
+
+@app.put("/api/employees/{employee_code}/leave/{leave_id}")
+def edit_approved_leave(
+    employee_code: str, leave_id: int, payload: Annotated[Any, Body()] = None
+):
+    return run_employee_action(
+        lambda connection: update_leave(connection, employee_code, leave_id, payload)
+    )
+
+
+@app.delete("/api/employees/{employee_code}/leave/{leave_id}")
+def remove_approved_leave(employee_code: str, leave_id: int):
+    return run_employee_action(
+        lambda connection: delete_leave(connection, employee_code, leave_id)
+    )
+
+
 def employee_response(row):
     """The stored row as the frontend sees it after a save."""
     return {
@@ -609,6 +708,20 @@ def run_employee_action(action):
     except TimetableConflict as error:
         # 409: well-formed, but it clashes with what is already stored - an
         # overlapping semester, or a duplicate or overlapping class. Nothing
+        # was written; the transaction rolled back.
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except PreferenceValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ShiftNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except LeaveValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except LeaveNotFound as error:
+        # 404. Another worker's real leave id lands here too, for the same
+        # not-found-not-forbidden reason as timetable records.
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except LeaveConflict as error:
+        # 409: the exact period is already recorded for this worker. Nothing
         # was written; the transaction rolled back.
         raise HTTPException(status_code=409, detail=str(error)) from error
     finally:

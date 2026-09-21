@@ -1,4 +1,5 @@
-"""HTTP checks for the six semester/class-editing routes, over a real socket.
+"""HTTP checks for the timetable, preference and leave mutation routes, over
+a real socket.
 
 `verify_timetable_editing.py` covers exhaustive domain validation - every
 date rule, every overlap case, every ownership check - by calling the
@@ -19,11 +20,28 @@ enough to prove the transport contract holds for every route:
   POST   /api/employees/{code}/semesters/{id}/blocks             -> 201
   PUT    /api/employees/{code}/semesters/{id}/blocks/{id}        -> 200
   DELETE /api/employees/{code}/semesters/{id}/blocks/{id}        -> 200
+  POST   /api/employees/{code}/semesters/{id}/confirm            -> 200
+  PUT    /api/employees/{code}/preferences/{shift_id}             -> 200
+  POST   /api/employees/{code}/leave                              -> 201
+  PUT    /api/employees/{code}/leave/{id}                         -> 200
+  DELETE /api/employees/{code}/leave/{id}                         -> 200
 
 plus one representative 400 (validation), 404 (unknown id and cross-worker
 ownership), 409 (overlap/duplicate), and CORS on a mutation route.
-All four body-taking routes also reject non-object JSON and missing bodies
-with the domain's 400/string-detail error, without changing stored records.
+All five body-taking timetable routes also reject non-object JSON and
+missing bodies with the domain's 400/string-detail error, without changing
+stored records - the preference and leave routes share the same underlying
+body-validation pattern, proven exhaustively at the function level in
+`verify_timetable_editing.py`'s counterparts, so this file gives them one
+representative 400 each rather than repeating that whole matrix.
+
+The confirm route additionally gets its own representative cases, since its
+contract is not just "valid in, object out" like the other six: a real 200
+that also proves confirming clears `dates_provisional`, a 400 for an empty
+semester confirmed without `acknowledge_no_classes`, a 200 for the deliberate
+no-classes acknowledgement, a 409 for stale dates (with the rejected attempt
+proven to change nothing), and 404s for both an unknown schedule id and
+another worker's real one.
 
 **It never touches the project's database.** `database.DATABASE_PATH` is
 redirected to a temporary file before `main` is imported, and the redirection
@@ -89,7 +107,7 @@ def free_port():
 
 
 def build_fixture():
-    """Two workers, so ownership can be tested for real over the wire."""
+    """Two workers and one shift, so ownership can be tested for real over the wire."""
     connection = database.get_connection()
     connection.execute(
         "INSERT INTO employees (employee_code, full_name, student_type,"
@@ -100,6 +118,10 @@ def build_fixture():
         "INSERT INTO employees (employee_code, full_name, student_type,"
         " weekly_hour_limit, is_active, seed_key)"
         " VALUES ('SW-002', 'Jordan Kim', 'masters', 20, 1, NULL)"
+    )
+    connection.execute(
+        "INSERT INTO shifts (hall, start_datetime, end_datetime, required_staff)"
+        " VALUES ('Helix', '2026-10-05 08:00', '2026-10-05 12:00', 1)"
     )
     connection.commit()
     connection.close()
@@ -222,6 +244,11 @@ def run():
             ("PUT", semester_path, "semester dates"),
             ("POST", block_path, "a weekday and start and end times"),
             ("PUT", f"{block_path}/{block_id}", "a weekday and start and end times"),
+            (
+                "POST",
+                f"{semester_path}/confirm",
+                "the semester's current dates and class blocks",
+            ),
         ]
         invalid_bodies = [
             ("empty array", []),
@@ -287,6 +314,159 @@ def run():
             {"day_of_week": 2, "start_time": "13:00", "end_time": "14:15"},
         )
         check(status == 409, f"a duplicate class is a real HTTP 409 ({status})")
+
+        # -------------------------------------------------- POST confirm (200)
+        # The schedule currently carries the confirmed_at/dates_provisional
+        # values the invalid-body loop above set by hand, so this also proves
+        # a real confirmation accepts those (migrated-looking) dates as
+        # correct and clears the provisional flag, over the wire. The exact
+        # class snapshot - not merely a count - is what the contract requires.
+        current_blocks = [
+            {"id": block_id, "day_of_week": 2, "start_time": "13:00", "end_time": "14:15"}
+        ]
+        status, _, body = request(
+            "POST",
+            f"/api/employees/SW-001/semesters/{schedule_id}/confirm",
+            {
+                "start_date": "2026-09-01",
+                "end_date": "2026-12-18",
+                "class_blocks": current_blocks,
+                "acknowledge_no_classes": False,
+            },
+        )
+        check(status == 200, f"POST confirm over HTTP is 200 ({status})")
+        payload = json.loads(body)
+        check(
+            payload["id"] == schedule_id
+            and payload["confirmed_at"] is not None
+            and payload["dates_provisional"] is False
+            and payload["class_count"] == 1,
+            f"and returns the stable confirmation response shape ({payload})",
+        )
+
+        status, _, body = request("GET", "/api/employees/SW-001")
+        detail = json.loads(body)
+        check(
+            detail["semesters"][0]["confirmed_at"] is not None
+            and detail["semesters"][0]["dates_provisional"] is False,
+            "the details route reflects the confirmation and cleared provisional flag",
+        )
+
+        # ------------------------------------- 400 (empty semester, no ack)
+        status, _, body = request(
+            "POST",
+            "/api/employees/SW-001/semesters",
+            {"start_date": "2028-01-10", "end_date": "2028-05-01"},
+        )
+        empty_id = json.loads(body)["id"]
+        status, _, body = request(
+            "POST",
+            f"/api/employees/SW-001/semesters/{empty_id}/confirm",
+            {"start_date": "2028-01-10", "end_date": "2028-05-01", "class_blocks": []},
+        )
+        check(
+            status == 400,
+            f"confirming an empty semester without acknowledge_no_classes is a "
+            f"real HTTP 400 ({status})",
+        )
+
+        # ------------------------------------- 200 (deliberate no-classes)
+        status, _, body = request(
+            "POST",
+            f"/api/employees/SW-001/semesters/{empty_id}/confirm",
+            {
+                "start_date": "2028-01-10",
+                "end_date": "2028-05-01",
+                "class_blocks": [],
+                "acknowledge_no_classes": True,
+            },
+        )
+        check(
+            status == 200,
+            f"the deliberate no-classes confirmation is 200 over HTTP ({status})",
+        )
+        check(json.loads(body)["class_count"] == 0, "confirming zero classes")
+
+        # -------------------------- 409 (stale dates AND stale class snapshot)
+        before_conflict = database_snapshot()
+        status, _, body = request(
+            "POST",
+            f"/api/employees/SW-001/semesters/{schedule_id}/confirm",
+            {"start_date": "2026-01-01", "end_date": "2026-12-18", "class_blocks": current_blocks},
+        )
+        check(status == 409, f"confirming with stale dates is a real HTTP 409 ({status})")
+        check(
+            database_snapshot() == before_conflict,
+            "and the rejected confirmation attempt changed nothing",
+        )
+
+        # A snapshot naming the right count but the wrong content (a class
+        # "seen" on a different day/time than what is actually stored) is the
+        # same kind of staleness and must be refused the same way.
+        status, _, body = request(
+            "POST",
+            f"/api/employees/SW-001/semesters/{schedule_id}/confirm",
+            {
+                "start_date": "2026-09-01",
+                "end_date": "2026-12-18",
+                "class_blocks": [
+                    {"id": block_id, "day_of_week": 0, "start_time": "09:00", "end_time": "10:15"}
+                ],
+                "acknowledge_no_classes": False,
+            },
+        )
+        check(
+            status == 409,
+            f"confirming a class snapshot that no longer matches what is stored "
+            f"is a real HTTP 409, even with the right count ({status})",
+        )
+
+        # ------------------------------------------- 404 (unknown schedule)
+        status, _, body = request(
+            "POST",
+            "/api/employees/SW-001/semesters/999999/confirm",
+            {
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-01",
+                "class_blocks": [],
+                "acknowledge_no_classes": True,
+            },
+        )
+        check(
+            status == 404, f"confirming an unknown schedule id is a real HTTP 404 ({status})"
+        )
+
+        # ------------------------------------- 404 (cross-worker ownership)
+        status, _, body = request(
+            "POST",
+            f"/api/employees/SW-002/semesters/{schedule_id}/confirm",
+            {"start_date": "2026-09-01", "end_date": "2026-12-18", "class_blocks": current_blocks},
+        )
+        check(
+            status == 404,
+            f"confirming another worker's real schedule id is a real HTTP 404 ({status})",
+        )
+
+        # --------------------------------------------- CORS on the confirm route
+        _, headers, _ = request(
+            "POST",
+            f"/api/employees/SW-001/semesters/{empty_id}/confirm",
+            {
+                "start_date": "2028-01-10",
+                "end_date": "2028-05-01",
+                "class_blocks": [],
+                "acknowledge_no_classes": True,
+            },
+            headers={"Origin": "http://localhost:5173"},
+        )
+        check(
+            headers.get("access-control-allow-origin") == "http://localhost:5173",
+            "the allowed frontend origin receives a CORS header on the confirm route",
+        )
+
+        # Clean up the scratch semester created above so the final "SW-001 has
+        # no semesters left" check below is not confused by it.
+        request("DELETE", f"/api/employees/SW-001/semesters/{empty_id}")
 
         # ------------------------------------------------ 404 (unknown id)
         status, _, body = request(
@@ -360,6 +540,103 @@ def run():
         check(
             detail["semesters"] == [],
             "the details route confirms the semester is really gone",
+        )
+        shift_id = detail["shifts"][0]["id"]
+
+        # ---------------------------------------------- PUT preference (200)
+        status, _, body = request(
+            "PUT",
+            f"/api/employees/SW-001/preferences/{shift_id}",
+            {"preference": "preferred"},
+        )
+        check(status == 200, f"PUT a shift preference over HTTP is 200 ({status})")
+        payload = json.loads(body)
+        check(
+            payload == {"shift_id": shift_id, "preference": "preferred"},
+            f"and returns the stable {{shift_id, preference}} shape ({payload})",
+        )
+
+        status, _, body = request(
+            "PUT",
+            f"/api/employees/SW-001/preferences/{shift_id}",
+            {"preference": "neutral"},
+        )
+        check(status == 200, f"setting a preference back to neutral is 200 ({status})")
+
+        # ------------------------------------- 400 (invalid preference value)
+        status, _, body = request(
+            "PUT",
+            f"/api/employees/SW-001/preferences/{shift_id}",
+            {"preference": "loved-it"},
+        )
+        check(status == 400, f"an invalid preference value is a real HTTP 400 ({status})")
+
+        # ------------------------------------------- 404 (unknown shift)
+        status, _, body = request(
+            "PUT",
+            "/api/employees/SW-001/preferences/999999",
+            {"preference": "low"},
+        )
+        check(status == 404, f"an unknown shift id is a real HTTP 404 ({status})")
+
+        # ----------------------------------------------------- POST leave (201)
+        status, headers, body = request(
+            "POST",
+            "/api/employees/SW-001/leave",
+            {"start_datetime": "2026-10-10 08:00", "end_datetime": "2026-10-10 14:00"},
+        )
+        check(status == 201, f"POST approved leave over HTTP is 201 ({status})")
+        payload = json.loads(body)
+        check(
+            payload["start_datetime"] == "2026-10-10 08:00"
+            and payload["end_datetime"] == "2026-10-10 14:00",
+            f"with the submitted period round-tripped ({payload})",
+        )
+        leave_id = payload["id"]
+        check(isinstance(leave_id, int), "and a real integer leave id")
+
+        # -------------------------------------------------------- PUT leave (200)
+        status, _, body = request(
+            "PUT",
+            f"/api/employees/SW-001/leave/{leave_id}",
+            {"start_datetime": "2026-10-10 09:00", "end_datetime": "2026-10-10 15:00"},
+        )
+        check(status == 200, f"PUT approved leave over HTTP is 200 ({status})")
+
+        # ------------------------------------------- 400 (non-positive interval)
+        status, _, body = request(
+            "POST",
+            "/api/employees/SW-001/leave",
+            {"start_datetime": "2026-10-11 09:00", "end_datetime": "2026-10-11 09:00"},
+        )
+        check(
+            status == 400,
+            f"a leave period that does not end after it starts is a real HTTP 400 ({status})",
+        )
+
+        # ------------------------------------- 404 (cross-worker ownership)
+        status, _, body = request(
+            "DELETE", f"/api/employees/SW-002/leave/{leave_id}"
+        )
+        check(
+            status == 404,
+            f"addressing another worker's real leave id is a real HTTP 404 ({status})",
+        )
+
+        # ----------------------------------------------------- DELETE leave (200)
+        status, _, body = request("DELETE", f"/api/employees/SW-001/leave/{leave_id}")
+        check(status == 200, f"DELETE approved leave over HTTP is 200 ({status})")
+        payload = json.loads(body)
+        check(
+            payload["start_datetime"] == "2026-10-10 09:00",
+            f"and reports the period that was removed ({payload})",
+        )
+
+        status, _, body = request("GET", "/api/employees/SW-001")
+        detail = json.loads(body)
+        check(
+            detail["approved_leave"] == [],
+            "the details route confirms the leave period is really gone",
         )
     finally:
         server.should_exit = True

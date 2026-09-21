@@ -229,7 +229,7 @@ Implemented list controls (Phase 5B):
 - After a successful action the list reloads with the supervisor's search text, sort selection and status filter unchanged. Because the list defaults to Active, a worker who was just deactivated is no longer shown, and the confirmation says so and directs the supervisor to the Inactive or All filter. A confirmed action and a failed list reload are reported as separate outcomes, and retrying the reload only re-reads the list.
 
 - Permanently delete an employee, behind an explicit confirmation identifying them by name and employee code and stating that their profile, classes, shift preferences and approved leave will be removed permanently. Cancelling performs no change of any kind. Deletion is allowed only when no assignment references that employee, historical assignments included, because shift history must continue to refer to a real worker; the backend enforces this rather than relying on the interface. The refusal explains that history is preserved and that deactivation is the appropriate alternative, subject to its own safeguards. The employee and their dependent class, preference and leave records are removed in one transaction, with the assignment check made inside that same transaction so a concurrent write cannot invalidate it; any failure removes nothing. Shared shifts and every other employee's records are preserved.
-- Open one worker from the list to inspect everything stored about them, through a read-only details request addressed by employee code. An unknown code is reported as not found in the standard error shape. Loading details performs no writes. The screen also offers explicit semester and class editing controls through separate mutation requests; timetable confirmation and preference and approved-leave editors remain planned. Its contents are specified under Complete Employee Setup below.
+- Open one worker from the list to inspect everything stored about them, through a read-only details request addressed by employee code. An unknown code is reported as not found in the standard error shape. Loading details performs no writes. The screen also offers explicit semester and class editing, explicit timetable confirmation, shift-preference editing and approved-leave editing, each through its own mutation requests. Its contents are specified under Complete Employee Setup below.
 - A deleted employee code is retained as a retired code, holding the code and the time only and no copy of the deleted worker's details. Automatic employee-code allocation reads this record when working out the next code, so a code that has already been used is never reissued. Codes can no longer be entered by hand, so there is no other route to reusing one either.
 
 Remaining employee management is planned scope, not yet implemented:
@@ -237,17 +237,17 @@ Remaining employee management is planned scope, not yet implemented:
 
 The database is the source of truth after explicit demo initialization. Demo data is initialized once, into a database that holds no workforce or scheduling records, and that initialization is atomic: it either writes the whole dataset or nothing. If any such record already exists, initialization refuses and changes nothing, so it cannot overwrite edits, restore intentionally deleted workers, or add demo workers to a manually managed database. There is no repair, reset or regeneration workflow, and neither application startup nor any employee-management action performs seeding. Schema changes are applied through repeatable migrations that preserve existing records and relationships. Most are purely additive; where a change must reshape existing data, it is carried out transactionally with the information preserved, never by resetting or reseeding the database. Provide an empty-workforce path for entering fictional workers through the interface. The 30-worker count, student-type mix, and course-load conventions constrain demo generation, not user-created records. The synthetic-only data policy and 20-hour weekly limit remain unchanged.
 
-Phase 5B initially covers list controls and worker identity/status management. Phase 5C, before eligibility implementation, is a required milestone for complete employee setup. Of the requirements below, automatic code allocation, the semester/class-block model with its migration, the details view, and supervisor entry and editing of semester dates and class blocks are implemented. Explicit timetable confirmation, and editing shift preferences and approved leave, are still planned.
+Phase 5B initially covers list controls and worker identity/status management. Phase 5C, before eligibility implementation, is a required milestone for complete employee setup. **Every requirement below is now implemented: Phase 5C is functionally complete.**
 
 #### Complete Employee Setup (Phase 5C)
 
-Four parts of this section are implemented: automatic employee-code
+All parts of this section are implemented: automatic employee-code
 allocation and the semester/class-block data model with its migration, both
-described above; the employee-details view described immediately below; and
-supervisor entry and editing of semester dates and recurring class blocks.
-Explicit timetable confirmation controls, and the preference and leave
-editors, remain planned and are not implemented. Employee setup is therefore
-not complete.
+described above; the employee-details view described immediately below;
+supervisor entry and editing of semester dates and recurring class blocks;
+explicit timetable confirmation, including a deliberate confirmed-no-classes
+choice; editing shift preferences on any existing shift; and adding, editing
+and removing approved leave.
 
 **Supervisors can enter and edit a worker's semester timetables.** From the
 details view a supervisor can add a semester with inclusive start and end
@@ -283,15 +283,31 @@ The demo dataset's course counts and 75- and 165-minute class lengths do not
 constrain manually entered classes; any positive same-day duration is
 accepted.
 
-**Editing a timetable withdraws its confirmation.** A new semester is
+**Editing a timetable withdraws its confirmation; confirming is a separate, deliberate action.** A new semester is
 unconfirmed. Changing a semester's dates, and adding, editing or removing any
 class within it, all clear that semester's confirmation, because a supervisor
 confirmed the timetable they were shown rather than the one it has since
-become. Deleting a semester removes its confirmation with it. No operation in
-this workflow ever confirms a timetable, including an empty one: a deliberate
-"this worker has no classes" is a statement that must be made explicitly, and
-the control for making it is not implemented. Until it is, a hand-entered
-timetable remains unconfirmed, and the displayed readiness reflects that.
+become. Deleting a semester removes its confirmation with it. Creating a
+semester, and adding or removing its classes, never confirms it on their own.
+
+**Explicit confirmation.** A supervisor confirms a semester by submitting its
+current dates and the exact classes it holds (not merely how many) back; the
+backend checks that submission against what is actually stored before
+granting confirmation, so a stale or malformed request is refused rather than
+silently confirming content the supervisor has not actually seen refreshed. A
+matching count alone is not sufficient - a class that moved to a different
+day or time while the count stayed the same must still be caught as stale.
+Confirming a semester whose stored class list is empty additionally requires
+an explicit, separate acknowledgement that the worker genuinely has no
+classes - "this timetable is complete" and "this employee has no classes" are
+two distinct, deliberate submissions, worded apart so neither can be
+confirmed by a generic or malformed request falling through a default.
+Confirming also accepts the semester's currently displayed dates as correct,
+clearing a provisional-dates notice the same way editing the dates does, so a
+supervisor need not retype dates that were already right. Confirming the
+same, unchanged content again is accepted rather than refused, and records
+the current confirmation time at the application's existing (minute)
+precision - it does not promise a visibly different timestamp on every call.
 
 **Supervisors can inspect one worker's stored setup.** Opening a worker from
 the employee list shows:
@@ -319,6 +335,26 @@ the employee list shows:
 - Their approved leave periods with actual start and end datetimes, and a
   clear statement when none is stored. No pending requests, approval actions
   or inferred leave appear, because none exist.
+
+**Supervisors can set a preference for any existing shift.** A picker lists
+every existing shift - not only ones already preferred or low - and a
+preferred/low/neutral choice; choosing neutral deletes the stored preference
+row rather than writing a third value, and setting preferred or low replaces
+any existing preference for that shift rather than adding a second row. This
+never creates a shift or a recurring preference template, and a low
+preference is never treated as ineligibility or a hard restriction. The
+backend validates the preference value and that the shift exists; an unknown
+shift or an unknown employee is reported as not found.
+
+**Supervisors can add, edit and remove approved leave.** Leave is entered as
+an actual start and end datetime in the project's plain wall-clock form; the
+end must be strictly after the start. Editing and removing address a specific
+leave period by its own id and the owning employee's code, following the same
+not-found-not-forbidden ownership rule as semesters and classes: another
+worker's real leave id is reported not found. This is leave that has already
+been approved, not a request - there is no pending-request state or approval
+workflow - and saving or removing a leave period never changes or removes an
+assignment; reconciling leave against assignments is Phase 6 work.
 
 A semester's own confirmation, its coverage of the displayed period, and the
 worker's combined five-state readiness across all their semesters are three

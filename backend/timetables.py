@@ -11,10 +11,19 @@ times in the project's single local clock. There are no courses here - course
 names and course entities stopped being operational inputs with D035, and
 nothing in this module accepts one.
 
-**Confirmation is never granted here.** New schedules start unconfirmed, and
-every edit that changes what the timetable says clears `confirmed_at`, because
-a supervisor confirmed the timetable they saw, not the one it has become.
-Confirming is a separate action that does not exist yet.
+**Confirmation.** `confirm_schedule` is the only function that ever sets
+`confirmed_at`. Every edit that changes what the timetable says - new dates, a
+new class, an edited or removed class - clears it, because a supervisor
+confirmed the timetable they saw, not the one it has become. Confirming
+requires the caller to submit back the semester's current dates and the exact
+classes it saw (id, weekday and times, not just how many), so a stale form
+cannot confirm content nobody actually looked at - including a class that
+moved to a different day while the count stayed the same. Any mismatch is a
+409, not a silent overwrite. Confirming a semester with zero
+classes additionally requires `acknowledge_no_classes: true`, so a generic or
+malformed request can never confirm "no classes" by accident. Confirming also
+accepts the displayed dates as correct: `dates_provisional` is cleared, the
+same as if the supervisor had retyped them (see `update_schedule`).
 
 **Date provenance.** `dates_provisional` marks dates the migration assumed
 rather than a person choosing them. Supplying dates - creating a schedule, or
@@ -30,9 +39,16 @@ that some other worker holds that id.
 """
 
 import re
-from datetime import date
+from datetime import date, datetime
 
 from employees import EmployeeNotFound, find_by_code
+
+# The same plain wall-clock format the rest of the project uses for a real
+# (non-simulated) recorded moment - see `employees.py`'s deactivation and
+# retirement timestamps. D025 fixes one local simulation clock with no
+# timezone conversion, so a naive local `now` is the only reading consistent
+# with every other stored datetime.
+TIME_FORMAT = "%Y-%m-%d %H:%M"
 
 # A weekday index, 0 = Monday through 6 = Sunday, matching D025 and Python's
 # datetime.weekday().
@@ -96,6 +112,72 @@ def clean_semester_dates(payload):
             f"The semester cannot end ({end}) before it starts ({start})."
         )
     return start, end
+
+
+def clean_confirmation_block(payload, index):
+    """Shape-check one entry of a confirmation's submitted class snapshot.
+
+    Deliberately mirrors `clean_block`'s field checks, plus an `id` - the
+    caller is not describing a new class, it is naming an EXISTING one it
+    saw, so `confirm_schedule` can compare it against what is actually
+    stored. Invalid values are refused the same way `clean_block` refuses
+    them; there is no reason for this snapshot to accept anything a real
+    class block could not have.
+    """
+    if not isinstance(payload, dict):
+        raise TimetableValidationError(
+            f"class_blocks[{index}] must be an object with id, day_of_week, "
+            "start_time and end_time."
+        )
+
+    block_id = payload.get("id")
+    if isinstance(block_id, bool) or not isinstance(block_id, int):
+        raise TimetableValidationError(
+            f"class_blocks[{index}].id must be a whole number."
+        )
+
+    day = payload.get("day_of_week")
+    if isinstance(day, bool) or not isinstance(day, int) or day not in WEEKDAYS:
+        raise TimetableValidationError(
+            f"class_blocks[{index}].day_of_week must be a whole number from "
+            "0 (Monday) to 6 (Sunday)."
+        )
+
+    start = clean_time(payload.get("start_time"), f"class_blocks[{index}].start_time")
+    end = clean_time(payload.get("end_time"), f"class_blocks[{index}].end_time")
+    return block_id, day, start, end
+
+
+def clean_confirmation(payload):
+    """Shape-check a confirmation request. Does not touch the database.
+
+    The submitted `class_blocks` and `acknowledge_no_classes` are compared
+    against what is actually stored inside `confirm_schedule`'s transaction,
+    not here - this only rejects a request that could never be valid
+    regardless of what the semester currently holds.
+    """
+    _require_object(payload, "the semester's current dates and class blocks")
+    start = clean_date(payload.get("start_date"), "Semester start date")
+    end = clean_date(payload.get("end_date"), "Semester end date")
+
+    blocks_payload = payload.get("class_blocks")
+    if not isinstance(blocks_payload, list):
+        raise TimetableValidationError(
+            "class_blocks must be a list of the semester's currently "
+            "displayed classes."
+        )
+    blocks = [
+        clean_confirmation_block(item, index)
+        for index, item in enumerate(blocks_payload)
+    ]
+
+    acknowledge_no_classes = payload.get("acknowledge_no_classes", False)
+    if not isinstance(acknowledge_no_classes, bool):
+        raise TimetableValidationError(
+            "acknowledge_no_classes must be true or false."
+        )
+
+    return start, end, blocks, acknowledge_no_classes
 
 
 def clean_time(value, label):
@@ -454,6 +536,132 @@ def delete_block(connection, employee_code, schedule_id, block_id):
             "day_of_week": block["day_of_week"],
             "start_time": block["start_time"],
             "end_time": block["end_time"],
+        }
+
+    return _in_transaction(connection, work)
+
+
+# ------------------------------------------------------------- confirmation
+
+
+def confirm_schedule(connection, employee_code, schedule_id, payload, reference_time=None):
+    """Record that a supervisor confirmed one semester's timetable is complete.
+
+    Confirming is a deliberate, separate action - never a side effect of
+    creating a semester, adding or removing its last class, or simply viewing
+    it (those all go through `create_schedule`/`create_block`/`delete_block`,
+    none of which touch `confirmed_at` except to clear it). It means one of
+    two distinct things, and the caller must say which by construction rather
+    than by guessing from an empty body:
+
+      - the listed classes ARE the worker's whole timetable for this
+        semester, or
+      - the worker genuinely has none, which is `acknowledge_no_classes: true`.
+
+    Both require the caller to submit the semester's dates AND the exact
+    classes it is confirming - not merely how many there are - and both are
+    checked against what is actually stored, inside the same transaction
+    that writes the confirmation:
+
+      - dates that do not match the stored semester are a 409, not a silent
+        confirmation of stale content the caller never saw refreshed.
+      - the submitted `class_blocks` must name exactly the ids, weekdays and
+        times currently stored for this schedule - no more, no fewer, none
+        different - compared as sets so submission order cannot itself cause
+        a false conflict. A matching *count* is not enough: a class that
+        moved from Monday to Wednesday while another was removed can leave
+        the count unchanged, and confirming that stale view would vouch for
+        classes that no longer exist. Any difference is a 409, not a silent
+        confirmation.
+      - a stored class list of zero without `acknowledge_no_classes: true`
+        is refused (400): a missing class list is not the same as a confirmed
+        empty one, and a generic or malformed request body cannot confirm
+        "no classes" by falling through a default.
+      - `acknowledge_no_classes: true` while classes are actually stored is
+        also refused (400): it would contradict what it is confirming.
+
+    Confirming ALSO accepts the semester's current dates as correct, the same
+    as if the supervisor had retyped them in `update_schedule`: migrated dates
+    a supervisor has reviewed and is confirming are no longer merely assumed,
+    so `dates_provisional` is cleared here too. This lets a supervisor accept
+    correctly-migrated dates by confirming, without pointlessly retyping
+    values that were already right.
+
+    Confirming an already-confirmed semester with a matching snapshot is
+    accepted, not refused: it does not change what the timetable says, only
+    records that a supervisor looked again and it still stands, so
+    `confirmed_at` is stamped with the current time. Because stored
+    timestamps carry only minute precision (the same `TIME_FORMAT` as
+    `employees.py`'s deactivation/retirement timestamps), two confirmations
+    inside the same minute can legitimately store the same value - that is
+    not a bug, and nothing here promises a visibly different timestamp on
+    every call, only the current one at the application's existing
+    precision.
+
+    `reference_time` defaults to the current local time, in the plain
+    wall-clock reading D025 uses for every stored datetime; tests pass a fixed
+    time so results do not depend on when they run.
+    """
+    start, end, submitted_blocks, acknowledge_no_classes = clean_confirmation(payload)
+    submitted_snapshot = sorted(submitted_blocks)
+
+    def work():
+        employee_id = _employee_id(connection, employee_code)
+        schedule = _schedule(connection, employee_id, schedule_id)
+        stored_rows = connection.execute(
+            "SELECT id, day_of_week, start_time, end_time FROM class_blocks"
+            " WHERE schedule_id = ?",
+            (schedule_id,),
+        ).fetchall()
+        actual_count = len(stored_rows)
+        actual_snapshot = sorted(
+            (row["id"], row["day_of_week"], row["start_time"], row["end_time"])
+            for row in stored_rows
+        )
+
+        if start != schedule["start_date"] or end != schedule["end_date"]:
+            raise TimetableConflict(
+                "This semester's stored dates are "
+                f"{schedule['start_date']} to {schedule['end_date']}, not "
+                f"{start} to {end}. Reload this worker and confirm the dates "
+                "actually shown."
+            )
+        if submitted_snapshot != actual_snapshot:
+            raise TimetableConflict(
+                "This semester's classes have changed since they were "
+                "loaded. Reload this worker and confirm the classes actually "
+                "shown."
+            )
+        if actual_count == 0 and not acknowledge_no_classes:
+            raise TimetableValidationError(
+                "Confirming a semester with no classes requires explicitly "
+                "acknowledging that the worker has no classes "
+                "(acknowledge_no_classes: true). A missing class list is not "
+                "the same as a confirmed empty one."
+            )
+        if actual_count > 0 and acknowledge_no_classes:
+            raise TimetableValidationError(
+                "acknowledge_no_classes must not be true: this semester has "
+                "class blocks recorded."
+            )
+
+        when = reference_time if reference_time is not None else datetime.now()
+        timestamp = when.strftime(TIME_FORMAT)
+        connection.execute(
+            """
+            UPDATE semester_schedules
+            SET confirmed_at = ?, dates_provisional = 0
+            WHERE id = ?
+            """,
+            (timestamp, schedule_id),
+        )
+        return {
+            "id": schedule_id,
+            "start_date": start,
+            "end_date": end,
+            "confirmed_at": timestamp,
+            "dates_provisional": False,
+            "class_count": actual_count,
         }
 
     return _in_transaction(connection, work)

@@ -33,6 +33,21 @@ const FEEDBACK_CLASSES = {
 
 const EMPTY_SEMESTER = { start_date: '', end_date: '' }
 const EMPTY_BLOCK = { day_of_week: '0', start_time: '', end_time: '' }
+const EMPTY_PREFERENCE = { shift_id: '', preference: 'preferred' }
+const EMPTY_LEAVE = { start_datetime: '', end_datetime: '' }
+
+// Which action kinds render in the semester section's shared panel slot, so
+// a preference or leave form (rendered in their own sections below) is never
+// also rendered here and duplicated.
+const SEMESTER_ACTION_KINDS = [
+  'add-semester',
+  'edit-semester',
+  'delete-semester',
+  'add-block',
+  'edit-block',
+  'delete-block',
+  'confirm-semester',
+]
 
 // Response validation.
 //
@@ -113,12 +128,25 @@ function isValidSemester(semester) {
 function isValidPreference(row) {
   return (
     isObject(row) &&
+    Number.isInteger(row.shift_id) &&
     hasStrings(row, ['preference', 'hall', 'start_datetime', 'end_datetime'])
   )
 }
 
+function isValidShift(row) {
+  return (
+    isObject(row) &&
+    Number.isInteger(row.id) &&
+    hasStrings(row, ['hall', 'start_datetime', 'end_datetime'])
+  )
+}
+
 function isValidLeave(row) {
-  return isObject(row) && hasStrings(row, ['start_datetime', 'end_datetime'])
+  return (
+    isObject(row) &&
+    Number.isInteger(row.id) &&
+    hasStrings(row, ['start_datetime', 'end_datetime'])
+  )
 }
 
 function isValidDetailResponse(data) {
@@ -130,6 +158,8 @@ function isValidDetailResponse(data) {
     data.semesters.every(isValidSemester) &&
     Array.isArray(data.shift_preferences) &&
     data.shift_preferences.every(isValidPreference) &&
+    Array.isArray(data.shifts) &&
+    data.shifts.every(isValidShift) &&
     Array.isArray(data.approved_leave) &&
     data.approved_leave.every(isValidLeave)
   )
@@ -191,6 +221,39 @@ function isValidBlockDeletion(payload) {
   )
 }
 
+function isValidConfirmation(payload) {
+  // `confirmed_at` is a string here, never null: this response only exists
+  // because a confirmation was just granted.
+  return (
+    isObject(payload) &&
+    Number.isInteger(payload.id) &&
+    hasStrings(payload, ['start_date', 'end_date', 'confirmed_at']) &&
+    payload.dates_provisional === false &&
+    Number.isInteger(payload.class_count) &&
+    payload.class_count >= 0
+  )
+}
+
+function isValidPreferenceWrite(payload) {
+  return (
+    isObject(payload) &&
+    Number.isInteger(payload.shift_id) &&
+    typeof payload.preference === 'string'
+  )
+}
+
+function isValidLeaveWrite(payload) {
+  return (
+    isObject(payload) &&
+    Number.isInteger(payload.id) &&
+    hasStrings(payload, ['start_datetime', 'end_datetime'])
+  )
+}
+
+function isValidLeaveDeletion(payload) {
+  return isObject(payload) && hasStrings(payload, ['start_datetime', 'end_datetime'])
+}
+
 async function fetchDetail(employeeCode) {
   const response = await fetch(
     `${EMPLOYEES_URL}/${encodeURIComponent(employeeCode)}`,
@@ -224,7 +287,35 @@ function describeBlock(block) {
   return `${weekdayName(block.day_of_week)} ${block.start_time} to ${block.end_time}`
 }
 
-function SemesterPanel({ semester, busy, onEditDates, onDeleteSemester, onAddBlock, onEditBlock, onDeleteBlock }) {
+function describeShift(shift) {
+  return `${shift.hall} ${shift.start_datetime} to ${shift.end_datetime}`
+}
+
+function describeLeave(leave) {
+  return `${leave.start_datetime} to ${leave.end_datetime}`
+}
+
+// `<input type="datetime-local">` needs 'T' between date and time; the
+// backend stores and returns the project's plain-space form (D025). These
+// only ever run on values already known to be in one of those two forms.
+function toDatetimeLocal(value) {
+  return value.replace(' ', 'T')
+}
+
+function fromDatetimeLocal(value) {
+  return value.replace('T', ' ')
+}
+
+function SemesterPanel({
+  semester,
+  busy,
+  onEditDates,
+  onDeleteSemester,
+  onAddBlock,
+  onEditBlock,
+  onDeleteBlock,
+  onConfirmSemester,
+}) {
   const blocks = semester.class_blocks
   const confirmed = semester.confirmed_at !== null
 
@@ -254,8 +345,9 @@ function SemesterPanel({ semester, busy, onEditDates, onDeleteSemester, onAddBlo
           way of storing them, which recorded no semester dates at all. Nobody
           has confirmed that this is really when their semester runs, so check
           the dates before relying on them. The class days and times
-          themselves came across unchanged. Saving the dates below records
-          them as yours and removes this notice.
+          themselves came across unchanged. Saving the dates below, or
+          confirming this semester as shown, both record them as yours and
+          remove this notice.
         </p>
       )}
 
@@ -275,6 +367,14 @@ function SemesterPanel({ semester, busy, onEditDates, onDeleteSemester, onAddBlo
           aria-label={`Add a class to the semester ${describeSemester(semester)}`}
         >
           Add class
+        </button>
+        <button
+          type="button"
+          onClick={() => onConfirmSemester(semester)}
+          disabled={busy}
+          aria-label={`${confirmed ? 'Reconfirm' : 'Confirm'} the timetable for the semester ${describeSemester(semester)}`}
+        >
+          {confirmed ? 'Reconfirm timetable' : 'Confirm timetable'}
         </button>
         <button
           type="button"
@@ -362,6 +462,13 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
   const [action, setAction] = useState(null)
   const [semesterForm, setSemesterForm] = useState(EMPTY_SEMESTER)
   const [blockForm, setBlockForm] = useState(EMPTY_BLOCK)
+  const [preferenceForm, setPreferenceForm] = useState(EMPTY_PREFERENCE)
+  const [leaveForm, setLeaveForm] = useState(EMPTY_LEAVE)
+  // Only meaningful while confirming a semester with zero classes: the
+  // deliberate acknowledgement that must be checked before that confirmation
+  // can be submitted (a generic form submission must never confirm "no
+  // classes" by default).
+  const [noClassesChecked, setNoClassesChecked] = useState(false)
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState(null)
   const [feedback, setFeedback] = useState(null)
@@ -424,6 +531,12 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     if (prefill?.block !== undefined) {
       setBlockForm(prefill.block)
     }
+    if (prefill?.preference !== undefined) {
+      setPreferenceForm(prefill.preference)
+    }
+    if (prefill?.leave !== undefined) {
+      setLeaveForm(prefill.leave)
+    }
   }
 
   function closeAction() {
@@ -431,6 +544,9 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     setFormError(null)
     setSemesterForm(EMPTY_SEMESTER)
     setBlockForm(EMPTY_BLOCK)
+    setNoClassesChecked(false)
+    setPreferenceForm(EMPTY_PREFERENCE)
+    setLeaveForm(EMPTY_LEAVE)
   }
 
   async function reloadDetail() {
@@ -579,7 +695,7 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     )
   }
 
-  const { employee, semesters, shift_preferences, approved_leave } = detail
+  const { employee, semesters, shift_preferences, shifts, approved_leave } = detail
 
   function startAddSemester() {
     openAction({ kind: 'add-semester' }, { semester: EMPTY_SEMESTER })
@@ -621,6 +737,46 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
 
   function startDeleteBlock(semester, block) {
     openAction({ kind: 'delete-block', semester, block })
+  }
+
+  function startConfirmSemester(semester) {
+    // Opening this confirms nothing by itself - it only shows what would be
+    // confirmed. Reset so a previous "no classes" checkbox does not carry
+    // over onto a different semester.
+    setNoClassesChecked(false)
+    openAction({ kind: 'confirm-semester', semester })
+  }
+
+  function startSetPreference(shiftId, currentPreference) {
+    openAction(
+      { kind: 'set-preference' },
+      {
+        preference: {
+          shift_id: shiftId === undefined ? '' : String(shiftId),
+          preference: currentPreference ?? 'preferred',
+        },
+      },
+    )
+  }
+
+  function startAddLeave() {
+    openAction({ kind: 'add-leave' }, { leave: EMPTY_LEAVE })
+  }
+
+  function startEditLeave(leave) {
+    openAction(
+      { kind: 'edit-leave', leave },
+      {
+        leave: {
+          start_datetime: leave.start_datetime,
+          end_datetime: leave.end_datetime,
+        },
+      },
+    )
+  }
+
+  function startDeleteLeave(leave) {
+    openAction({ kind: 'delete-leave', leave })
   }
 
   const semesterBase = `${EMPLOYEES_URL}/${encodeURIComponent(employeeCode)}/semesters`
@@ -684,6 +840,38 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     })
   }
 
+  function confirmSemester() {
+    const semester = action.semester
+    const classCount = semester.class_blocks.length
+    submit({
+      url: `${semesterBase}/${semester.id}/confirm`,
+      method: 'POST',
+      body: {
+        start_date: semester.start_date,
+        end_date: semester.end_date,
+        // The exact classes as currently displayed, not merely how many -
+        // a class that moved to a different day while the count stayed the
+        // same must still be caught as stale by the backend.
+        class_blocks: semester.class_blocks.map((block) => ({
+          id: block.id,
+          day_of_week: block.day_of_week,
+          start_time: block.start_time,
+          end_time: block.end_time,
+        })),
+        acknowledge_no_classes: classCount === 0,
+      },
+      validate: isValidConfirmation,
+      describe: (saved) =>
+        classCount === 0
+          ? `Confirmed that ${describeSemester(saved)} has no classes.`
+          : `Confirmed the timetable for ${describeSemester(saved)} ` +
+            `(${classCount} ${classCount === 1 ? 'class' : 'classes'}).`,
+      fallbackMessage:
+        'The confirmation was saved, but the response could not be read. ' +
+        'Reloading to show the current status.',
+    })
+  }
+
   function confirmDeleteBlock() {
     submit({
       url: `${semesterBase}/${action.semester.id}/blocks/${action.block.id}`,
@@ -693,6 +881,55 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
         `Removed the class ${describeBlock(removed)}. This semester is no longer confirmed.`,
       fallbackMessage:
         'The class was removed, but the response could not be read. Reloading to show what remains. This semester is no longer confirmed.',
+    })
+  }
+
+  const preferencesBase = `${EMPLOYEES_URL}/${encodeURIComponent(employeeCode)}/preferences`
+  const leaveBase = `${EMPLOYEES_URL}/${encodeURIComponent(employeeCode)}/leave`
+
+  function savePreference(event) {
+    event.preventDefault()
+    const shift = shifts.find((row) => String(row.id) === preferenceForm.shift_id)
+    submit({
+      url: `${preferencesBase}/${preferenceForm.shift_id}`,
+      method: 'PUT',
+      body: { preference: preferenceForm.preference },
+      validate: isValidPreferenceWrite,
+      describe: (saved) =>
+        saved.preference === 'neutral'
+          ? `Set ${shift ? describeShift(shift) : `shift ${saved.shift_id}`} back to neutral.`
+          : `Set ${shift ? describeShift(shift) : `shift ${saved.shift_id}`} to ${PREFERENCE_LABELS[saved.preference] ?? saved.preference}.`,
+      fallbackMessage:
+        'The preference was saved, but the response could not be read. Reloading to show what is now stored.',
+    })
+  }
+
+  function saveLeave(event) {
+    event.preventDefault()
+    const creating = action.kind === 'add-leave'
+    submit({
+      url: creating ? leaveBase : `${leaveBase}/${action.leave.id}`,
+      method: creating ? 'POST' : 'PUT',
+      body: {
+        start_datetime: leaveForm.start_datetime,
+        end_datetime: leaveForm.end_datetime,
+      },
+      validate: isValidLeaveWrite,
+      describe: (saved) =>
+        `${creating ? 'Added' : 'Saved'} the approved leave ${describeLeave(saved)}.`,
+      fallbackMessage:
+        'The leave period was saved, but the response could not be read. Reloading to show what is now stored.',
+    })
+  }
+
+  function confirmDeleteLeave() {
+    submit({
+      url: `${leaveBase}/${action.leave.id}`,
+      method: 'DELETE',
+      validate: isValidLeaveDeletion,
+      describe: (removed) => `Removed the approved leave ${describeLeave(removed)}.`,
+      fallbackMessage:
+        'The leave period was removed, but the response could not be read. Reloading to show what remains.',
     })
   }
 
@@ -737,8 +974,8 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
         Both dates are included in the semester. A worker&rsquo;s semesters
         cannot overlap, so two of them may not share even a single day. Saving
         these dates records them as yours and leaves the timetable
-        unconfirmed &mdash; confirming it is a separate step that is not built
-        yet.
+        unconfirmed &mdash; confirming it is a separate step, using Confirm
+        timetable on the semester below.
       </p>
       {formError !== null && (
         <p className="backend-status backend-status-error">{formError}</p>
@@ -831,6 +1068,83 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     </div>
   )
 
+  const renderConfirmSemester = () => {
+    const semester = action.semester
+    const classCount = semester.class_blocks.length
+    const hasClasses = classCount > 0
+    const alreadyConfirmed = semester.confirmed_at !== null
+
+    return (
+      <div
+        className="employee-form"
+        role="alertdialog"
+        aria-label="Confirm semester timetable"
+      >
+        <h5>
+          {alreadyConfirmed ? 'Reconfirm' : 'Confirm'} the timetable for{' '}
+          {describeSemester(semester)}?
+        </h5>
+        <p className="table-note">
+          Dates: {semester.start_date} to {semester.end_date}.{' '}
+          {hasClasses
+            ? `${classCount} recurring ${classCount === 1 ? 'class' : 'classes'} currently listed below.`
+            : 'No classes are currently listed for this semester.'}
+        </p>
+        {alreadyConfirmed && (
+          <p className="table-note">
+            Already confirmed on {semester.confirmed_at}. Reconfirming records
+            that a supervisor checked again and the dates and classes above
+            still stand.
+          </p>
+        )}
+        {hasClasses ? (
+          <p className="table-note">
+            Confirming means <strong>this timetable is complete</strong>: the
+            dates and classes shown above are correct and nothing is missing.
+            It does not mean the worker has no classes &mdash; they have{' '}
+            {classCount}.
+          </p>
+        ) : (
+          <>
+            <p className="table-note">
+              Confirming an empty semester means{' '}
+              <strong>this employee genuinely has no classes</strong> during{' '}
+              {describeSemester(semester)}, not that nobody has entered them
+              yet. This requires a separate, deliberate acknowledgement.
+            </p>
+            <label className="list-controls">
+              <input
+                type="checkbox"
+                checked={noClassesChecked}
+                onChange={(event) => setNoClassesChecked(event.target.checked)}
+              />{' '}
+              I confirm this worker genuinely has no classes in this semester.
+            </label>
+          </>
+        )}
+        <div className="list-controls">
+          <button
+            type="button"
+            onClick={confirmSemester}
+            disabled={saving || (!hasClasses && !noClassesChecked)}
+          >
+            {saving
+              ? 'Confirming...'
+              : hasClasses
+                ? 'Confirm timetable'
+                : 'Confirm no classes'}
+          </button>
+          <button type="button" onClick={closeAction} disabled={saving}>
+            Cancel
+          </button>
+        </div>
+        {formError !== null && (
+          <p className="backend-status backend-status-error">{formError}</p>
+        )}
+      </div>
+    )
+  }
+
   const renderDeleteBlock = () => (
     <div className="employee-form" role="alertdialog" aria-label="Confirm class removal">
       <h5>Remove the class {describeBlock(action.block)}?</h5>
@@ -854,6 +1168,129 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     </div>
   )
 
+  const renderPreferenceForm = () => (
+    <form className="employee-form" onSubmit={savePreference}>
+      <h5>Set a shift preference</h5>
+      <div className="list-controls">
+        <label htmlFor="preference-shift">Shift</label>
+        <select
+          id="preference-shift"
+          value={preferenceForm.shift_id}
+          onChange={(event) =>
+            setPreferenceForm({ ...preferenceForm, shift_id: event.target.value })
+          }
+        >
+          <option value="" disabled>
+            Choose a shift
+          </option>
+          {shifts.map((shift) => (
+            <option key={shift.id} value={String(shift.id)}>
+              {describeShift(shift)}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="preference-level">Preference</label>
+        <select
+          id="preference-level"
+          value={preferenceForm.preference}
+          onChange={(event) =>
+            setPreferenceForm({ ...preferenceForm, preference: event.target.value })
+          }
+        >
+          <option value="preferred">Preferred</option>
+          <option value="low">Low preference</option>
+          <option value="neutral">Neutral (no preference)</option>
+        </select>
+        <button type="submit" disabled={saving || preferenceForm.shift_id === ''}>
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+        <button type="button" onClick={closeAction} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+      <p className="table-note">
+        Preferences are soft: a low-preference shift is still one the worker
+        can be assigned to, and a preferred one is not a claim on it. Neutral
+        removes any stored preference for this shift rather than recording a
+        third value. This does not create a shift or a recurring template.
+      </p>
+      {formError !== null && (
+        <p className="backend-status backend-status-error">{formError}</p>
+      )}
+    </form>
+  )
+
+  const renderLeaveForm = () => (
+    <form className="employee-form" onSubmit={saveLeave}>
+      <h5>
+        {action.kind === 'add-leave'
+          ? 'Add approved leave'
+          : `Edit the approved leave ${describeLeave(action.leave)}`}
+      </h5>
+      <div className="list-controls">
+        <label htmlFor="leave-start">Starts</label>
+        <input
+          id="leave-start"
+          type="datetime-local"
+          value={toDatetimeLocal(leaveForm.start_datetime)}
+          onChange={(event) =>
+            setLeaveForm({
+              ...leaveForm,
+              start_datetime: fromDatetimeLocal(event.target.value),
+            })
+          }
+        />
+        <label htmlFor="leave-end">Ends</label>
+        <input
+          id="leave-end"
+          type="datetime-local"
+          value={toDatetimeLocal(leaveForm.end_datetime)}
+          onChange={(event) =>
+            setLeaveForm({
+              ...leaveForm,
+              end_datetime: fromDatetimeLocal(event.target.value),
+            })
+          }
+        />
+        <button type="submit" disabled={saving}>
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+        <button type="button" onClick={closeAction} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+      <p className="table-note">
+        This is leave that has already been approved, not a request. It must
+        end after it starts. Saving does not change or remove any assignment;
+        resolving a conflict between leave and an assignment is not built yet.
+      </p>
+      {formError !== null && (
+        <p className="backend-status backend-status-error">{formError}</p>
+      )}
+    </form>
+  )
+
+  const renderDeleteLeave = () => (
+    <div className="employee-form" role="alertdialog" aria-label="Confirm leave removal">
+      <h5>Remove the approved leave {describeLeave(action.leave)}?</h5>
+      <p className="table-note">
+        This removes the leave period. It cannot be undone, and it does not
+        change any assignment.
+      </p>
+      <div className="list-controls">
+        <button type="button" onClick={confirmDeleteLeave} disabled={saving}>
+          {saving ? 'Removing...' : 'Remove leave'}
+        </button>
+        <button type="button" onClick={closeAction} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+      {formError !== null && (
+        <p className="backend-status backend-status-error">{formError}</p>
+      )}
+    </div>
+  )
+
   const openPanel =
     action === null
       ? null
@@ -864,6 +1301,11 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
           'edit-block': renderBlockForm,
           'delete-semester': renderDeleteSemester,
           'delete-block': renderDeleteBlock,
+          'confirm-semester': renderConfirmSemester,
+          'set-preference': renderPreferenceForm,
+          'add-leave': renderLeaveForm,
+          'edit-leave': renderLeaveForm,
+          'delete-leave': renderDeleteLeave,
         }[action.kind]()
 
   return (
@@ -874,10 +1316,9 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
         {employee.full_name} ({employee.employee_code})
       </h3>
       <p className="table-note">
-        Semester dates and class times can be edited here. Confirming a
-        timetable, and editing shift preferences and approved leave, are not
-        built yet, so those sections show what is stored without offering
-        controls that would not work.
+        Semester dates and class times can be edited here, and each semester
+        can be confirmed once its dates and classes are complete. Shift
+        preferences and approved leave can also be edited here.
       </p>
 
       {feedback !== null && (
@@ -951,7 +1392,7 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
         </button>
       </div>
 
-      {openPanel}
+      {action !== null && SEMESTER_ACTION_KINDS.includes(action.kind) && openPanel}
 
       {semesters.length === 0 ? (
         <p className="backend-status backend-status-loading">
@@ -970,18 +1411,27 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
             onAddBlock={startAddBlock}
             onEditBlock={startEditBlock}
             onDeleteBlock={startDeleteBlock}
+            onConfirmSemester={startConfirmSemester}
           />
         ))
       )}
 
       <h4>Shift preferences</h4>
       <p className="table-note">
-        Only the shifts this worker has expressed a preference about. Every
-        other shift is neutral, which is stored as the absence of a preference
-        rather than as a third value. Preferences are soft: a low-preference
-        shift is still one the worker can be assigned to, and a preferred one
-        is not a claim on it. Editing them is not built yet.
+        Only the shifts this worker has a stored preference for are listed
+        below. Every other shift is neutral, which is stored as the absence
+        of a preference rather than as a third value. Preferences are soft: a
+        low-preference shift is still one the worker can be assigned to, and
+        a preferred one is not a claim on it.
       </p>
+
+      <div className="list-controls">
+        <button type="button" onClick={() => startSetPreference()} disabled={busy()}>
+          Set a shift preference
+        </button>
+      </div>
+
+      {action !== null && action.kind === 'set-preference' && openPanel}
 
       {shift_preferences.length === 0 ? (
         <p className="backend-status backend-status-loading">
@@ -1000,11 +1450,12 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
                 <th scope="col">Hall</th>
                 <th scope="col">Starts</th>
                 <th scope="col">Ends</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {shift_preferences.map((row, index) => (
-                <tr key={index}>
+              {shift_preferences.map((row) => (
+                <tr key={row.shift_id}>
                   <td>{PREFERENCE_LABELS[row.preference] ?? row.preference}</td>
                   <td>{row.hall}</td>
                   {/* Full dates on both ends, so an overnight shift reads as
@@ -1012,6 +1463,16 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
                       ends before it starts. */}
                   <td>{row.start_datetime}</td>
                   <td>{row.end_datetime}</td>
+                  <td>
+                    <button
+                      type="button"
+                      onClick={() => startSetPreference(row.shift_id, row.preference)}
+                      disabled={busy()}
+                      aria-label={`Change the preference for ${row.hall} ${row.start_datetime} to ${row.end_datetime}`}
+                    >
+                      Change
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1022,9 +1483,18 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
       <h4>Approved leave</h4>
       <p className="table-note">
         Leave that has already been approved, with the dates and times it
-        actually covers. Pending requests are not part of this application, and
-        editing approved leave is not built yet.
+        actually covers. Pending requests are not part of this application.
       </p>
+
+      <div className="list-controls">
+        <button type="button" onClick={startAddLeave} disabled={busy()}>
+          Add approved leave
+        </button>
+      </div>
+
+      {action !== null &&
+        ['add-leave', 'edit-leave', 'delete-leave'].includes(action.kind) &&
+        openPanel}
 
       {approved_leave.length === 0 ? (
         <p className="backend-status backend-status-loading">
@@ -1038,13 +1508,32 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
               <tr>
                 <th scope="col">Starts</th>
                 <th scope="col">Ends</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {approved_leave.map((row, index) => (
-                <tr key={index}>
+              {approved_leave.map((row) => (
+                <tr key={row.id}>
                   <td>{row.start_datetime}</td>
                   <td>{row.end_datetime}</td>
+                  <td>
+                    <button
+                      type="button"
+                      onClick={() => startEditLeave(row)}
+                      disabled={busy()}
+                      aria-label={`Edit the approved leave ${describeLeave(row)}`}
+                    >
+                      Edit
+                    </button>{' '}
+                    <button
+                      type="button"
+                      onClick={() => startDeleteLeave(row)}
+                      disabled={busy()}
+                      aria-label={`Remove the approved leave ${describeLeave(row)}`}
+                    >
+                      Remove
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
