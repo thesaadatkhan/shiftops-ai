@@ -54,6 +54,20 @@ from eligibility import (
     shift_coverage,
 )
 from optimizer import DraftNotOptimal, WeekNotPrepared, generate_draft
+from proposals import (
+    AssignmentNotFound,
+    ProposalContentMismatch,
+    ProposalNotFound,
+    ProposalNotPending,
+    ProposalRevalidationFailed,
+    ProposalValidationError,
+    ReplacementInvalid,
+    approve_proposal,
+    create_proposal,
+    get_proposal,
+    reject_proposal,
+    replace_assignment,
+)
 from scheduling import get_week_schedule, prepare_week
 from synthetic_data import WEEK_START, WEEK_END
 import weeks
@@ -687,6 +701,146 @@ def draft_schedule_week(week_start: str):
             status_code=500,
             detail=f"Stored shift data is invalid: {error}",
         ) from error
+    finally:
+        connection.close()
+
+
+# --------------------------------------------------------------------------
+# Schedule proposals, approval and explicit replacement (Phase 7 increment
+# 3). A proposal is a stored, immutable snapshot of a computed draft; only
+# `approve_proposal` ever creates real `assignments` rows, and only after
+# revalidating the exact stored content against current state inside one
+# transaction. See `proposals.py`.
+# --------------------------------------------------------------------------
+
+
+@app.post("/api/schedule/weeks/{week_start}/proposals", status_code=201)
+def create_schedule_proposal(week_start: str):
+    """Compute a draft and persist it as a new pending proposal.
+
+    `week_start` must be a real, strictly-formatted 'YYYY-MM-DD' Monday
+    (400), the week must already be prepared (409 otherwise), and every
+    optimization tier must solve to a proven OPTIMAL status (503 otherwise)
+    - the same contract `POST .../draft` has, since this calls the same
+    `optimizer.generate_draft` before persisting anything.
+    """
+    connection = get_connection()
+    try:
+        return create_proposal(connection, week_start)
+    except weeks.InvalidWeekStart as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except WeekNotPrepared as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except DraftNotOptimal as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except InvalidWorkDuration as error:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Stored shift data is invalid: {error}",
+        ) from error
+    finally:
+        connection.close()
+
+
+@app.get("/api/schedule/proposals/{proposal_id}")
+def get_schedule_proposal(proposal_id: int):
+    """The stored proposal exactly as persisted. Read-only."""
+    connection = get_connection()
+    try:
+        return get_proposal(connection, proposal_id)
+    except ProposalNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    finally:
+        connection.close()
+
+
+@app.post("/api/schedule/proposals/{proposal_id}/approve")
+def approve_schedule_proposal(
+    proposal_id: int, payload: Annotated[Any, Body()] = None
+):
+    """Approve a proposal, creating real assignments, or refuse it whole.
+
+    The request body must echo the proposal's exact stored assignments back
+    (`{"assignments": [{"shift_id", "employee_code"}, ...]}`) - a mismatch is
+    409, not a silent approval of unseen content. Every assignment is then
+    revalidated against current state; any conflict is 409 with a structured
+    `conflicts` list, and nothing is written. Approving an already-approved
+    proposal with matching content is a 200 no-op (idempotent retry);
+    approving an already-rejected one is 409.
+    """
+    connection = get_connection()
+    try:
+        return approve_proposal(connection, proposal_id, payload)
+    except ProposalValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except ProposalNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ProposalContentMismatch as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProposalNotPending as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ProposalRevalidationFailed as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(error), "conflicts": error.conflicts},
+        ) from error
+    finally:
+        connection.close()
+
+
+@app.post("/api/schedule/proposals/{proposal_id}/reject")
+def reject_schedule_proposal(proposal_id: int):
+    """Reject a pending proposal. Writes no assignment."""
+    connection = get_connection()
+    try:
+        return reject_proposal(connection, proposal_id)
+    except ProposalNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ProposalNotPending as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    finally:
+        connection.close()
+
+
+@app.post("/api/schedule/assignments/replace")
+def replace_schedule_assignment(payload: Annotated[Any, Body()] = None):
+    """Explicitly replace one worker's assignment to a shift with another's.
+
+    Body: `{"shift_id": int, "outgoing_employee_code": str,
+    "incoming_employee_code": str}`. The outgoing assignment is preserved
+    unless the whole operation succeeds; the incoming worker must pass every
+    hard eligibility rule (409 with structured detail otherwise). Neither
+    worker existing, or the outgoing worker not currently holding the named
+    shift, is 404.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Expected a JSON object with shift_id, outgoing_employee_code, "
+            "and incoming_employee_code.",
+        )
+    shift_id = payload.get("shift_id")
+    outgoing_code = payload.get("outgoing_employee_code")
+    incoming_code = payload.get("incoming_employee_code")
+    if (
+        not isinstance(shift_id, int)
+        or isinstance(shift_id, bool)
+        or not isinstance(outgoing_code, str)
+        or not isinstance(incoming_code, str)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="shift_id must be an integer; outgoing_employee_code and "
+            "incoming_employee_code must be strings.",
+        )
+
+    connection = get_connection()
+    try:
+        return replace_assignment(connection, shift_id, outgoing_code, incoming_code)
+    except AssignmentNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ReplacementInvalid as error:
+        raise HTTPException(status_code=409, detail=error.detail) from error
     finally:
         connection.close()
 

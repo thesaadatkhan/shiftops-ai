@@ -19,6 +19,11 @@ Checks:
 7. Deletion persists across closing and reopening the database file.
 8. The retired employee code survives the deletion and the restart, and
    demo initialization refuses on a database that holds one.
+9. A worker referenced by a schedule proposal (Phase 7 increment 3), even
+   with no live assignment, is refused with the same controlled error.
+10. A worker referenced only by an assignment-audit record is refused the
+    same way; a worker with no assignment, proposal, or audit history at
+    all remains deletable.
 
 Run with:  python verify_employee_deletion.py
 Exits non-zero if any check fails.
@@ -150,6 +155,9 @@ def counts(connection):
         "shift_preferences",
         "approved_leave",
         "assignments",
+        "schedule_proposals",
+        "proposal_assignments",
+        "assignment_audit",
     )
     return {
         table: connection.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
@@ -501,6 +509,88 @@ def main():
         retired_employee_codes(connection) == ["SW-002"],
         "the seeded worker's code is retired",
     )
+    connection.close()
+
+    # 9. A worker referenced only by a schedule proposal (no live assignment)
+    #    cannot be deleted either - deleting past that reference would
+    #    otherwise reach an unhandled SQLite foreign-key error.
+    connection = fixture()
+    worker = add_worker(connection, "SW-001", "Alice Adams")
+    give_records(connection, worker["id"])
+    connection.execute(
+        "INSERT INTO schedule_proposals (week_start, created_at, status)"
+        " VALUES ('2026-10-05', '2026-10-01 00:00', 'pending')"
+    )
+    proposal_id = connection.execute("SELECT id FROM schedule_proposals").fetchone()["id"]
+    shift_id = add_shift(connection, "Capella", "2026-10-09 17:00", "2026-10-09 22:00")
+    connection.execute(
+        "INSERT INTO proposal_assignments (proposal_id, shift_id, employee_id) VALUES (?, ?, ?)",
+        (proposal_id, shift_id, worker["id"]),
+    )
+    connection.commit()
+    before = counts(connection)
+
+    try:
+        delete_employee(connection, "SW-001", retired_at=RETIRED_AT)
+        check(False, "deletion should be refused when a schedule proposal names this worker")
+    except DeletionBlocked as error:
+        message = str(error)
+        check("proposal reference" in message, f"the refusal names the proposal reference ({message})")
+        check("history must be preserved" in message.lower(), "the refusal explains that history is preserved")
+
+    check(counts(connection) == before, "nothing was removed after the proposal-history refusal")
+    check(find_by_code(connection, "SW-001") is not None, "the worker still exists after the proposal-history refusal")
+    check(
+        connection.execute("SELECT COUNT(*) AS n FROM proposal_assignments").fetchone()["n"] == 1,
+        "the proposal reference itself is untouched",
+    )
+    connection.close()
+
+    # 10. A worker referenced only by an assignment-audit record (no live
+    #     assignment, no proposal reference) is blocked the same way.
+    connection = fixture()
+    outgoing = add_worker(connection, "SW-001", "Alice Adams")
+    incoming = add_worker(connection, "SW-002", "Bob Brown")
+    give_records(connection, outgoing["id"])
+    shift_id = add_shift(connection, "Capella", "2026-10-09 17:00", "2026-10-09 22:00")
+    connection.execute(
+        "INSERT INTO assignments (employee_id, shift_id) VALUES (?, ?)",
+        (incoming["id"], shift_id),
+    )
+    connection.execute(
+        "INSERT INTO assignment_audit"
+        " (occurred_at, action, shift_id, employee_id_before, employee_id_after, detail)"
+        " VALUES ('2026-10-01 00:00', 'assignment_replaced', ?, ?, ?, 'test')",
+        (shift_id, outgoing["id"], incoming["id"]),
+    )
+    connection.commit()
+    before = counts(connection)
+
+    try:
+        delete_employee(connection, "SW-001", retired_at=RETIRED_AT)
+        check(False, "deletion should be refused when an audit record names this worker")
+    except DeletionBlocked as error:
+        message = str(error)
+        check("audit record" in message, f"the refusal names the audit record ({message})")
+        check("history must be preserved" in message.lower(), "the refusal explains that history is preserved")
+
+    check(counts(connection) == before, "nothing was removed after the audit-history refusal")
+    check(find_by_code(connection, "SW-001") is not None, "the outgoing worker still exists after the audit-history refusal")
+    check(
+        connection.execute("SELECT COUNT(*) AS n FROM assignment_audit").fetchone()["n"] == 1,
+        "the audit record itself is untouched",
+    )
+
+    # SW-002 (the incoming worker, holding a live assignment) is also
+    # blocked, for the pre-existing assignment reason - and, distinctly, a
+    # worker with NO scheduling history of any kind (assignment, proposal or
+    # audit) remains deletable exactly as before.
+    fresh = add_worker(connection, "SW-003", "Carol Chen")
+    give_records(connection, fresh["id"], label="Statistics C")
+    connection.commit()
+    result = delete_employee(connection, "SW-003", retired_at=RETIRED_AT)
+    check(find_by_code(connection, "SW-003") is None, "a worker with no assignment, proposal or audit history remains deletable")
+    check(result["full_name"] == "Carol Chen", "the deletion result names the correct worker")
     connection.close()
 
     if failures:

@@ -579,12 +579,35 @@ def delete_employee(connection, employee_code, retired_at=None):
             (employee_id,),
         ).fetchone()["n"]
 
-        if assignments:
+        # A worker can also be scheduling history without a live assignment:
+        # named in a schedule proposal (Phase 7 increment 3), or named as the
+        # before/after worker in an assignment-change audit record. Both
+        # tables have foreign keys to employees, so deleting past this point
+        # without checking them would otherwise reach an unhandled SQLite
+        # foreign-key error instead of the controlled refusal below.
+        proposal_history = connection.execute(
+            "SELECT COUNT(*) AS n FROM proposal_assignments WHERE employee_id = ?",
+            (employee_id,),
+        ).fetchone()["n"]
+        audit_history = connection.execute(
+            "SELECT COUNT(*) AS n FROM assignment_audit"
+            " WHERE employee_id_before = ? OR employee_id_after = ?",
+            (employee_id, employee_id),
+        ).fetchone()["n"]
+
+        if assignments or proposal_history or audit_history:
+            reasons = []
+            if assignments:
+                reasons.append(f"{assignments} assignment(s)")
+            if proposal_history:
+                reasons.append(f"{proposal_history} schedule proposal reference(s)")
+            if audit_history:
+                reasons.append(f"{audit_history} scheduling audit record(s)")
             raise DeletionBlocked(
                 f"{existing['full_name']} ({existing['employee_code']}) has "
-                f"{assignments} assignment(s) on record and cannot be deleted. "
-                "Shift history must be preserved. Deactivate them instead - "
-                "that keeps every record and can be undone."
+                f"{', '.join(reasons)} on record and cannot be deleted. "
+                "Scheduling history must be preserved. Deactivate them "
+                "instead - that keeps every record and can be undone."
             )
 
         removed = {

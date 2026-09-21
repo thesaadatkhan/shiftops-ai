@@ -175,6 +175,59 @@ SCHEMA_STATEMENTS = [
         source_note TEXT
     )
     """,
+    # A stored, immutable snapshot of one computed draft (Phase 7 increment
+    # 3). Content never changes after creation - `proposal_assignments`
+    # below is written once, in the same transaction as this row, and never
+    # updated. Approving or rejecting only ever changes `status` and
+    # `decided_at` here; it never rewrites what was proposed. That
+    # immutability is what makes "bind approval to the exact proposal
+    # content" possible: there is nothing to silently regenerate or drift.
+    """
+    CREATE TABLE IF NOT EXISTS schedule_proposals (
+        id INTEGER PRIMARY KEY,
+        week_start TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'approved', 'rejected')),
+        decided_at TEXT
+    )
+    """,
+    # One row per proposed (not existing) assignment a draft contained at
+    # the moment it was persisted. Never updated after insertion; approving
+    # a proposal reads these rows and writes matching `assignments` rows -
+    # it does not edit these.
+    """
+    CREATE TABLE IF NOT EXISTS proposal_assignments (
+        id INTEGER PRIMARY KEY,
+        proposal_id INTEGER NOT NULL REFERENCES schedule_proposals(id),
+        shift_id INTEGER NOT NULL REFERENCES shifts(id),
+        employee_id INTEGER NOT NULL REFERENCES employees(id),
+        UNIQUE (proposal_id, shift_id, employee_id)
+    )
+    """,
+    # Append-only history of every proposal lifecycle event and every actual
+    # assignment change (creation via approval, or an explicit replacement).
+    # `employee_id_before`/`employee_id_after` are NULL where they do not
+    # apply (e.g. a proposal-level 'proposal_created' row names no single
+    # assignment). `detail` is a short factual sentence, never the
+    # optimizer's internal solver reasoning - this is a record of WHAT
+    # happened, not WHY the optimizer chose it.
+    """
+    CREATE TABLE IF NOT EXISTS assignment_audit (
+        id INTEGER PRIMARY KEY,
+        occurred_at TEXT NOT NULL,
+        action TEXT NOT NULL
+            CHECK (action IN (
+                'proposal_created', 'proposal_approved', 'proposal_rejected',
+                'assignment_created', 'assignment_replaced'
+            )),
+        proposal_id INTEGER REFERENCES schedule_proposals(id),
+        shift_id INTEGER REFERENCES shifts(id),
+        employee_id_before INTEGER REFERENCES employees(id),
+        employee_id_after INTEGER REFERENCES employees(id),
+        detail TEXT NOT NULL
+    )
+    """,
 ]
 
 # The fictional demo semester. It must contain the sample reporting week of
