@@ -13,11 +13,13 @@ import { useEffect, useRef, useState } from 'react'
 
 import { coverageUrl } from './coverage.js'
 import {
+  ApiError,
   approveProposal,
   createProposal,
   describeError,
   fetchProposalsForWeek,
   fetchWeekSchedule,
+  isOutcomeUncertain,
   prepareWeek,
   rejectProposal,
   replaceAssignment,
@@ -85,11 +87,31 @@ export default function Schedule({ weekStart }) {
   const [decisionError, setDecisionError] = useState(null)
   const [decisionConflicts, setDecisionConflicts] = useState(null)
 
+  const [generateNotice, setGenerateNotice] = useState(null)
+  // True only while a Generate request's outcome is genuinely unresolved -
+  // an uncertain response AND the reconciling reload also failed. A second
+  // Generate must never be sendable in that state (it could create a
+  // duplicate proposal for a request that already committed); it is cleared
+  // once a reload proves either "no proposal was created" or recovers the
+  // one that was.
+  const [generateBlocked, setGenerateBlocked] = useState(false)
+  // The proposal ids known before the request that left generateBlocked
+  // true, so a later Reload can still tell a genuinely NEW proposal apart
+  // from one that already existed - a ref because it does not itself drive
+  // rendering.
+  const pendingGenerateKnownIds = useRef(new Set())
+
   const [replaceTarget, setReplaceTarget] = useState(null) // {shift, outgoing} | null
   const [replaceCandidates, setReplaceCandidates] = useState({ status: 'idle', options: [] })
   const [replaceChoice, setReplaceChoice] = useState('')
   const [replaceStatus, setReplaceStatus] = useState('idle') // idle | loading
   const [replaceError, setReplaceError] = useState(null)
+  // True only while a replacement's outcome is genuinely unresolved - an
+  // uncertain response AND the reconciling reload also failed. Confirm
+  // replacement must never be clickable in that state (a second submission
+  // could retry a replacement that already committed, targeting an outgoing
+  // assignment that no longer exists).
+  const [replaceBlocked, setReplaceBlocked] = useState(false)
   // Bumped on every new candidate fetch (and on closing the panel), so a
   // slow response from an earlier target - or one still in flight when the
   // panel was cancelled - can never populate state for a different, later
@@ -103,12 +125,29 @@ export default function Schedule({ weekStart }) {
   // showing the data it already has until the new fetch resolves, rather
   // than blanking out between a Prepare/Generate/Approve action and its
   // authoritative reload.
+  // Both return the fetched value (or null on failure) as well as updating
+  // state, so a caller reconciling an uncertain mutation outcome can inspect
+  // the authoritative result directly - React state updates are not
+  // readable synchronously right after the `set...` call that schedules
+  // them, so returning the value is the only way a caller in the same tick
+  // can act on what was actually reloaded.
   async function loadWeek() {
     try {
       const data = await fetchWeekSchedule(weekStart)
       setWeekState({ status: 'success', data, error: null })
+      return data
     } catch (error) {
-      setWeekState({ status: 'error', data: null, error })
+      // Codex review: this used to always clear `data` to null on failure,
+      // which - for a background reconciliation reload triggered from
+      // inside an open Approve/Replace panel - blew away the ALREADY
+      // LOADED schedule and fell through to the full-page "Could not load"
+      // screen below, taking the open panel (and its own error/Reload UI)
+      // down with it. Keeping whatever data is already on screen is what
+      // the comment above this function already promised ("keeps showing
+      // the data it already has"); only a genuine INITIAL load failure (no
+      // data yet at all) should show the full-page error.
+      setWeekState((state) => ({ status: 'error', data: state.data, error }))
+      return null
     }
   }
 
@@ -123,8 +162,10 @@ export default function Schedule({ weekStart }) {
             ? list[0].id
             : null,
       )
+      return list
     } catch (error) {
       setProposalsState({ status: 'error', list: [], error })
+      return null
     }
   }
 
@@ -137,19 +178,22 @@ export default function Schedule({ weekStart }) {
     // so this is not a synchronous setState-in-effect in practice - the
     // rule cannot see past a named helper to confirm that, unlike an inline
     // async arrow it can trace directly.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadWeek()
     loadProposals()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const anyActionInFlight =
-    preparing ||
-    generating ||
-    confirmingApproval ||
-    decisionStatus !== 'idle' ||
-    replaceStatus === 'loading' ||
-    replaceCandidates.status === 'loading'
+  // A replacement panel counts as "in flight" for as long as it is OPEN, not
+  // only while its candidate fetch is loading (Codex review: the panel used
+  // to stop blocking Approve/Generate/Reject the moment candidates finished
+  // loading, even though the panel itself - and the decision it represents
+  // - was still open and unresolved). `approvalOrGenerationBusy` is exposed
+  // separately so `confirmReplace` can also check it directly, rather than
+  // only relying on the replace panel never having opened while one of
+  // those was already busy.
+  const approvalOrGenerationBusy = preparing || generating || confirmingApproval || decisionStatus !== 'idle'
+  const replacePanelOpen = replaceTarget !== null
+  const anyActionInFlight = approvalOrGenerationBusy || replacePanelOpen || replaceStatus === 'loading'
 
   async function handlePrepare() {
     if (anyActionInFlight) {
@@ -162,25 +206,80 @@ export default function Schedule({ weekStart }) {
       await loadWeek()
     } catch (error) {
       setPrepareError(error)
+      // A committed-but-unreadable response, or a request whose fate is
+      // genuinely unknown (Codex review finding 5), is reconciled with an
+      // authoritative reload rather than left showing stale pre-prepare
+      // state next to an error that might not even mean it failed.
+      // prepareWeek is idempotent either way, so this never risks a
+      // duplicate write - but reloading first is still the honest answer
+      // before inviting a retry.
+      if (isOutcomeUncertain(error)) {
+        await loadWeek()
+      }
     } finally {
       setPreparing(false)
     }
   }
 
+  // Shared by handleGenerate's own catch block and the read-only Reload
+  // button: reloads the authoritative proposal list and decides whether the
+  // uncertain request is now resolved. Returns nothing - it only updates
+  // state (generateBlocked/generateNotice/generateError/selectedProposalId).
+  async function reconcileGenerate(knownIds) {
+    const list = await loadProposals()
+    if (list === null) {
+      // The reconciling read itself failed - genuinely still unknown.
+      // Generate stays blocked; the Reload button remains the only option.
+      setGenerateBlocked(true)
+      return
+    }
+    setGenerateBlocked(false)
+    const recovered = list.find((item) => !knownIds.has(item.id))
+    if (recovered) {
+      // Identifiable: a proposal that was not there before this request
+      // now is. SQLite's transactional guarantees mean this reload is
+      // authoritative, not a guess - the uncertainty is actually resolved.
+      setSelectedProposalId(recovered.id)
+      setGenerateError(null)
+      setGenerateNotice(
+        `The previous request had already created proposal #${recovered.id}; it is shown below. ` +
+          'No new proposal is needed.',
+      )
+    } else {
+      setGenerateNotice(
+        'Reloaded the stored proposals for this week - no new proposal was created by that request. ' +
+          'It is safe to try Generate Schedule again.',
+      )
+    }
+  }
+
   async function handleGenerate() {
-    if (anyActionInFlight) {
+    if (anyActionInFlight || generateBlocked) {
       return
     }
     setGenerating(true)
     setGenerateError(null)
+    setGenerateNotice(null)
     setDecisionError(null)
     setDecisionConflicts(null)
+    // Captured before the request, so reconciliation below can tell a
+    // genuinely NEW proposal apart from one that already existed.
+    const knownIds = new Set(proposalsState.list.map((item) => item.id))
     try {
       const created = await createProposal(weekStart)
       setProposalsState((state) => ({ ...state, list: upsertProposal(state.list, created) }))
       setSelectedProposalId(created.id)
     } catch (error) {
       setGenerateError(error)
+      if (isOutcomeUncertain(error)) {
+        // The generation request may have already created a stored
+        // proposal even though this response could not confirm it -
+        // reload the week's persisted proposals BEFORE allowing another
+        // Generate click, so a second attempt can never create a
+        // duplicate proposal for a request that already succeeded.
+        pendingGenerateKnownIds.current = knownIds
+        await reconcileGenerate(knownIds)
+      }
     } finally {
       setGenerating(false)
     }
@@ -221,11 +320,30 @@ export default function Schedule({ weekStart }) {
       setConfirmingApproval(false)
       await loadWeek()
     } catch (error) {
+      // The confirmation panel closes in every branch below because a real
+      // approval request was just sent - a plain ApiError refusal means
+      // nothing was written, so there is nothing left to confirm; an
+      // uncertain outcome means a second click here would be a genuine
+      // retry of something that may already be applied, which must never
+      // happen invisibly.
       setConfirmingApproval(false)
-      if (error?.status === 409 && error.detail && typeof error.detail === 'object' && Array.isArray(error.detail.conflicts)) {
+      if (error instanceof ApiError && error.status === 409 && error.detail && typeof error.detail === 'object' && Array.isArray(error.detail.conflicts)) {
+        // A structured revalidation conflict (D047): the backend refused
+        // the WHOLE approval and wrote nothing - a confirmed refusal, not
+        // an uncertain outcome.
         setDecisionConflicts(error.detail.conflicts)
-      } else {
+      } else if (error instanceof ApiError) {
         setDecisionError(error)
+      } else {
+        // ResponseValidationError or NetworkOutcomeUnknownError (Codex
+        // review finding 5): the approval may have already committed even
+        // though this response could not confirm it. Never claim success
+        // and never silently invite a retry - reconcile through the same
+        // authoritative reads a successful approval would have triggered,
+        // and let the reloaded proposal/schedule state speak for itself.
+        setDecisionError(error)
+        await loadWeek()
+        await loadProposals()
       }
     } finally {
       setDecisionStatus('idle')
@@ -243,6 +361,11 @@ export default function Schedule({ weekStart }) {
       setProposalsState((state) => ({ ...state, list: upsertProposal(state.list, rejected) }))
     } catch (error) {
       setDecisionError(error)
+      if (isOutcomeUncertain(error)) {
+        // The rejection may have already committed - reconcile via the
+        // same authoritative read a successful rejection would have used.
+        await loadProposals()
+      }
     } finally {
       setDecisionStatus('idle')
     }
@@ -292,20 +415,80 @@ export default function Schedule({ weekStart }) {
     setReplaceTarget(null)
     setReplaceChoice('')
     setReplaceError(null)
+    setReplaceBlocked(false)
+    // Codex review finding 3: this used to leave `replaceCandidates.status`
+    // at 'loading' when cancelling while a candidate fetch was still in
+    // flight. That response is correctly ignored (the bumped token above
+    // makes sure of it), but nothing ever reset the status itself back to
+    // idle - so `anyActionInFlight` (which checks
+    // `replaceCandidates.status === 'loading'`) stayed true forever,
+    // locking every other action on the whole screen even after the panel
+    // was gone. Resetting it here is what actually releases that lock.
+    setReplaceCandidates({ status: 'idle', options: [] })
+  }
+
+  // Shared by confirmReplace's own catch block and the read-only Reload
+  // button: reloads the authoritative schedule and checks the EXACT
+  // intended replacement (this outgoing worker, this incoming worker) -
+  // not merely "did the shift change" - then decides whether Confirm stays
+  // blocked, is safe to retry, or the form should close because it already
+  // happened. SQLite's transactional guarantees make this reload
+  // conclusive, not a guess.
+  async function reconcileReplace(target, incomingCode, error) {
+    const week = await loadWeek()
+    if (week === null) {
+      // The reconciling reload itself failed - genuinely still unknown.
+      // Confirm replacement stays blocked; Reload remains the only option.
+      setReplaceError(error)
+      setReplaceBlocked(true)
+      return
+    }
+    const shift = week.shifts.find((item) => item.id === target.shift.id)
+    const alreadyReplaced =
+      shift &&
+      incomingCode &&
+      shift.assigned_employees.some((worker) => worker.employee_code === incomingCode) &&
+      !shift.assigned_employees.some((worker) => worker.employee_code === target.outgoing.employee_code)
+    if (alreadyReplaced) {
+      // Resolved: it already happened. Close the stale form rather than
+      // leaving a "Confirm replacement" button that would resubmit a
+      // replacement targeting an outgoing assignment that no longer exists.
+      closeReplace()
+      return
+    }
+    // Resolved the other way: the outgoing worker still holds the
+    // assignment and the incoming one does not, so the replacement did NOT
+    // commit. Safe to leave the form open for a deliberate retry.
+    setReplaceError(error)
+    setReplaceBlocked(false)
   }
 
   async function confirmReplace() {
-    if (!replaceTarget || !replaceChoice || replaceStatus === 'loading') {
+    // Also re-checks `approvalOrGenerationBusy` directly (Codex review): the
+    // replacement panel being open already blocks those actions from
+    // STARTING via `anyActionInFlight`, but confirming the replacement
+    // itself must not proceed on the assumption that guard was never
+    // bypassed - defense in depth, not reliance on a single check.
+    if (!replaceTarget || !replaceChoice || replaceStatus === 'loading' || approvalOrGenerationBusy || replaceBlocked) {
       return
     }
     setReplaceStatus('loading')
     setReplaceError(null)
+    const target = replaceTarget // captured before any await - closeReplace() clears the state value
+    const incomingCode = replaceChoice // captured for the same reason
     try {
-      await replaceAssignment(replaceTarget.shift.id, replaceTarget.outgoing.employee_code, replaceChoice)
+      await replaceAssignment(target.shift.id, target.outgoing.employee_code, incomingCode)
       closeReplace()
       await loadWeek()
     } catch (error) {
-      setReplaceError(error)
+      if (isOutcomeUncertain(error)) {
+        // The replacement may have already committed even though this
+        // response could not confirm it - never send a second "Confirm
+        // replacement" before this is reconciled.
+        await reconcileReplace(target, incomingCode, error)
+      } else {
+        setReplaceError(error)
+      }
     } finally {
       setReplaceStatus('idle')
     }
@@ -315,7 +498,11 @@ export default function Schedule({ weekStart }) {
     return <p>Loading the schedule for this week…</p>
   }
 
-  if (weekState.status === 'error') {
+  // Only a genuine INITIAL failure (no schedule loaded yet at all) takes
+  // over the whole screen - a background reconciliation reload that fails
+  // while data is already on screen is surfaced by whichever action
+  // triggered it (generateError/replaceError/decisionError), not here.
+  if (weekState.status === 'error' && !weekState.data) {
     return (
       <div>
         <p role="alert">Could not load the schedule for this week: {describeError(weekState.error)}</p>
@@ -343,7 +530,7 @@ export default function Schedule({ weekStart }) {
       ) : (
         <>
           <div className="schedule-actions">
-            <button type="button" disabled={anyActionInFlight} onClick={handleGenerate}>
+            <button type="button" disabled={anyActionInFlight || generateBlocked} onClick={handleGenerate}>
               {generating ? 'Generating…' : 'Generate Schedule'}
             </button>
             {proposalsState.list.length > 1 && (
@@ -364,9 +551,27 @@ export default function Schedule({ weekStart }) {
               </label>
             )}
           </div>
-          {generateError && <p role="alert">{describeError(generateError)}</p>}
+          {generateError && (
+            <p role="alert">
+              {describeError(generateError)}
+              {generateBlocked && ' Generate Schedule is disabled until this is reconciled.'}{' '}
+              <button
+                type="button"
+                onClick={() => reconcileGenerate(pendingGenerateKnownIds.current)}
+                disabled={anyActionInFlight}
+              >
+                Reload
+              </button>
+            </p>
+          )}
+          {generateNotice && <p className="table-note">{generateNotice}</p>}
           {proposalsState.status === 'error' && (
-            <p role="alert">Could not load stored proposals for this week: {describeError(proposalsState.error)}</p>
+            <p role="alert">
+              Could not load stored proposals for this week: {describeError(proposalsState.error)}{' '}
+              <button type="button" onClick={loadProposals} disabled={anyActionInFlight}>
+                Reload
+              </button>
+            </p>
           )}
 
           {proposal && (
@@ -518,6 +723,20 @@ export default function Schedule({ weekStart }) {
                                     >
                                       Replace
                                     </button>
+                                    {worker.conflicts && (
+                                      // Codex review finding 2: a class/leave
+                                      // edit or a status change since approval
+                                      // can invalidate an assignment that was
+                                      // valid when it was approved. Purely
+                                      // informational - the assignment above
+                                      // is untouched and still counts as
+                                      // staffing; this only surfaces the
+                                      // conflict for the supervisor to resolve
+                                      // explicitly, through Replace.
+                                      <p role="alert" className="table-note">
+                                        Conflict: {worker.conflicts.reasons.join('; ')}
+                                      </p>
+                                    )}
                                   </li>
                                 ))}
                               </ul>
@@ -567,15 +786,37 @@ export default function Schedule({ weekStart }) {
               )}
             </label>
           )}
-          {replaceError && <p role="alert">{describeError(replaceError)}</p>}
+          {replaceError && (
+            <p role="alert">
+              {describeError(replaceError)}
+              {replaceBlocked && ' Confirm replacement is disabled until this is reconciled.'}
+            </p>
+          )}
           <div className="list-controls">
             <button
               type="button"
-              disabled={!replaceChoice || replaceStatus === 'loading' || replaceCandidates.status === 'loading'}
+              disabled={
+                !replaceChoice ||
+                replaceStatus === 'loading' ||
+                replaceCandidates.status === 'loading' ||
+                replaceBlocked
+              }
               onClick={confirmReplace}
             >
               {replaceStatus === 'loading' ? 'Replacing…' : 'Confirm replacement'}
             </button>
+            {replaceError && (
+              // A read-only way to re-check the exact intended replacement
+              // after an uncertain outcome, instead of only a mutation
+              // button to retry blindly.
+              <button
+                type="button"
+                onClick={() => reconcileReplace(replaceTarget, replaceChoice, replaceError)}
+                disabled={replaceStatus === 'loading'}
+              >
+                Reload
+              </button>
+            )}
             <button type="button" onClick={closeReplace} disabled={replaceStatus === 'loading'}>
               Cancel
             </button>

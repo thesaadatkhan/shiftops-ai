@@ -4,7 +4,7 @@ import EmployeeDetails from './EmployeeDetails.jsx'
 import {
   EMPLOYEES_URL,
   studentTypeLabel,
-  timetableLabel,
+  timetableStatusDisplay,
 } from './employees.js'
 
 const SORT_FIELDS = [
@@ -566,6 +566,7 @@ function EmployeeList({ weekStart }) {
       <EmployeeDetails
         key={detailCode}
         employeeCode={detailCode}
+        weekStart={weekStart}
         onClose={closeDetails}
         onChanged={() => setDetailChangedSomething(true)}
       />
@@ -895,7 +896,7 @@ function EmployeeList({ weekStart }) {
                   <td>{employee.is_active ? 'Active' : 'Inactive'}</td>
                   <td>{studentTypeLabel(employee)}</td>
                   <td>{employee.class_block_count}</td>
-                  <td>{timetableLabel(employee.timetable_status)}</td>
+                  <td>{timetableStatusDisplay(employee)}</td>
                   <td>{employee.weekly_class_hours}</td>
                   <td>{employee.weekly_hour_limit} h</td>
                   <td>{employee.assigned_hours} h</td>

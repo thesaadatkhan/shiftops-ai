@@ -71,13 +71,8 @@ from proposals import (
     replace_assignment,
 )
 from scheduling import get_week_schedule, prepare_week
-from synthetic_data import WEEK_START, WEEK_END
+from synthetic_data import WEEK_START
 import weeks
-
-# WEEK_END is the exclusive Monday boundary; the reporting week's last day is
-# the Sunday before it. Semester overlap is compared against that inclusive
-# date.
-REPORTING_WEEK_END = WEEK_END - timedelta(days=1)
 
 app = FastAPI()
 
@@ -157,7 +152,7 @@ def list_employees(week_start: str | None = None):
         ).fetchall()
 
         schedules = connection.execute(
-            "SELECT employee_id, start_date, end_date, confirmed_at"
+            "SELECT employee_id, start_date, end_date, confirmed_at, dates_provisional"
             " FROM semester_schedules"
         ).fetchall()
 
@@ -214,14 +209,20 @@ def list_employees(week_start: str | None = None):
             # Readiness for the DISPLAYED reporting week, in five states -
             # missing, outside_period, unconfirmed, partial, confirmed. See
             # reporting_period_coverage() for what each one means and why
-            # they are deliberately not collapsed.
-            #
-            # This describes timetable readiness only. It is not shift
-            # eligibility - that is a separate calculation in eligibility.py,
-            # which requires confirmed AND non-provisional dates, not merely
-            # a "confirmed" status here - and it is independent of active
+            # they are deliberately not collapsed. Independent of active
             # status.
-            "timetable_status": coverage.get(employee["id"], "missing"),
+            "timetable_status": coverage.get(
+                employee["id"], {"status": "missing", "scheduling_ready": False}
+            )["status"],
+            # The stricter fact eligibility.py actually requires - confirmed
+            # AND non-provisional dates covering every day of this week, not
+            # merely "confirmed" - so a provisional-but-confirmed worker (see
+            # reporting_period_coverage()) is not mistaken for one who is
+            # actually available. Phase 8 readiness counts must use this
+            # field, not `timetable_status == "confirmed"` alone.
+            "scheduling_ready": coverage.get(
+                employee["id"], {"status": "missing", "scheduling_ready": False}
+            )["scheduling_ready"],
             "approved_leave_count": employee["approved_leave_count"],
             # Whole hours: work shifts are whole-hour blocks, so these
             # totals never need rounding.
@@ -238,13 +239,6 @@ def list_employees(week_start: str | None = None):
         "week_end": (active_week_end - timedelta(days=1)).strftime("%Y-%m-%d"),
         "employees": [employee_payload(employee) for employee in employees],
     }
-
-
-# The seven dates of the fixed sample reporting week, indexed by day_of_week
-# with 0 = Monday (D025). Used by the employee-details view, which is not
-# parameterized by week (only `GET /api/employees` accepts `week_start`; see
-# `weeks.week_dates` for computing the same list for another Monday).
-REPORTING_WEEK_DATES = weeks.week_dates(WEEK_START)
 
 
 def schedule_covered_days(schedule, week_dates):
@@ -293,7 +287,9 @@ def reporting_period_coverage(schedules, week_dates):
     nothing about October, and reporting it as "confirmed" while October is
     displayed would be actively misleading.
 
-    Five states, each answering a different question:
+    Returns `{employee_id: {"status": ..., "scheduling_ready": bool}}`.
+
+    `status` is one of five states, each answering a different question:
 
       missing        - no semester schedule at all. Nobody has said anything
                        about this worker's classes.
@@ -308,15 +304,29 @@ def reporting_period_coverage(schedules, week_dates):
       confirmed      - confirmed schedules cover all seven days. Combined
                        with a class-block count of zero, that is a deliberate
                        "this worker has no classes this week", which stays
-                       distinguishable from `missing`.
+                       distinguishable from `missing`. **`confirmed` alone
+                       does not mean scheduling-ready** - a schedule can be
+                       confirmed while its dates are still `dates_provisional`
+                       (the Phase 5C migration can leave one that way; see
+                       `database.migrate_class_schedules`), meaning nobody
+                       has actually accepted those assumed dates.
 
-    This is timetable readiness only. It is NOT shift eligibility - see
-    `eligibility.py`, which requires a schedule to be BOTH confirmed and
-    non-provisional before its dates count as coverage, a stricter test than
-    "confirmed" here - and it is independent of whether a worker is active.
+    `scheduling_ready` is the separate, stricter fact Phase 6 eligibility
+    (`eligibility.py`) actually requires and Phase 8 must reuse: whether
+    ACCEPTED schedules - `confirmed_at IS NOT NULL AND dates_provisional = 0`
+    - cover all seven days of the displayed week. Codex review found this
+    project reporting a provisional-but-confirmed worker as plain
+    `"confirmed"` everywhere, which reads as available when
+    `evaluate_shift_eligibility` would still correctly refuse them
+    (`timetable_not_confirmed`) until a supervisor actually confirms the
+    real dates. `status` keeps recording confirmation history honestly (a
+    provisional confirmation IS a real, historical fact - it is not
+    weakened or hidden here); `scheduling_ready` is the field that must
+    never treat provisional dates as accepted availability.
     """
     any_days = {}
     confirmed_days = {}
+    accepted_days = {}
     seen = set()
 
     for schedule in schedules:
@@ -328,20 +338,27 @@ def reporting_period_coverage(schedules, week_dates):
         any_days.setdefault(employee_id, set()).update(covered)
         if schedule["confirmed_at"] is not None:
             confirmed_days.setdefault(employee_id, set()).update(covered)
+            if not schedule["dates_provisional"]:
+                accepted_days.setdefault(employee_id, set()).update(covered)
 
-    status = {}
+    result = {}
     for employee_id in seen:
         covered = any_days.get(employee_id, set())
         confirmed = confirmed_days.get(employee_id, set())
+        accepted = accepted_days.get(employee_id, set())
         if not covered:
-            status[employee_id] = "outside_period"
+            status = "outside_period"
         elif not confirmed:
-            status[employee_id] = "unconfirmed"
+            status = "unconfirmed"
         elif len(confirmed) < len(week_dates):
-            status[employee_id] = "partial"
+            status = "partial"
         else:
-            status[employee_id] = "confirmed"
-    return status
+            status = "confirmed"
+        result[employee_id] = {
+            "status": status,
+            "scheduling_ready": len(accepted) == len(week_dates),
+        }
+    return result
 
 
 def semester_payload(schedule, blocks_by_schedule, week_dates):
@@ -403,7 +420,7 @@ def semester_payload(schedule, blocks_by_schedule, week_dates):
     }
 
 
-def employee_detail_payload(connection, employee_code):
+def employee_detail_payload(connection, employee_code, week_start_text=None):
     """Everything stored about one worker, read-only.
 
     Every query filters on this worker's own internal id - the class blocks
@@ -414,12 +431,26 @@ def employee_detail_payload(connection, employee_code):
     Legacy `courses` and `class_meetings` are deliberately NOT returned. They
     are retained provenance for the migration, not a timetable; exposing them
     here would present a second, contradictory set of class times.
+
+    `week_start_text` is the same shared reporting week `GET /api/employees`
+    already accepts (Codex review finding 4: this used to always compute
+    assigned hours, remaining capacity, semester coverage and timetable
+    status for the fixed sample week, disagreeing with whatever week
+    Employees/Schedule had selected). Omitting it keeps the exact former
+    default - the fixed sample week - unchanged.
     """
     employee = find_by_code(connection, employee_code)
     if employee is None:
         raise EmployeeNotFound(f"No employee with code {employee_code}.")
 
     employee_id = employee["id"]
+
+    if week_start_text is None:
+        active_week_start = WEEK_START
+    else:
+        active_week_start = weeks.parse_week_start(week_start_text)
+    active_week_end = active_week_start + timedelta(days=7)
+    active_week_dates = weeks.week_dates(active_week_start)
 
     schedules = connection.execute(
         "SELECT id, employee_id, start_date, end_date, confirmed_at,"
@@ -481,8 +512,11 @@ def employee_detail_payload(connection, employee_code):
         # here meant a corrupt shift belonging to somebody else made THIS
         # worker's details return 500 - a page failing because of a record it
         # has no connection to. The list endpoint still validates everything,
-        # because it reports on everyone.
-        assigned = assigned_hours_for_employee(connection, employee_id)
+        # because it reports on everyone. Uses the SAME selected week
+        # Employees/Schedule are showing, not always the fixed sample week.
+        assigned = assigned_hours_for_employee(
+            connection, employee_id, week_start=active_week_start, week_end=active_week_end
+        )
     except InvalidWorkDuration as error:
         # This worker's own assigned shift is unusable. Still a controlled
         # 500 rather than a guessed number.
@@ -491,9 +525,16 @@ def employee_detail_payload(connection, employee_code):
             detail=f"Stored shift data is invalid: {error}",
         ) from error
 
+    # The same readiness the list shows, computed by the same function over
+    # the same schedules and the same selected week, so the two views can
+    # never disagree about the displayed week.
+    readiness = reporting_period_coverage(schedules, active_week_dates).get(
+        employee_id, {"status": "missing", "scheduling_ready": False}
+    )
+
     return {
-        "week_start": WEEK_START.strftime("%Y-%m-%d"),
-        "week_end": REPORTING_WEEK_END.strftime("%Y-%m-%d"),
+        "week_start": active_week_start.strftime("%Y-%m-%d"),
+        "week_end": (active_week_end - timedelta(days=1)).strftime("%Y-%m-%d"),
         "employee": {
             "employee_code": employee["employee_code"],
             "full_name": employee["full_name"],
@@ -504,15 +545,14 @@ def employee_detail_payload(connection, employee_code):
             "remaining_capacity_hours": remaining_capacity_hours(
                 employee["weekly_hour_limit"], assigned
             ),
-            # The same five-state readiness the list shows, computed by the
-            # same function over the same schedules, so the two views can
-            # never disagree about the displayed week.
-            "timetable_status": reporting_period_coverage(
-                schedules, REPORTING_WEEK_DATES
-            ).get(employee_id, "missing"),
+            "timetable_status": readiness["status"],
+            # See reporting_period_coverage(): the stricter accepted
+            # (confirmed AND non-provisional) fact eligibility.py actually
+            # requires, not merely `timetable_status == "confirmed"`.
+            "scheduling_ready": readiness["scheduling_ready"],
         },
         "semesters": [
-            semester_payload(schedule, blocks_by_schedule, REPORTING_WEEK_DATES)
+            semester_payload(schedule, blocks_by_schedule, active_week_dates)
             for schedule in schedules
         ],
         "shift_preferences": [
@@ -551,15 +591,17 @@ def employee_detail_payload(connection, employee_code):
 
 
 @app.get("/api/employees/{employee_code}")
-def get_employee_details(employee_code: str):
+def get_employee_details(employee_code: str, week_start: str | None = None):
     """One worker's stored details, classes, preferences and approved leave.
 
     Read-only. It shares `run_employee_action`'s error mapping so an unknown
     code is a 404 in the same `{"detail": ...}` shape as every other employee
-    route (D033).
+    route (D033). `week_start` is the same optional shared reporting week
+    `GET /api/employees` accepts; omitting it keeps the exact former default
+    (the fixed sample week) unchanged.
     """
     return run_employee_action(
-        lambda connection: employee_detail_payload(connection, employee_code)
+        lambda connection: employee_detail_payload(connection, employee_code, week_start)
     )
 
 
@@ -1040,6 +1082,12 @@ def run_employee_action(action):
     try:
         return action(connection)
     except EmployeeValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except weeks.InvalidWeekStart as error:
+        # The details route's optional `week_start` query parameter (Codex
+        # review finding 4) is validated the same way every other week
+        # parameter in this project is - a malformed or non-Monday value is
+        # 400 with a string detail (D033), never a 500.
         raise HTTPException(status_code=400, detail=str(error)) from error
     except DuplicateEmployeeCode as error:
         raise HTTPException(status_code=409, detail=str(error)) from error

@@ -41,6 +41,22 @@ export function timetableLabel(status) {
   return TIMETABLE_LABELS[status] ?? status
 }
 
+// `scheduling_ready` (Codex review finding 6) is the stricter fact backend
+// eligibility actually requires: confirmed AND non-provisional dates, not
+// merely "confirmed". A semester the Phase 5C migration left confirmed but
+// still provisional (nobody has accepted its assumed dates) reads as plain
+// "Confirmed" under `timetableLabel` alone, which is misleading - Coverage
+// would still correctly refuse that worker as `timetable_not_confirmed`.
+// This annotates ONLY that one genuinely ambiguous case, so `timetableLabel`
+// itself is not changed and every other status keeps its plain wording.
+export function timetableStatusDisplay(employee) {
+  const label = timetableLabel(employee.timetable_status)
+  if (employee.timetable_status === 'confirmed' && !employee.scheduling_ready) {
+    return `${label} (provisional dates - not scheduling-ready)`
+  }
+  return label
+}
+
 // Class blocks are stored as a weekday number with 0 = Monday (D025), which
 // is what Python's datetime.weekday() produces. Read back into words here;
 // the number is the stored value and is never shown.

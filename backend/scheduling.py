@@ -13,6 +13,7 @@ malformed date or non-Monday is rejected identically everywhere.
 
 from datetime import datetime
 
+from eligibility import evaluate_shift_eligibility
 from reporting import shift_duration_hours
 from synthetic_data import TIME_FORMAT, generate_required_shifts
 from weeks import DATE_FORMAT, parse_week_start, week_bounds
@@ -106,6 +107,22 @@ def get_week_schedule(connection, week_start_text):
     information and whether each shift is covered. A week nobody has
     prepared yet returns an empty but valid `shifts` list; this never
     generates or inserts anything.
+
+    **Each assigned worker also carries `conflicts`** (Codex review finding
+    2): a class/semester edit or a new approved-leave period can invalidate
+    an assignment that was perfectly valid when it was approved, and nothing
+    previously surfaced that. `conflicts` is `null` when the assignment
+    still passes every current hard eligibility rule, or the same structured
+    `{reason_codes, reasons}` shape Coverage and proposal revalidation
+    already use when it does not - computed by calling
+    `eligibility.evaluate_shift_eligibility` again, the SAME function every
+    other hard-rule check in this project uses, never a second
+    implementation. This is purely informational: it never removes,
+    replaces, or otherwise changes the assignment, and it never affects
+    `assigned_count` or `covered` - a currently-inactive worker's past
+    assignment still counts as staffing exactly as before. Resolving a
+    flagged conflict is the supervisor's explicit choice, through the
+    existing replacement flow.
     """
     week_start = parse_week_start(week_start_text)
     _, week_end = week_bounds(week_start)
@@ -128,7 +145,8 @@ def get_week_schedule(connection, week_start_text):
         placeholders = ",".join("?" for _ in shift_ids)
         for row in connection.execute(
             f"""
-            SELECT a.shift_id, e.id AS employee_id, e.employee_code, e.full_name
+            SELECT a.shift_id, e.id AS employee_id, e.employee_code, e.full_name,
+                   e.is_active, e.weekly_hour_limit
             FROM assignments a
             JOIN employees e ON e.id = a.employee_id
             WHERE a.shift_id IN ({placeholders})
@@ -140,6 +158,8 @@ def get_week_schedule(connection, week_start_text):
                     "employee_id": row["employee_id"],
                     "employee_code": row["employee_code"],
                     "full_name": row["full_name"],
+                    "is_active": row["is_active"],
+                    "weekly_hour_limit": row["weekly_hour_limit"],
                 }
             )
 
@@ -154,6 +174,32 @@ def get_week_schedule(connection, week_start_text):
             assigned_by_shift.get(row["id"], []),
             key=lambda worker: (worker["employee_code"], worker["employee_id"]),
         )
+        assigned_with_conflicts = []
+        for worker in assigned:
+            result = evaluate_shift_eligibility(
+                connection,
+                row,
+                {
+                    "id": worker["employee_id"],
+                    "employee_code": worker["employee_code"],
+                    "full_name": worker["full_name"],
+                    "is_active": worker["is_active"],
+                    "weekly_hour_limit": worker["weekly_hour_limit"],
+                },
+            )
+            assigned_with_conflicts.append(
+                {
+                    "employee_id": worker["employee_id"],
+                    "employee_code": worker["employee_code"],
+                    "full_name": worker["full_name"],
+                    "conflicts": None
+                    if result["eligible"]
+                    else {
+                        "reason_codes": result["reason_codes"],
+                        "reasons": result["reasons"],
+                    },
+                }
+            )
         return {
             "id": row["id"],
             "hall": row["hall"],
@@ -161,7 +207,7 @@ def get_week_schedule(connection, week_start_text):
             "end_datetime": row["end_datetime"],
             "duration_hours": duration,
             "required_staff": row["required_staff"],
-            "assigned_employees": assigned,
+            "assigned_employees": assigned_with_conflicts,
             "assigned_count": len(assigned),
             "covered": len(assigned) >= row["required_staff"],
         }

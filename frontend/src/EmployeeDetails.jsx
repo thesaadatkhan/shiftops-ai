@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import {
   EMPLOYEES_URL,
   WEEKDAY_NAMES,
   studentTypeLabel,
-  timetableLabel,
+  timetableStatusDisplay,
   weekdayName,
 } from './employees.js'
 import {
@@ -92,6 +92,7 @@ function isValidEmployee(employee) {
       'timetable_status',
     ]) &&
     typeof employee.is_active === 'boolean' &&
+    typeof employee.scheduling_ready === 'boolean' &&
     // Number.isFinite rejects NaN and Infinity as well as non-numbers; both
     // would render as "NaN hours".
     Number.isFinite(employee.weekly_hour_limit) &&
@@ -261,10 +262,15 @@ function isValidLeaveDeletion(payload) {
   return isObject(payload) && hasStrings(payload, ['start_datetime', 'end_datetime'])
 }
 
-async function fetchDetail(employeeCode) {
-  const response = await fetch(
-    `${EMPLOYEES_URL}/${encodeURIComponent(employeeCode)}`,
-  )
+async function fetchDetail(employeeCode, weekStart) {
+  // `weekStart` (Codex review finding 4) is the same shared reporting week
+  // Employees/Schedule already use; omitted entirely rather than sent as
+  // `undefined` so the backend's own "no parameter keeps the old default"
+  // behavior is exactly preserved when a caller has no week selected yet.
+  const url = weekStart
+    ? `${EMPLOYEES_URL}/${encodeURIComponent(employeeCode)}?week_start=${encodeURIComponent(weekStart)}`
+    : `${EMPLOYEES_URL}/${encodeURIComponent(employeeCode)}`
+  const response = await fetch(url)
   if (response.status === 404) {
     // Distinct from a failure, because retrying will not help.
     const error = new Error('not found')
@@ -275,11 +281,12 @@ async function fetchDetail(employeeCode) {
     throw new Error(`status ${response.status}`)
   }
   const data = await response.json()
-  // The second half is belt and braces: the response must be about the worker
-  // that was actually asked for, whatever the timing.
+  // The second half is belt and braces: the response must be about the
+  // worker AND the week that were actually asked for, whatever the timing.
   if (
     !isValidDetailResponse(data) ||
-    data.employee.employee_code !== employeeCode
+    data.employee.employee_code !== employeeCode ||
+    (weekStart !== undefined && data.week_start !== weekStart)
   ) {
     throw new Error('unexpected shape')
   }
@@ -452,7 +459,7 @@ function SemesterPanel({
   )
 }
 
-function EmployeeDetails({ employeeCode, onClose, onChanged }) {
+function EmployeeDetails({ employeeCode, weekStart, onClose, onChanged }) {
   const [status, setStatus] = useState('loading')
   const [detail, setDetail] = useState(null)
   // Bumped by Try again. Changing it re-runs the effect below, which is the
@@ -490,24 +497,38 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
   // mistaken for one.
   const [refreshError, setRefreshError] = useState(null)
 
+  // The one shared guard against a late response being applied under the
+  // wrong identity - bumped by this effect on every employeeCode/weekStart/
+  // attempt change, AND by `reloadDetail()` itself (Codex review: the
+  // initial fetch already had a `cancelled` closure, but the POST-MUTATION
+  // reload had no guard at all, so a delayed reload started for week A
+  // could still land and overwrite week B's freshly displayed state if the
+  // supervisor changed the shared week while that reload was in flight -
+  // `employeeCode` changes are already safe because the parent remounts
+  // this component with a new `key`, but `weekStart` does not remount it).
+  // Any fetch - from the effect below or from `reloadDetail` - captures the
+  // token when it starts and only applies its result if that token is still
+  // current when it resolves.
+  const requestToken = useRef(0)
+
   useEffect(() => {
-    // `cancelled` is the guard against a late response. The cleanup runs both
-    // when employeeCode changes and when this view closes and unmounts, so a
-    // slow reply for the worker you have just navigated away from is thrown
-    // away instead of being displayed under the new worker's name - and a
-    // reply arriving after Close cannot reopen the view, because there is no
-    // longer a component to set state on.
+    // `cancelled` remains the primary guard for THIS effect's own request
+    // (it also correctly covers real unmount, which does not bump the
+    // token). The token below additionally invalidates an unrelated,
+    // still-in-flight `reloadDetail()` call started under a now-stale
+    // identity.
+    const token = ++requestToken.current
     let cancelled = false
 
-    fetchDetail(employeeCode).then(
+    fetchDetail(employeeCode, weekStart).then(
       (data) => {
-        if (!cancelled) {
+        if (!cancelled && token === requestToken.current) {
           setDetail(data)
           setStatus('success')
         }
       },
       (error) => {
-        if (!cancelled) {
+        if (!cancelled && token === requestToken.current) {
           setStatus(error.notFound ? 'notfound' : 'error')
         }
       },
@@ -516,7 +537,7 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
     return () => {
       cancelled = true
     }
-  }, [employeeCode, attempt])
+  }, [employeeCode, weekStart, attempt])
 
   function tryAgain() {
     setStatus('loading')
@@ -566,12 +587,25 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
 
   async function reloadDetail() {
     // Only ever a GET, so it is safe to call again from Retry: it can never
-    // repeat a write the server has already applied.
+    // repeat a write the server has already applied. Captures the CURRENT
+    // employeeCode/weekStart in its closure (both are already fixed at call
+    // time) and claims the shared request token as its own generation - if
+    // the shared week changes before this resolves, the effect above bumps
+    // the token again and this result is discarded instead of overwriting
+    // whatever the newer week has already loaded.
+    const token = ++requestToken.current
     try {
-      setDetail(await fetchDetail(employeeCode))
+      const data = await fetchDetail(employeeCode, weekStart)
+      if (token !== requestToken.current) {
+        return false // superseded by a newer identity - not an error
+      }
+      setDetail(data)
       setRefreshError(null)
       return true
     } catch {
+      if (token !== requestToken.current) {
+        return false
+      }
       setRefreshError(
         'Could not reload this worker’s details. This does not undo anything that was already saved.',
       )
@@ -1491,7 +1525,7 @@ function EmployeeDetails({ employeeCode, onClose, onChanged }) {
         <dd>{employee.remaining_capacity_hours} hours</dd>
 
         <dt>Timetable, {detail.week_start} to {detail.week_end}</dt>
-        <dd>{timetableLabel(employee.timetable_status)}</dd>
+        <dd>{timetableStatusDisplay(employee)}</dd>
       </dl>
 
       <p className="table-note">

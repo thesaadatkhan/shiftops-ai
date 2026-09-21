@@ -32,7 +32,10 @@ function proposalUrl(id) {
 // Carries the real HTTP status and the backend's own `detail` (a string for
 // most errors, or a structured object for a revalidation/replacement
 // conflict - see D047) so a caller can render 400/404/409/503 distinctly
-// instead of folding every failure into one generic message.
+// instead of folding every failure into one generic message. A non-2xx
+// response for every mutation this module calls means the backend refused
+// the request and wrote nothing (D033) - it is safe to treat this as "did
+// not happen".
 export class ApiError extends Error {
   constructor(status, detail) {
     super(typeof detail === 'string' ? detail : `Request failed with status ${status}`)
@@ -40,6 +43,25 @@ export class ApiError extends Error {
     this.detail = detail
   }
 }
+
+// The opposite case (Codex review finding 5): the backend returned a 2xx -
+// the write, if this was a mutation, DID commit - but its response body
+// could not be trusted, either because it was not valid JSON or because it
+// did not have the shape this module expects. Thrown instead of a plain
+// Error specifically so a caller can tell "refused, nothing happened"
+// (ApiError) apart from "happened, but we cannot confirm what from this
+// response" (this) - and never confuse the two, the way EmployeeDetails.jsx
+// already keeps a confirmed write separate from a failed reload afterward.
+export class ResponseValidationError extends Error {}
+
+// A third, distinct case: the request may never have reached the backend at
+// all (offline, connection reset, timeout) - `fetch` itself rejected before
+// any response came back. Unlike the two errors above, this one genuinely
+// does not know whether a write committed. It must never be treated as a
+// confirmed refusal (ApiError) or a confirmed success with an unreadable
+// body (ResponseValidationError) - only as "unknown, reconcile before
+// retrying".
+export class NetworkOutcomeUnknownError extends Error {}
 
 async function readDetail(response) {
   try {
@@ -51,11 +73,26 @@ async function readDetail(response) {
 }
 
 async function requestJson(url, options) {
-  const response = await fetch(url, options)
+  let response
+  try {
+    response = await fetch(url, options)
+  } catch (error) {
+    throw new NetworkOutcomeUnknownError(
+      `Could not reach the backend (${error.message}). Whether this request was applied is unknown - ` +
+        'reload before retrying, rather than sending it again blindly.',
+    )
+  }
   if (!response.ok) {
     throw new ApiError(response.status, await readDetail(response))
   }
-  return response.json()
+  try {
+    return await response.json()
+  } catch (error) {
+    throw new ResponseValidationError(
+      `The backend accepted this request (status ${response.status}), but its response body could not ` +
+        `be read (${error.message}). Reload to see the current, authoritative state.`,
+    )
+  }
 }
 
 function hasUniqueKeys(items, keyOf) {
@@ -85,7 +122,15 @@ function isValidShift(shift) {
       (worker) =>
         typeof worker.employee_id === 'number' &&
         typeof worker.employee_code === 'string' &&
-        typeof worker.full_name === 'string',
+        typeof worker.full_name === 'string' &&
+        // `conflicts` (Codex review finding 2): null when this assignment
+        // still passes every current hard eligibility rule, or a structured
+        // {reason_codes, reasons} pair when something has changed since it
+        // was approved (a class/leave edit, deactivation, and so on).
+        (worker.conflicts === null ||
+          (typeof worker.conflicts === 'object' &&
+            Array.isArray(worker.conflicts.reason_codes) &&
+            Array.isArray(worker.conflicts.reasons))),
     ) &&
     // No two rows may name the same worker twice on one shift.
     hasUniqueKeys(shift.assigned_employees, (worker) => worker.employee_id) &&
@@ -211,7 +256,7 @@ function isValidProposal(data, { expectedWeekStart, expectedId } = {}) {
 export async function fetchWeekSchedule(weekStart) {
   const data = await requestJson(weekScheduleUrl(weekStart))
   if (!isValidWeekSchedule(data, weekStart)) {
-    throw new Error('The weekly schedule response did not have the expected shape.')
+    throw new ResponseValidationError('The weekly schedule response did not have the expected shape.')
   }
   return data
 }
@@ -223,7 +268,7 @@ export async function prepareWeek(weekStart) {
 export async function createProposal(weekStart) {
   const data = await requestJson(createProposalUrl(weekStart), { method: 'POST' })
   if (!isValidProposal(data, { expectedWeekStart: weekStart })) {
-    throw new Error('The proposal response did not have the expected shape.')
+    throw new ResponseValidationError('The proposal response did not have the expected shape.')
   }
   return data
 }
@@ -234,7 +279,7 @@ export async function fetchProposalsForWeek(weekStart) {
     !Array.isArray(data) ||
     !data.every((proposal) => isValidProposal(proposal, { expectedWeekStart: weekStart }))
   ) {
-    throw new Error('The proposal list response did not have the expected shape.')
+    throw new ResponseValidationError('The proposal list response did not have the expected shape.')
   }
   return data
 }
@@ -246,7 +291,7 @@ export async function approveProposal(id, assignments) {
     body: JSON.stringify({ assignments }),
   })
   if (!isValidProposal(data, { expectedId: id })) {
-    throw new Error('The approval response did not have the expected shape.')
+    throw new ResponseValidationError('The approval response did not have the expected shape.')
   }
   return data
 }
@@ -254,7 +299,7 @@ export async function approveProposal(id, assignments) {
 export async function rejectProposal(id) {
   const data = await requestJson(`${proposalUrl(id)}/reject`, { method: 'POST' })
   if (!isValidProposal(data, { expectedId: id })) {
-    throw new Error('The rejection response did not have the expected shape.')
+    throw new ResponseValidationError('The rejection response did not have the expected shape.')
   }
   return data
 }
@@ -269,6 +314,16 @@ export async function replaceAssignment(shiftId, outgoingEmployeeCode, incomingE
       incoming_employee_code: incomingEmployeeCode,
     }),
   })
+}
+
+/** Whether a write's outcome is uncertain and must be reconciled through an
+ * authoritative reload rather than assumed to have failed - a committed
+ * write with an unreadable response (`ResponseValidationError`), or a
+ * request whose fate is genuinely unknown (`NetworkOutcomeUnknownError`).
+ * An `ApiError` is NOT this - a non-2xx response is a confirmed refusal
+ * (D033); nothing was written, so there is nothing to reconcile. */
+export function isOutcomeUncertain(error) {
+  return error instanceof ResponseValidationError || error instanceof NetworkOutcomeUnknownError
 }
 
 /** A short, accurate description of any error this module's functions throw

@@ -373,6 +373,19 @@ def check_assigned_vs_uncovered_and_cross_midnight_ownership():
             row["employee_code"]: row["id"]
             for row in connection.execute("SELECT employee_code, id FROM employees")
         }
+        # Both fully eligible for the test week (confirmed, non-provisional,
+        # no classes/leave) so this check's `assigned_employees` assertions
+        # stay about staffing counts, not eligibility - a worker with no
+        # confirmed timetable at all would otherwise show a `conflicts` entry
+        # (Codex review finding 2), which is a different, correctly-flagged
+        # concern this check does not exercise.
+        for code in ("SW-001", "SW-002"):
+            connection.execute(
+                "INSERT INTO semester_schedules"
+                " (employee_id, start_date, end_date, confirmed_at, dates_provisional)"
+                " VALUES (?, '2026-11-02', '2026-11-08', '2026-01-01 00:00', 0)",
+                (employee_ids[code],),
+            )
 
         scheduling.prepare_week(connection, "2026-11-02")
 
@@ -437,7 +450,7 @@ def check_assigned_vs_uncovered_and_cross_midnight_ownership():
 
         check(
             by_id[one_shift["id"]]["assigned_employees"]
-            == [{"employee_id": employee_ids["SW-001"], "employee_code": "SW-001", "full_name": "Amara Okonkwo"}]
+            == [{"employee_id": employee_ids["SW-001"], "employee_code": "SW-001", "full_name": "Amara Okonkwo", "conflicts": None}]
             and by_id[one_shift["id"]]["assigned_count"] == 1
             and by_id[one_shift["id"]]["covered"] is True,
             "a shift with one assignment against required_staff=1 is fully covered and names the worker",
@@ -450,8 +463,8 @@ def check_assigned_vs_uncovered_and_cross_midnight_ownership():
         )
         check(
             by_id[full_shift["id"]]["assigned_employees"] == [
-                {"employee_id": employee_ids["SW-001"], "employee_code": "SW-001", "full_name": "Amara Okonkwo"},
-                {"employee_id": employee_ids["SW-002"], "employee_code": "SW-002", "full_name": "Bennett Salazar"},
+                {"employee_id": employee_ids["SW-001"], "employee_code": "SW-001", "full_name": "Amara Okonkwo", "conflicts": None},
+                {"employee_id": employee_ids["SW-002"], "employee_code": "SW-002", "full_name": "Bennett Salazar", "conflicts": None},
             ],
             "both assignments are present, in deterministic employee-code order, even though SW-002 was inserted first",
         )
@@ -463,7 +476,7 @@ def check_assigned_vs_uncovered_and_cross_midnight_ownership():
         )
         check(
             by_id[partial_shift["id"]]["assigned_employees"]
-            == [{"employee_id": employee_ids["SW-001"], "employee_code": "SW-001", "full_name": "Amara Okonkwo"}],
+            == [{"employee_id": employee_ids["SW-001"], "employee_code": "SW-001", "full_name": "Amara Okonkwo", "conflicts": None}],
             "the partial shift's one real assignment is not silently discarded",
         )
 
@@ -485,6 +498,108 @@ def check_assigned_vs_uncovered_and_cross_midnight_ownership():
         starts = [(shift["start_datetime"], shift["hall"], shift["id"]) for shift in week["shifts"]]
         check(starts == sorted(starts), "shifts are sorted by start_datetime, then hall, then id")
         check(len(ids) == len(set(ids)), "no duplicate shift ids in the response")
+    finally:
+        connection.close()
+
+
+# --------------------------------------------------------------------------
+# Codex review finding 2: assignment conflicts introduced after approval are
+# surfaced, without touching staffing counts, historical hours, or the
+# assignment itself.
+# --------------------------------------------------------------------------
+
+
+def check_assignment_conflicts_surfaced_without_touching_staffing():
+    connection = fresh_connection()
+    try:
+        connection.execute(
+            "INSERT INTO employees (employee_code, full_name, student_type)"
+            " VALUES ('SW-001', 'Reyna Cole', 'undergraduate')"
+        )
+        employee_id = connection.execute(
+            "SELECT id FROM employees WHERE employee_code = 'SW-001'"
+        ).fetchone()["id"]
+        connection.execute(
+            "INSERT INTO semester_schedules"
+            " (employee_id, start_date, end_date, confirmed_at, dates_provisional)"
+            " VALUES (?, '2026-11-02', '2026-11-08', '2026-01-01 00:00', 0)",
+            (employee_id,),
+        )
+        scheduling.prepare_week(connection, "2026-11-02")
+        shift = connection.execute(
+            "SELECT id, start_datetime, end_datetime FROM shifts"
+            " WHERE hall = 'Andromeda' ORDER BY start_datetime LIMIT 1"
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO assignments (employee_id, shift_id) VALUES (?, ?)",
+            (employee_id, shift["id"]),
+        )
+
+        def assigned_row():
+            week = scheduling.get_week_schedule(connection, "2026-11-02")
+            by_id = {s["id"]: s for s in week["shifts"]}
+            return by_id[shift["id"]]
+
+        before = assigned_row()
+        check(
+            before["assigned_employees"][0]["conflicts"] is None,
+            "a fully eligible worker's assignment shows no conflict",
+        )
+        check(
+            before["assigned_count"] == 1 and before["covered"] is True,
+            "staffing counts reflect the real assignment before any conflict exists",
+        )
+
+        # A leave edit AFTER approval invalidates the assignment without
+        # anyone touching it directly.
+        connection.execute(
+            "INSERT INTO approved_leave (employee_id, start_datetime, end_datetime)"
+            " VALUES (?, ?, ?)",
+            (employee_id, shift["start_datetime"], shift["end_datetime"]),
+        )
+        after_leave = assigned_row()
+        check(
+            after_leave["assigned_employees"][0]["conflicts"] is not None
+            and "leave_conflict" in after_leave["assigned_employees"][0]["conflicts"]["reason_codes"],
+            f"the new leave conflict is surfaced ({after_leave['assigned_employees'][0]['conflicts']})",
+        )
+        check(
+            after_leave["assigned_count"] == 1 and after_leave["covered"] is True,
+            "staffing counts are UNCHANGED by the conflict - the assignment is not silently removed",
+        )
+        check(
+            connection.execute(
+                "SELECT COUNT(*) AS n FROM assignments WHERE employee_id = ? AND shift_id = ?",
+                (employee_id, shift["id"]),
+            ).fetchone()["n"]
+            == 1,
+            "the assignment row itself is completely untouched",
+        )
+
+        # Deactivating the worker must not make their historical assignment
+        # disappear from staffing either - it is a second, independent
+        # reason to flag the SAME assignment, not a replacement rule.
+        connection.execute("DELETE FROM approved_leave WHERE employee_id = ?", (employee_id,))
+        connection.execute("UPDATE employees SET is_active = 0 WHERE id = ?", (employee_id,))
+        after_inactive = assigned_row()
+        check(
+            after_inactive["assigned_employees"][0]["conflicts"] is not None
+            and "worker_inactive" in after_inactive["assigned_employees"][0]["conflicts"]["reason_codes"],
+            "deactivating the worker surfaces worker_inactive as the current conflict",
+        )
+        check(
+            after_inactive["assigned_count"] == 1 and after_inactive["covered"] is True,
+            "an inactive worker's past assignment still counts as staffing - historical coverage does not disappear",
+        )
+
+        # Clearing the conflict (reactivating) makes it disappear again -
+        # this is a live re-evaluation, not a permanently recorded flag.
+        connection.execute("UPDATE employees SET is_active = 1 WHERE id = ?", (employee_id,))
+        after_reactivate = assigned_row()
+        check(
+            after_reactivate["assigned_employees"][0]["conflicts"] is None,
+            "reactivating the worker clears the surfaced conflict",
+        )
     finally:
         connection.close()
 
@@ -676,6 +791,7 @@ def main_entry():
     check_prepare_week_never_deletes_or_overwrites()
     check_sample_week_and_unrelated_rows_untouched()
     check_assigned_vs_uncovered_and_cross_midnight_ownership()
+    check_assignment_conflicts_surfaced_without_touching_staffing()
     check_list_employees_week_parameter()
     check_list_employees_week_dependent_values_actually_differ()
 

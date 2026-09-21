@@ -858,6 +858,129 @@ def check_assigned_hours_scoping():
 
 
 # --------------------------------------------------------------------------
+# Codex review finding 4: the details route must use the SAME shared
+# reporting week Employees/Schedule select, not always the fixed sample week.
+# --------------------------------------------------------------------------
+def check_selected_week_applies_to_details():
+    connection = database.get_connection()
+    employee_id = add_worker(connection, "SW-090", "Week Threaded")
+    # Confirmed, non-provisional, and long enough to cover both weeks -
+    # so any DIFFERENCE the two calls report comes from the assignment and
+    # class-block data below, not from timetable coverage itself.
+    schedule = add_schedule(connection, employee_id, "2026-08-24", "2026-12-11", "2026-01-01 00:00")
+    add_block(connection, schedule, 0, "09:00", "10:00")  # every Monday
+
+    # Sample week (2026-10-05): one assignment.
+    assign(connection, employee_id, "Andromeda", "2026-10-05 08:00", "2026-10-05 13:00")
+    # A genuinely different week (2026-11-02): two assignments, so the total
+    # hours are actually different, not coincidentally the same number.
+    assign(connection, employee_id, "Vega", "2026-11-02 08:00", "2026-11-02 13:00")
+    assign(connection, employee_id, "Vega", "2026-11-02 17:00", "2026-11-02 22:00")
+    connection.close()
+
+    default_payload = main.get_employee_details("SW-090")
+    other_payload = main.get_employee_details("SW-090", "2026-11-02")
+
+    check(default_payload["week_start"] == "2026-10-05", "omitting week_start keeps the fixed sample week default")
+    check(other_payload["week_start"] == "2026-11-02", "supplying week_start changes the reported week")
+    check(
+        default_payload["employee"]["assigned_hours"] == 5,
+        f"the default week reports its own assigned hours ({default_payload['employee']['assigned_hours']})",
+    )
+    check(
+        other_payload["employee"]["assigned_hours"] == 10,
+        f"the other week reports its own, genuinely different assigned hours ({other_payload['employee']['assigned_hours']})",
+    )
+    check(
+        default_payload["employee"]["assigned_hours"] != other_payload["employee"]["assigned_hours"],
+        "assigned hours actually differ between the two weeks, not coincidentally equal",
+    )
+    check(
+        default_payload["employee"]["remaining_capacity_hours"]
+        != other_payload["employee"]["remaining_capacity_hours"],
+        "remaining capacity actually differs between the two weeks too",
+    )
+    # Both weeks are fully covered by the same long confirmed semester, so
+    # identity and readiness must NOT differ just because the week changed.
+    check(
+        default_payload["employee"]["employee_code"] == other_payload["employee"]["employee_code"]
+        and default_payload["employee"]["timetable_status"] == other_payload["employee"]["timetable_status"]
+        == "confirmed",
+        "worker identity and timetable readiness are unaffected by which week was requested",
+    )
+
+    try:
+        main.get_employee_details("SW-090", "not-a-date")
+        check(False, "a malformed week_start on the details route is rejected")
+    except HTTPException as error:
+        check(error.status_code == 400, f"a malformed week_start on the details route is 400 ({error.status_code})")
+
+
+# --------------------------------------------------------------------------
+# Codex review finding 6: `scheduling_ready` distinguishes accepted
+# (confirmed AND non-provisional) dates from a merely-confirmed status.
+# --------------------------------------------------------------------------
+def check_scheduling_ready_distinguishes_provisional():
+    connection = database.get_connection()
+
+    provisional_id = add_worker(connection, "SW-091", "Provisional Confirmed")
+    schedule = add_schedule(connection, provisional_id, "2026-10-05", "2026-10-11", "2026-01-01 00:00")
+    connection.execute(
+        "UPDATE semester_schedules SET dates_provisional = 1 WHERE id = ?", (schedule,)
+    )
+
+    accepted_id = add_worker(connection, "SW-092", "Accepted Confirmed")
+    add_schedule(connection, accepted_id, "2026-10-05", "2026-10-11", "2026-01-01 00:00")
+
+    unconfirmed_id = add_worker(connection, "SW-093", "Unconfirmed")
+    add_schedule(connection, unconfirmed_id, "2026-10-05", "2026-10-11", None)
+
+    missing_id = add_worker(connection, "SW-094", "Missing")
+    connection.commit()
+    connection.close()
+
+    provisional = main.get_employee_details("SW-091")["employee"]
+    accepted = main.get_employee_details("SW-092")["employee"]
+    unconfirmed = main.get_employee_details("SW-093")["employee"]
+    missing = main.get_employee_details("SW-094")["employee"]
+
+    check(
+        provisional["timetable_status"] == "confirmed",
+        f"a provisional-but-confirmed semester still reports timetable_status=confirmed, preserving that history ({provisional['timetable_status']})",
+    )
+    check(
+        provisional["scheduling_ready"] is False,
+        "but scheduling_ready is False for it - provisional dates are not accepted availability",
+    )
+    check(
+        accepted["timetable_status"] == "confirmed" and accepted["scheduling_ready"] is True,
+        "an accepted (confirmed, non-provisional) semester is both confirmed and scheduling_ready",
+    )
+    check(
+        unconfirmed["scheduling_ready"] is False and missing["scheduling_ready"] is False,
+        "unconfirmed and missing timetables are both not scheduling_ready",
+    )
+
+    # The list endpoint must agree exactly - one readiness definition, reused.
+    listed = {
+        row["employee_code"]: row
+        for row in main.list_employees()["employees"]
+        if row["employee_code"] in ("SW-091", "SW-092", "SW-093", "SW-094")
+    }
+    for code, detail in (
+        ("SW-091", provisional),
+        ("SW-092", accepted),
+        ("SW-093", unconfirmed),
+        ("SW-094", missing),
+    ):
+        check(
+            listed[code]["scheduling_ready"] == detail["scheduling_ready"]
+            and listed[code]["timetable_status"] == detail["timetable_status"],
+            f"{code}: the list and details views agree on readiness and status",
+        )
+
+
+# --------------------------------------------------------------------------
 # 10. Reading changes nothing.
 # --------------------------------------------------------------------------
 def check_read_is_read_only():
@@ -902,6 +1025,8 @@ def run():
     check_preferences_and_leave()
     check_migrated_provenance()
     check_assigned_hours_scoping()
+    check_selected_week_applies_to_details()
+    check_scheduling_ready_distinguishes_provisional()
     check_read_is_read_only()
 
     print()

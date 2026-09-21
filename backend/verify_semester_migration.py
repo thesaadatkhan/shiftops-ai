@@ -41,7 +41,9 @@ import threading
 from pathlib import Path
 
 from database import (
+    AMBIGUOUS_DELETION_MARKER,
     DEMO_SEMESTER_CONFIRMED_AT,
+    LEGACY_MIGRATION_NOTE,
     expected_demo_timetables,
     DEMO_SEMESTER_END,
     DEMO_SEMESTER_START,
@@ -52,6 +54,7 @@ from database import (
 )
 from employees import allocation_progress, create_employee, delete_employee, find_by_code
 from seed import DatabaseNotEmpty, initialize_demo_data
+from timetables import delete_schedule
 
 failures = []
 
@@ -794,6 +797,199 @@ def main():
               "confirmation survives reopening")
         check(migrate_class_schedules(reopened) == 0, "reopening migrates nothing again")
         reopened.close()
+
+    # A migrated worker's deleted semester must never come back on a later
+    # startup (Codex review finding 1): `migrate_class_schedules()` used to
+    # decide "needs migration" from "has no semester schedule", so deleting
+    # a migrated worker's last semester made them look unmigrated again.
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "deleted-after-migration.db"
+        builder, _ = build_populated_old_database(path)
+        create_schema(builder)  # first migration
+        builder.close()
+
+        connection = get_connection(path)
+        demo_schedule_id = connection.execute(
+            "SELECT s.id FROM semester_schedules s JOIN employees e ON e.id = s.employee_id"
+            " WHERE e.employee_code = 'SW-001'"
+        ).fetchone()["id"]
+        other_blocks_before = sorted(blocks_for(connection, "SW-031"))
+        unrelated_before = snapshot(connection)
+
+        delete_schedule(connection, "SW-001", demo_schedule_id)
+        check(
+            schedule_for(connection, "SW-001") is None,
+            "the demo worker's semester is actually deleted",
+        )
+        check(blocks_for(connection, "SW-001") == [], "and its class blocks are gone with it")
+
+        # The startup path a real restart takes: create_schema() again,
+        # which re-runs both migrate_schema() and migrate_class_schedules().
+        applied = create_schema(connection)
+        check(
+            schedule_for(connection, "SW-001") is None,
+            "the deleted semester does NOT return after a second schema-init/restart",
+        )
+        check(blocks_for(connection, "SW-001") == [], "its class blocks still do not return")
+        check(
+            not any(item.startswith("class_blocks.migrated_employees") for item in applied),
+            f"no migration reports SW-001 as migrated again ({applied})",
+        )
+
+        # Legacy evidence (the migration's own provenance) is preserved -
+        # never deleted by delete_schedule, and still there to show where
+        # the (now-removed) schedule originally came from.
+        check(
+            connection.execute(
+                "SELECT COUNT(*) AS n FROM class_meetings m JOIN courses c ON c.id = m.course_id"
+                " JOIN employees e ON e.id = c.employee_id WHERE e.employee_code = 'SW-001'"
+            ).fetchone()["n"]
+            > 0,
+            "SW-001's legacy course/class-meeting rows are preserved as evidence",
+        )
+        check(
+            connection.execute(
+                "SELECT 1 FROM migrated_employees me JOIN employees e ON e.id = me.employee_id"
+                " WHERE e.employee_code = 'SW-001'"
+            ).fetchone()
+            is not None,
+            "SW-001 is still recorded as migrated, independent of the deleted semester",
+        )
+
+        # Unrelated workers and data survive both the deletion and the
+        # second startup completely untouched.
+        check(
+            sorted(blocks_for(connection, "SW-031")) == other_blocks_before,
+            "an unrelated worker's blocks are untouched by another worker's deletion+restart",
+        )
+        unrelated_after = snapshot(connection)
+        for table in ("employees", "shifts", "shift_preferences", "approved_leave", "assignments", "retired"):
+            check(
+                unrelated_after[table] == unrelated_before[table],
+                f"{table} is unchanged by the deletion and restart",
+            )
+        connection.close()
+
+    # The pre-ledger upgrade ambiguity: a database that already ran
+    # migration and had a supervisor delete a migrated worker's semester
+    # BEFORE `migrated_employees` ever existed. Built directly against
+    # SCHEMA_STATEMENTS minus the ledger table, to represent exactly that
+    # historical moment, then upgraded via the real create_schema().
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "pre-ledger-ambiguous.db"
+        connection = get_connection(path)
+        for statement in SCHEMA_STATEMENTS:
+            if "CREATE TABLE IF NOT EXISTS migrated_employees" not in statement:
+                connection.execute(statement)
+        connection.commit()
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'migrated_employees'"
+            ).fetchone()["n"]
+            == 0
+        ), "the pre-ledger fixture must not already contain the ledger table"
+
+        # SW-101: migrated once, still fully intact - this is the ONLY
+        # evidence in the whole database that migration ever ran, and it is
+        # what must let the code recognize SW-102 (below) as ambiguous
+        # rather than genuinely new.
+        intact_id = add_old_employee(connection, "SW-101", "Still Migrated")
+        add_old_course(connection, intact_id, "Intact", [(0, "09:00", "10:00")])
+        connection.execute(
+            "INSERT INTO semester_schedules (employee_id, start_date, end_date, confirmed_at, dates_provisional)"
+            " VALUES (?, ?, ?, NULL, 1)",
+            (intact_id, DEMO_SEMESTER_START, DEMO_SEMESTER_END),
+        )
+        intact_schedule_id = connection.execute(
+            "SELECT id FROM semester_schedules WHERE employee_id = ?", (intact_id,)
+        ).fetchone()["id"]
+        connection.execute(
+            "INSERT INTO class_blocks (schedule_id, day_of_week, start_time, end_time, source_note)"
+            " VALUES (?, 0, '09:00', '10:00', ?)",
+            (intact_schedule_id, LEGACY_MIGRATION_NOTE),
+        )
+
+        # SW-102: migrated once too, but a supervisor deleted their semester
+        # and blocks BEFORE the ledger existed to record that fact - only
+        # their legacy course/class_meetings rows remain, indistinguishable
+        # from a worker who was simply never migrated.
+        deleted_id = add_old_employee(connection, "SW-102", "Pre-Ledger Deleted")
+        add_old_course(connection, deleted_id, "Gone", [(2, "13:00", "14:15")])
+
+        connection.commit()
+        connection.close()
+
+        # The actual upgrade: the real, current create_schema() path.
+        upgraded = get_connection(path)
+        create_schema(upgraded)
+
+        ledger_table_count = upgraded.execute(
+            "SELECT COUNT(*) AS n FROM sqlite_master WHERE name = 'migrated_employees'"
+        ).fetchone()["n"]
+        check(ledger_table_count == 1, "the ledger table is created by the upgrade")
+
+        check(
+            schedule_for(upgraded, "SW-102") is None,
+            "the ambiguous worker's timetable is NOT silently recreated by the upgrade",
+        )
+        check(blocks_for(upgraded, "SW-102") == [], "and no class blocks are recreated for them either")
+        check(
+            upgraded.execute(
+                "SELECT COUNT(*) AS n FROM class_meetings m JOIN courses c ON c.id = m.course_id"
+                " JOIN employees e ON e.id = c.employee_id WHERE e.employee_code = 'SW-102'"
+            ).fetchone()["n"]
+            > 0,
+            "the ambiguous worker's legacy course/class-meeting rows are preserved untouched",
+        )
+        ambiguous_marker = upgraded.execute(
+            "SELECT me.migrated_at FROM migrated_employees me"
+            " JOIN employees e ON e.id = me.employee_id WHERE e.employee_code = 'SW-102'"
+        ).fetchone()
+        check(
+            ambiguous_marker is not None and ambiguous_marker["migrated_at"] == AMBIGUOUS_DELETION_MARKER,
+            f"the ambiguous worker is recorded with the explicit ambiguity marker, not a fabricated timestamp ({ambiguous_marker['migrated_at'] if ambiguous_marker else None})",
+        )
+        check(
+            schedule_for(upgraded, "SW-101") is not None,
+            "the still-intact migrated worker is completely unaffected by another worker's ambiguity",
+        )
+        check(
+            blocks_for(upgraded, "SW-101") == [(0, "09:00", "10:00")],
+            "their blocks are unchanged too",
+        )
+
+        # A second upgrade pass changes nothing further - the ambiguity was
+        # resolved (recorded) once, not re-decided every startup.
+        applied_again = create_schema(upgraded)
+        check(
+            not any("class_blocks.migrated_employees" in item for item in applied_again),
+            f"a second upgrade pass migrates nobody further ({applied_again})",
+        )
+        check(schedule_for(upgraded, "SW-102") is None, "the ambiguous worker is still not resurrected on a second pass")
+        upgraded.close()
+
+    # Genuine first-time migration must still work completely when NO prior
+    # migration evidence exists anywhere in the database - the ambiguity
+    # check must never fire for a real virgin legacy database.
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "genuine-first-time.db"
+        builder, _ = build_populated_old_database(path)
+        builder.close()
+        connection = get_connection(path)
+        create_schema(connection)
+        check(
+            sorted(blocks_for(connection, "SW-001")) == sorted(expected_demo_timetables()["SW-001"]),
+            "genuine first-time migration still fully migrates the demo worker (no false ambiguity)",
+        )
+        check(
+            connection.execute(
+                "SELECT migrated_at FROM migrated_employees me JOIN employees e ON e.id = me.employee_id"
+                " WHERE e.employee_code = 'SW-001'"
+            ).fetchone()["migrated_at"]
+            != AMBIGUOUS_DELETION_MARKER,
+            "the demo worker is recorded as genuinely migrated, not marked ambiguous",
+        )
+        connection.close()
 
     if failures:
         print(f"\nFAILED ({len(failures)}):")

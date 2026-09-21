@@ -7,6 +7,10 @@ venv/
 # Generated SQLite database (recreate with: python database.py && python seed.py)
 *.db
 *.db-journal
+# Isolated test databases (verify_*_http.py / e2e_server.py always use a
+# temp directory, but this is a safety net against a leftover accidental one)
+*.sqlite
+*.sqlite-journal
 
 # Environment variables / secrets
 .env

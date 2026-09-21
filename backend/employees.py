@@ -631,6 +631,17 @@ def delete_employee(connection, employee_code, retired_at=None):
             (employee_id,),
         )
         connection.execute("DELETE FROM courses WHERE employee_id = ?", (employee_id,))
+        # `migrated_employees` is internal migration bookkeeping, not
+        # scheduling history a supervisor needs preserved (unlike
+        # `proposal_assignments`/`assignment_audit`, checked above) - a
+        # deleted employee_id is never reissued (D040's numbering is
+        # permanent), so there is no future worker this row could wrongly
+        # protect from re-migration. It has a foreign key to `employees`
+        # like the tables just above it, so it must go before the employee
+        # row too.
+        connection.execute(
+            "DELETE FROM migrated_employees WHERE employee_id = ?", (employee_id,)
+        )
         connection.execute(
             "DELETE FROM shift_preferences WHERE employee_id = ?", (employee_id,)
         )

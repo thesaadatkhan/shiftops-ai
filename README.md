@@ -187,13 +187,17 @@ Development order: Phase 5B employee lifecycle controls are complete, and
 **Phase 5C - complete employee setup - is functionally complete**: automatic
 employee IDs, the semester/class-block migration, the employee-details view,
 semester/class editing, timetable confirmation, shift-preference editing and
-approved-leave editing are all built. Eligibility, optimization, reporting and
-AI are next; none of those later stages exist yet. Later phases must use the
-managed workforce and confirmed semester data, not fixed demo counts. Full
-checklists live in the project context; public cross-phase requirements are
-in `docs/PROJECT_SPEC.md` section 10.
+approved-leave editing are all built. **Phase 6 (deterministic eligibility
+and Coverage) and Phase 7 (schedule optimization, proposal/approval,
+replacement, and the Schedule/Generate Schedule frontend) are both complete
+as well** - see the bullet list below. Phase 8 (dashboard/workforce-planning
+analytics) and Phase 9 (the approved AI scheduling agent) are next; neither
+exists yet. Later phases must use the managed workforce and confirmed
+semester data, not fixed demo counts. Full checklists live in the project
+context; public cross-phase requirements are in `docs/PROJECT_SPEC.md`
+section 10.
 
-Goals for the finished application are listed below. Employee records, shift preferences and approved leave are stored and editable, and the workforce summary and individual details are viewable. Semester and class editing, timetable confirmation, and preference and leave editing are all implemented; schedule evaluation and generation remain planned.
+Goals for the finished application are listed below. Employee records, shift preferences and approved leave are stored and editable, and the workforce summary and individual details are viewable. Semester and class editing, timetable confirmation, and preference and leave editing are all implemented. Deterministic eligibility/coverage and schedule evaluation/generation (optimizer draft, stored proposal, explicit approval, and explicit replacement) are also implemented; only the dashboard/analytics and AI-agent goals below remain planned.
 
 - Workforce and coverage dashboard
 - Complete employee setup, **built**: supervisor entry of semester dates and recurring class times without course names; explicit confirmation that a timetable is complete, including a deliberate "no classes"; editing shift preferences on any existing shift; and adding, editing and removing approved leave. Incomplete class information will block scheduling until confirmed.

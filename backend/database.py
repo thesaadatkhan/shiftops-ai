@@ -15,9 +15,21 @@ Date/time conventions used throughout the database:
 """
 
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 
 DATABASE_PATH = Path(__file__).parent / "shiftops.db"
+
+MIGRATION_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M"
+
+# Written as `migrated_at` for a `migrated_employees` row backfilled from a
+# database that already completed legacy migration before that table
+# existed - see `migrate_schema`'s backfill step below. The real moment
+# those workers were actually migrated was never recorded anywhere, and
+# nothing in this file will invent one; this fixed marker names that
+# honestly rather than writing a plausible-looking but fabricated
+# timestamp.
+BACKFILLED_MIGRATION_MARKER = "backfilled - actual migration time not recorded"
 
 SCHEMA_STATEMENTS = [
     """
@@ -229,6 +241,22 @@ SCHEMA_STATEMENTS = [
         detail TEXT NOT NULL
     )
     """,
+    # Records that one employee's legacy class data has already been run
+    # through `migrate_class_schedules()`, independent of whether the
+    # semester schedule that migration produced still exists. Without this,
+    # `migrate_class_schedules()` had to infer "not yet migrated" from
+    # "has no semester schedule" - and a supervisor deleting a migrated
+    # worker's last semester made that inference wrong: the worker looked
+    # unmigrated again, and the next startup silently recreated the exact
+    # schedule they had just deleted. Presence of a row here is a permanent
+    # fact about what migration has already done, never revisited by a
+    # later change to `semester_schedules`.
+    """
+    CREATE TABLE IF NOT EXISTS migrated_employees (
+        employee_id INTEGER PRIMARY KEY REFERENCES employees(id),
+        migrated_at TEXT NOT NULL
+    )
+    """,
 ]
 
 # The fictional demo semester. It must contain the sample reporting week of
@@ -257,6 +285,25 @@ DEMO_MIGRATION_NOTE = (
 )
 LEGACY_MIGRATION_NOTE = (
     f"{MIGRATION_NOTE_PREFIX} legacy course data, timetable unconfirmed"
+)
+
+# Recorded in `migrated_employees.migrated_at` for a worker this migration
+# deliberately did NOT create a semester for, because the evidence was
+# ambiguous (see `_migration_has_ever_run` and the "upgrade ambiguity" note
+# on `migrate_class_schedules`) - never a plausible-looking timestamp for
+# something that did not happen.
+#
+# **Explicit recovery policy**, since this is the one case where migration
+# will not resolve itself: a worker recorded with this marker has their
+# legacy `courses`/`class_meetings` rows fully intact and untouched, and no
+# semester. If a person determines they genuinely were never migrated (not a
+# past deletion), the supervisor-entry screens can enter their semester and
+# classes directly - migration is not the only way to get one. There is
+# deliberately no automated "retry migration for this worker" action: doing
+# that safely requires a person to have actually looked at the specific
+# case, which an automated retry cannot do.
+AMBIGUOUS_DELETION_MARKER = (
+    "ambiguous - possible pre-ledger deletion; not migrated, legacy data preserved"
 )
 
 
@@ -413,6 +460,32 @@ def migrate_schema(connection):
                 )
                 applied.append("schedule_proposals.draft_snapshot")
 
+            # Backfill `migrated_employees` for a database that already
+            # completed legacy migration before that table existed. Every
+            # employee_id currently in `semester_schedules` got there either
+            # through the migration or through a supervisor manually
+            # creating a semester - either way, `migrate_class_schedules`
+            # must never touch that worker again as though they were still
+            # unmigrated, so both cases are safely marked migrated here.
+            # `INSERT OR IGNORE` makes this a no-op on every later startup
+            # once it has run once. Run unconditionally (not gated on the
+            # table having just been created) because a database can reach
+            # this code with the table already present but empty - the
+            # ordinary case for one that has never restarted since this
+            # feature was added.
+            if table_exists(connection, "migrated_employees") and table_exists(
+                connection, "semester_schedules"
+            ):
+                backfilled = connection.execute(
+                    """
+                    INSERT OR IGNORE INTO migrated_employees (employee_id, migrated_at)
+                    SELECT DISTINCT employee_id, ? FROM semester_schedules
+                    """,
+                    (BACKFILLED_MIGRATION_MARKER,),
+                ).rowcount
+                if backfilled > 0:
+                    applied.append(f"migrated_employees.backfilled={backfilled}")
+
             # Created here rather than alongside the CREATE TABLE statements:
             # those run before this function, so on a database that predates
             # seed_key the index would reference a column that does not exist
@@ -497,6 +570,26 @@ def is_intact_demo_timetable(connection, employee, expected):
     return stored_meetings(connection, employee["id"]) == expected[key]
 
 
+def _migration_has_ever_run(connection):
+    """Whether `migrate_class_schedules` has completed at least once on this
+    database, using evidence that predates `migrated_employees` itself.
+
+    Deliberately checked via `class_blocks.source_note` (the
+    `MIGRATION_NOTE_PREFIX` every migrated block carries), not via
+    `migrated_employees` - a database that ran migration before the ledger
+    existed has this note evidence but no ledger rows yet, and it is exactly
+    that database this function must recognize correctly. See the "upgrade
+    ambiguity" note on `migrate_class_schedules` for why this matters.
+    """
+    return (
+        connection.execute(
+            "SELECT 1 FROM class_blocks WHERE source_note LIKE ? LIMIT 1",
+            (f"{MIGRATION_NOTE_PREFIX}%",),
+        ).fetchone()
+        is not None
+    )
+
+
 def migrate_class_schedules(connection):
     """Move course-linked class meetings into employee-owned semester
     schedules and recurring class blocks (D035).
@@ -510,11 +603,24 @@ def migrate_class_schedules(connection):
     writer cannot interleave.
 
     **Repeatable, and safe when two callers start together.** Only employees
-    who have class meetings and do not yet have a semester schedule are
-    migrated, so running it again - on every startup, say - moves nothing and
-    duplicates nothing. That list is read *inside* the transaction, after the
-    write lock is held, so a second caller cannot act on a view of the
-    database that the first has already changed.
+    who have class meetings and are not already recorded in
+    `migrated_employees` are migrated, so running it again - on every
+    startup, say - moves nothing and duplicates nothing. That list is read
+    *inside* the transaction, after the write lock is held, so a second
+    caller cannot act on a view of the database that the first has already
+    changed.
+
+    **Migration completion is tracked independently of its output.**
+    `migrated_employees` records that an employee has been migrated, and
+    that row is never removed - not by this function, and not by deleting
+    the semester schedule migration produced. Checking `semester_schedules`
+    directly for "already migrated" was a real bug: a supervisor deleting a
+    migrated worker's last semester (an ordinary, supported action) made
+    them look unmigrated again, and the next startup silently recreated the
+    exact schedule and classes they had just deleted. A worker who no
+    longer has a semester because one was intentionally deleted stays
+    deleted; migration is a one-time historical fact about the LEGACY data,
+    not a statement that a semester currently exists.
 
     **Nothing is discarded.** Every legacy meeting becomes exactly one class
     block, keeping its weekday and its start and end times unchanged. Rows
@@ -542,7 +648,58 @@ def migrate_class_schedules(connection):
     reads as missing information rather than as a deliberate "no classes" -
     those are different states and Phase 6 must be able to tell them apart.
 
-    Returns the number of employees migrated.
+    **Upgrade ambiguity, and the explicit policy for it.** `migrated_employees`
+    prevents a migrated worker's DELETED semester from resurrecting on a
+    later startup (see above) - but only for a deletion that happens AFTER
+    the ledger exists to record it. A database that already ran migration
+    and had a supervisor delete a migrated worker's semester BEFORE this
+    ledger was ever added has no record of that: no semester (deleted), and
+    no `migrated_employees` row (did not exist yet) - which looks, from
+    stored data alone, EXACTLY like a worker who was simply never migrated.
+    Nothing in this schema records deletions, so this is a genuine, storage-
+    level ambiguity that cannot be resolved by reading harder.
+
+    The policy: before deciding anything, `_migration_has_ever_run` checks
+    for evidence, independent of the ledger, that migration has run on this
+    database before (a `class_blocks` row carrying the migration note). If
+    that evidence exists, EVERY worker this pass would otherwise consider
+    "pending" is treated as ambiguous rather than migrated - because legacy
+    `class_meetings` data is never created after initial setup in this
+    application, a worker who still looks pending AFTER migration has
+    already run once can only be explained by a deletion, never by
+    genuinely new legacy data. An ambiguous worker gets NO semester (their
+    timetable is not silently recreated) but IS recorded in
+    `migrated_employees` with `AMBIGUOUS_DELETION_MARKER`, so this decision
+    is a one-time, inspectable fact rather than repeated silently on every
+    future startup. Their legacy `courses`/`class_meetings` rows are left
+    completely untouched, exactly as for a normal migration. See
+    `AMBIGUOUS_DELETION_MARKER`'s own comment for the recovery policy.
+
+    This check runs once per call, before the loop below, against the state
+    of the database as the write lock found it - not re-checked per-worker,
+    so a GENUINE first-time migration processing several workers in one
+    pass never sees its own just-written evidence and mistakes itself for a
+    later, ambiguous run.
+
+    **Accepted residual limitation - this is a mitigation, not a complete
+    solution.** `_migration_has_ever_run` itself depends on at least ONE
+    `class_blocks` row carrying the migration note still existing somewhere
+    in the database. If EVERY migrated worker's semester/blocks were deleted
+    before the ledger existed - not just one worker's, but all of them, so
+    no surviving row anywhere still carries that note - this check finds no
+    evidence, `ambiguous` is `False`, and every one of those workers is
+    silently re-migrated from their still-present legacy `class_meetings`
+    data: exactly the resurrection this whole mechanism exists to prevent.
+    No stored data can tell that historical database apart from one that
+    was genuinely never migrated at all; there is no surviving evidence left
+    to reason from, by construction of what this schema keeps. This is a
+    known, accepted gap in a prototype, not a claim that upgrade ambiguity
+    is fully solved - a real deployment migrating from a pre-ledger install
+    would need an external record (a backup, a migration log outside this
+    database) to close it, which is out of scope here.
+
+    Returns the number of employees migrated (never counts an ambiguous
+    worker, since nothing was migrated for them).
     """
     previous_isolation = connection.isolation_level
     connection.isolation_level = None
@@ -566,7 +723,7 @@ def migrate_class_schedules(connection):
                 SELECT DISTINCT c.employee_id
                 FROM class_meetings m
                 JOIN courses c ON c.id = m.course_id
-                WHERE c.employee_id NOT IN (SELECT employee_id FROM semester_schedules)
+                WHERE c.employee_id NOT IN (SELECT employee_id FROM migrated_employees)
                 """
             ).fetchall()
 
@@ -575,6 +732,10 @@ def migrate_class_schedules(connection):
                 # open, so the write lock is released on the way out.
                 connection.execute("COMMIT")
                 return 0
+
+            # Snapshot taken once, before this pass writes anything of its
+            # own - see the "upgrade ambiguity" docstring section above.
+            ambiguous = _migration_has_ever_run(connection)
 
             # Only generated once there is something to migrate, which in a
             # database's life is at most once.
@@ -587,7 +748,29 @@ def migrate_class_schedules(connection):
                 ).fetchone()
                 if employee is None:
                     # A meeting whose owner no longer exists. Left exactly as
-                    # it is rather than attached to an invented worker.
+                    # it is rather than attached to an invented worker, but
+                    # still recorded as migrated - there is no worker left to
+                    # ever legitimately produce a schedule for this
+                    # employee_id, so leaving it off `migrated_employees`
+                    # would only make every future startup re-check the same
+                    # permanently-orphaned row forever.
+                    connection.execute(
+                        "INSERT OR IGNORE INTO migrated_employees (employee_id, migrated_at) VALUES (?, ?)",
+                        (employee_id, datetime.now().strftime(MIGRATION_TIMESTAMP_FORMAT)),
+                    )
+                    continue
+
+                if ambiguous:
+                    # Migration has run on this database before (evidence
+                    # predating this pass), so a worker who still looks
+                    # pending cannot be new legacy data - only a deletion
+                    # explains it, and which deletion cannot be known.
+                    # Recorded, not silently recreated; see the "upgrade
+                    # ambiguity" docstring section above.
+                    connection.execute(
+                        "INSERT OR IGNORE INTO migrated_employees (employee_id, migrated_at) VALUES (?, ?)",
+                        (employee_id, AMBIGUOUS_DELETION_MARKER),
+                    )
                     continue
 
                 from_demo = is_intact_demo_timetable(connection, employee, expected)
@@ -623,6 +806,10 @@ def migrate_class_schedules(connection):
                     ORDER BY m.id
                     """,
                     (schedule_id, note, employee_id),
+                )
+                connection.execute(
+                    "INSERT OR IGNORE INTO migrated_employees (employee_id, migrated_at) VALUES (?, ?)",
+                    (employee_id, datetime.now().strftime(MIGRATION_TIMESTAMP_FORMAT)),
                 )
                 migrated += 1
 
