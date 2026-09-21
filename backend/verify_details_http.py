@@ -88,9 +88,13 @@ def build_fixture():
     )
     employee_id = connection.execute("SELECT id FROM employees").fetchone()["id"]
 
+    # A schedule as the migration writes them: assumed dates, so
+    # dates_provisional is set on the SCHEDULE. The note on the block below is
+    # internal provenance and is no longer what the flag is read from.
     connection.execute(
         "INSERT INTO semester_schedules (employee_id, start_date, end_date,"
-        " confirmed_at) VALUES (?, '2026-08-24', '2026-12-11', '2026-08-24 00:00')",
+        " confirmed_at, dates_provisional)"
+        " VALUES (?, '2026-08-24', '2026-12-11', '2026-08-24 00:00', 1)",
         (employee_id,),
     )
     schedule_id = connection.execute("SELECT id FROM semester_schedules").fetchone()["id"]

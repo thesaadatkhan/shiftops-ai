@@ -1,7 +1,7 @@
 """Regression checks for the schema migration.
 
-Everything here runs against throwaway in-memory databases. The project's
-own `backend/shiftops.db` is never opened, read, or modified.
+Everything here runs against throwaway in-memory or temporary-file databases.
+The project's own `backend/shiftops.db` is never opened, read, or modified.
 
 `CREATE TABLE IF NOT EXISTS` does nothing once a table exists, so a column
 added later never reaches a database created before it. These checks prove
@@ -21,14 +21,23 @@ the migration closes that gap without losing data:
    their row counts, and a second run changes nothing.
 6. An explicitly deactivated worker stays deactivated across repeat runs -
    the migration must not reset statuses back to active.
+7. Two connections starting `migrate_schema()` together on a database that
+   predates `semester_schedules.dates_provisional` do not collide: exactly
+   one applies the column, the other rechecks after the lock and applies
+   nothing, both succeed, and the backfill and unrelated rows are correct.
+   Two full concurrent `create_schema()` startups succeed the same way.
 
 Run with:  python verify_migration.py
 Exits non-zero if any check fails.
 """
 
 import sys
+import tempfile
+import threading
+from pathlib import Path
 
 from database import (
+    MIGRATION_NOTE_PREFIX,
     SCHEMA_STATEMENTS,
     create_schema,
     get_connection,
@@ -192,6 +201,258 @@ def employee_rows(connection):
     ]
 
 
+# --------------------------------------------------------------------------
+# 7. Two connections migrating together must not collide on ALTER TABLE.
+#
+#    Codex reproduced the race: both connections ran PRAGMA table_info,
+#    both saw dates_provisional absent (the check happened before either
+#    held the write lock), and both issued ALTER TABLE. The second one hit
+#    "duplicate column name". The fix is lock ordering: BEGIN IMMEDIATE
+#    first, decide what to add only once the lock is held.
+# --------------------------------------------------------------------------
+
+# semester_schedules exactly as it was before dates_provisional existed.
+OLD_SEMESTER_SCHEDULES_TABLE = """
+CREATE TABLE semester_schedules (
+    id INTEGER PRIMARY KEY,
+    employee_id INTEGER NOT NULL REFERENCES employees(id),
+    start_date TEXT NOT NULL,
+    end_date TEXT NOT NULL,
+    confirmed_at TEXT,
+    UNIQUE (employee_id, start_date, end_date)
+)
+"""
+
+
+def pre_provisional_database(path):
+    """A file-backed database shaped like one before dates_provisional
+    existed, with is_active/seed_key already present so the race under test
+    is isolated to the one column this checks.
+
+    A real file, not `:memory:`: two separate connections need to see the
+    same database, and each `:memory:` connection is a private database of
+    its own.
+    """
+    connection = get_connection(path)
+    for statement in SCHEMA_STATEMENTS:
+        if "CREATE TABLE IF NOT EXISTS semester_schedules" in statement:
+            connection.execute(OLD_SEMESTER_SCHEDULES_TABLE)
+        else:
+            connection.execute(statement)
+    connection.commit()
+    return connection
+
+
+def populate_provisional_fixture(connection):
+    """One migrated worker (provisional) and one manually-entered worker
+    (not provisional), so the backfill has something real to get right."""
+    connection.execute(
+        "INSERT INTO employees (employee_code, full_name, student_type) "
+        "VALUES ('SW-001', 'Migrated Worker', 'undergraduate')"
+    )
+    migrated_id = connection.execute(
+        "SELECT id FROM employees WHERE employee_code = 'SW-001'"
+    ).fetchone()["id"]
+    connection.execute(
+        "INSERT INTO semester_schedules (employee_id, start_date, end_date, confirmed_at) "
+        "VALUES (?, '2026-08-24', '2026-12-11', NULL)",
+        (migrated_id,),
+    )
+    migrated_schedule_id = connection.execute(
+        "SELECT id FROM semester_schedules WHERE employee_id = ?", (migrated_id,)
+    ).fetchone()["id"]
+    connection.execute(
+        "INSERT INTO class_blocks (schedule_id, day_of_week, start_time, end_time, source_note) "
+        "VALUES (?, 0, '09:00', '10:15', ?)",
+        (migrated_schedule_id, f"{MIGRATION_NOTE_PREFIX} legacy course data, timetable unconfirmed"),
+    )
+
+    connection.execute(
+        "INSERT INTO employees (employee_code, full_name, student_type) "
+        "VALUES ('SW-002', 'Direct Entry Worker', 'masters')"
+    )
+    direct_id = connection.execute(
+        "SELECT id FROM employees WHERE employee_code = 'SW-002'"
+    ).fetchone()["id"]
+    connection.execute(
+        "INSERT INTO semester_schedules (employee_id, start_date, end_date, confirmed_at) "
+        "VALUES (?, '2026-08-24', '2026-12-11', NULL)",
+        (direct_id,),
+    )
+    direct_schedule_id = connection.execute(
+        "SELECT id FROM semester_schedules WHERE employee_id = ?", (direct_id,)
+    ).fetchone()["id"]
+    connection.execute(
+        "INSERT INTO class_blocks (schedule_id, day_of_week, start_time, end_time, source_note) "
+        "VALUES (?, 1, '11:00', '12:15', NULL)",
+        (direct_schedule_id,),
+    )
+    connection.execute(
+        "INSERT INTO shifts (hall, start_datetime, end_datetime) VALUES "
+        "('Vega', '2026-10-05 17:00', '2026-10-05 22:00')"
+    )
+    connection.commit()
+    return migrated_id, direct_id
+
+
+def snapshot_all(connection, tables):
+    return {
+        table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
+        for table in tables
+    }
+
+
+def check_concurrent_column_migration():
+    tables = [
+        "employees",
+        "semester_schedules",
+        "class_blocks",
+        "shifts",
+        "shift_preferences",
+        "approved_leave",
+        "assignments",
+    ]
+
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "concurrent-migration.db"
+        builder = pre_provisional_database(path)
+        migrated_id, direct_id = populate_provisional_fixture(builder)
+        check(
+            "dates_provisional" not in table_columns(builder, "semester_schedules"),
+            "the fixture genuinely lacks dates_provisional before migrating",
+        )
+        before = snapshot_all(builder, tables)
+        builder.close()
+
+        # Each thread opens its OWN connection, inside its OWN thread -
+        # sqlite3 connections cannot cross threads. Both read the column
+        # list first and only then wait on the barrier, so both are
+        # provably holding a pre-migration view before either takes the
+        # write lock. The barrier is released BEFORE either calls
+        # migrate_schema - putting it after one has the lock would
+        # deadlock the other against it.
+        both_ready = threading.Barrier(2)
+        results = {}
+        errors = []
+        saw_column = {}
+
+        def racer(name):
+            own = get_connection(path)
+            own.execute("PRAGMA busy_timeout = 10000")
+            try:
+                saw_column[name] = "dates_provisional" in table_columns(
+                    own, "semester_schedules"
+                )
+                both_ready.wait(timeout=10)
+                results[name] = migrate_schema(own)
+            except Exception as error:  # noqa: BLE001 - recorded, not swallowed
+                errors.append(f"{name}: {type(error).__name__}: {error}")
+            finally:
+                own.close()
+
+        threads = [threading.Thread(target=racer, args=(name,)) for name in ("a", "b")]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        check(errors == [], f"both concurrent migrations succeeded ({errors})")
+        check(
+            saw_column.get("a") is False and saw_column.get("b") is False,
+            f"both callers genuinely held a pre-migration view {saw_column}",
+        )
+        check(
+            sorted(results.get("a", []) + results.get("b", [])).count(
+                "semester_schedules.dates_provisional"
+            )
+            == 1,
+            "exactly one caller applies the column; the other rechecks "
+            f"after the lock and finds nothing to do ({results})",
+        )
+
+        after = get_connection(path)
+        column_count = sum(
+            1
+            for row in after.execute("PRAGMA table_info(semester_schedules)")
+            if row["name"] == "dates_provisional"
+        )
+        check(column_count == 1, f"the column exists exactly once ({column_count})")
+
+        rows = {
+            row["employee_id"]: row["dates_provisional"]
+            for row in after.execute(
+                "SELECT employee_id, dates_provisional FROM semester_schedules"
+            )
+        }
+        check(
+            rows.get(migrated_id) == 1,
+            f"the migrated schedule backfills as provisional ({rows.get(migrated_id)})",
+        )
+        check(
+            rows.get(direct_id) == 0,
+            f"the directly-entered schedule stays non-provisional ({rows.get(direct_id)})",
+        )
+
+        unchanged = snapshot_all(after, tables)
+        for table in tables:
+            if table == "semester_schedules":
+                continue  # dates_provisional is the expected, checked change.
+            check(
+                unchanged[table] == before[table],
+                f"{table} is unchanged by the concurrent migration",
+            )
+
+        check(
+            migrate_schema(after) == [],
+            "a later call is a no-op once both concurrent callers are done",
+        )
+        after.close()
+
+    # A second fixture: two full create_schema() calls racing at once, the
+    # real startup path.
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "concurrent-startup.db"
+        builder = pre_provisional_database(path)
+        populate_provisional_fixture(builder)
+        builder.close()
+
+        start_together = threading.Barrier(2)
+        startup_errors = []
+
+        def starter():
+            own = get_connection(path)
+            own.execute("PRAGMA busy_timeout = 10000")
+            try:
+                start_together.wait(timeout=10)
+                create_schema(own)
+            except Exception as error:  # noqa: BLE001
+                startup_errors.append(f"{type(error).__name__}: {error}")
+            finally:
+                own.close()
+
+        threads = [threading.Thread(target=starter) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        check(
+            startup_errors == [],
+            f"two simultaneous full startups both succeed ({startup_errors})",
+        )
+        after = get_connection(path)
+        column_count = sum(
+            1
+            for row in after.execute("PRAGMA table_info(semester_schedules)")
+            if row["name"] == "dates_provisional"
+        )
+        check(
+            column_count == 1,
+            f"two simultaneous startups still add the column exactly once ({column_count})",
+        )
+        after.close()
+
+
 def main():
     # 1-3. Migrating an old-schema database.
     connection = old_schema_database()
@@ -308,6 +569,9 @@ def main():
         f"assignment still joins to the correct worker and shift after migrating ({tuple(assignment)})",
     )
     legacy.close()
+
+    # 7. Concurrent migration must not collide on ALTER TABLE.
+    check_concurrent_column_migration()
 
     if failures:
         print(f"\nFAILED ({len(failures)}):")

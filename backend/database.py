@@ -132,6 +132,15 @@ SCHEMA_STATEMENTS = [
     # missing information; a worker with a confirmed schedule and no class
     # blocks has deliberately declared they have no classes. Phase 6 needs to
     # tell those apart, so the schema must not collapse them.
+    # `dates_provisional` records that these semester dates were ASSUMED by
+    # the migration rather than supplied by a supervisor. It lives here, on
+    # the schedule, and not on the class blocks.
+    #
+    # It used to be derived at read time from the migration notes on the
+    # blocks. That was fine while blocks were immutable and wrong the moment
+    # they became editable: deleting the last migrated block would have
+    # silently erased the fact that the dates were never anybody's decision.
+    # Provenance of the DATES belongs to the row that holds the dates.
     """
     CREATE TABLE IF NOT EXISTS semester_schedules (
         id INTEGER PRIMARY KEY,
@@ -139,6 +148,7 @@ SCHEMA_STATEMENTS = [
         start_date TEXT NOT NULL,
         end_date TEXT NOT NULL,
         confirmed_at TEXT,
+        dates_provisional INTEGER NOT NULL DEFAULT 0,
         UNIQUE (employee_id, start_date, end_date)
     )
     """,
@@ -212,6 +222,24 @@ def table_columns(connection, table):
     return {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
 
 
+def table_exists(connection, table):
+    """Whether a table is present.
+
+    `table_columns` returns an empty set both for a table with no columns -
+    which cannot happen - and for a table that does not exist, so a migration
+    that keys off it alone would try to ALTER something absent. Column
+    migrations are written to be runnable on their own, against a fixture
+    holding only the tables that migration cares about.
+    """
+    return (
+        connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        is not None
+    )
+
+
 def migrate_schema(connection):
     """Add columns that `CREATE TABLE IF NOT EXISTS` cannot add to an
     existing table.
@@ -224,43 +252,117 @@ def migrate_schema(connection):
     Migrations only ever ADD things. Nothing here drops a table, deletes a
     row, or rebuilds the database.
 
+    **Why this runs inside one `BEGIN IMMEDIATE` transaction.** Review
+    reproduced a real race: two connections both ran `PRAGMA table_info` and
+    both saw `dates_provisional` absent, because the check happened before
+    either held the write lock. Both then issued `ALTER TABLE`; the second
+    failed with `OperationalError: duplicate column name`. The fix is lock
+    ordering, the same one `migrate_class_schedules` already uses - take the
+    write lock FIRST, and only then decide what needs adding. The second
+    caller blocks until the first commits, then re-checks against a database
+    that already has the column and adds nothing. Both calls succeed.
+    `ALTER TABLE` exception-swallowing, a process-local lock, or suppressing
+    "duplicate column name" specifically would only paper over the first
+    connection to hit it and would do nothing for a second OS process or a
+    second worker - they were deliberately not used.
+
     Returns the list of migrations that were applied, so callers and tests
     can see whether anything actually changed.
     """
+    previous_isolation = connection.isolation_level
+    connection.isolation_level = None
     applied = []
 
-    if "is_active" not in table_columns(connection, "employees"):
-        # A NOT NULL column needs a default so existing rows stay valid;
-        # 1 means every worker already in the database stays active.
-        connection.execute(
-            "ALTER TABLE employees ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
-        )
-        applied.append("employees.is_active")
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            if "is_active" not in table_columns(connection, "employees"):
+                # A NOT NULL column needs a default so existing rows stay
+                # valid; 1 means every worker already in the database stays
+                # active.
+                connection.execute(
+                    "ALTER TABLE employees ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1"
+                )
+                applied.append("employees.is_active")
 
-    if "seed_key" not in table_columns(connection, "employees"):
-        # Legacy provenance: records which generated worker a row came from,
-        # and is NULL for workers created through the application. It no
-        # longer controls anything. It was introduced when seeding ran
-        # repeatedly and had to recognise a demo worker whose employee_code
-        # had been edited; demo initialization now runs only on an empty
-        # database, so nothing reads this column to decide whether to seed.
-        # Kept because dropping it would mean rebuilding the table, and
-        # knowing which rows came from the demo data is still useful.
-        connection.execute("ALTER TABLE employees ADD COLUMN seed_key TEXT")
-        connection.execute(
-            "UPDATE employees SET seed_key = employee_code WHERE seed_key IS NULL"
-        )
-        applied.append("employees.seed_key")
+            if "seed_key" not in table_columns(connection, "employees"):
+                # Legacy provenance: records which generated worker a row
+                # came from, and is NULL for workers created through the
+                # application. It no longer controls anything. It was
+                # introduced when seeding ran repeatedly and had to recognise
+                # a demo worker whose employee_code had been edited; demo
+                # initialization now runs only on an empty database, so
+                # nothing reads this column to decide whether to seed. Kept
+                # because dropping it would mean rebuilding the table, and
+                # knowing which rows came from the demo data is still useful.
+                connection.execute("ALTER TABLE employees ADD COLUMN seed_key TEXT")
+                connection.execute(
+                    "UPDATE employees SET seed_key = employee_code WHERE seed_key IS NULL"
+                )
+                applied.append("employees.seed_key")
 
-    # Created here rather than alongside the CREATE TABLE statements: those
-    # run before this function, so on a database that predates seed_key the
-    # index would reference a column that does not exist yet.
-    connection.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS employees_seed_key "
-        "ON employees (seed_key) WHERE seed_key IS NOT NULL"
-    )
+            if table_exists(
+                connection, "semester_schedules"
+            ) and "dates_provisional" not in table_columns(
+                connection, "semester_schedules"
+            ):
+                # Default 0: a schedule is only provisional if we can SHOW it
+                # was assumed, and the safe default is "a person chose these
+                # dates".
+                connection.execute(
+                    "ALTER TABLE semester_schedules"
+                    " ADD COLUMN dates_provisional INTEGER NOT NULL DEFAULT 0"
+                )
+                # Backfill from the evidence that used to be read at request
+                # time, so a database upgraded today reports exactly what it
+                # reported yesterday. The migration is the only writer of
+                # `source_note`, and every schedule it creates gets the same
+                # assumed demo dates, so a block carrying a migration note
+                # marks its schedule as migrated.
+                #
+                # AMBIGUITY, stated rather than papered over: this evidence
+                # lives on the blocks, so a migrated schedule whose blocks had
+                # all been deleted before this ran would backfill as NOT
+                # provisional. That case cannot exist in practice - deleting a
+                # block only becomes possible in the same increment that adds
+                # this column, so at the moment this migration runs every
+                # migrated schedule still holds its blocks. Where the stored
+                # evidence is genuinely absent the narrower answer is chosen:
+                # not provisional, rather than a guess.
+                if table_exists(connection, "class_blocks"):
+                    connection.execute(
+                        """
+                        UPDATE semester_schedules SET dates_provisional = 1
+                        WHERE id IN (
+                            SELECT DISTINCT schedule_id FROM class_blocks
+                            WHERE source_note IS NOT NULL AND source_note LIKE ?
+                        )
+                        """,
+                        (f"{MIGRATION_NOTE_PREFIX}%",),
+                    )
+                applied.append("semester_schedules.dates_provisional")
 
-    connection.commit()
+            # Created here rather than alongside the CREATE TABLE statements:
+            # those run before this function, so on a database that predates
+            # seed_key the index would reference a column that does not exist
+            # yet. `IF NOT EXISTS` makes this safe to repeat, and it is
+            # created inside the same transaction so a concurrent caller
+            # cannot see the seed_key column without this index either.
+            connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS employees_seed_key "
+                "ON employees (seed_key) WHERE seed_key IS NOT NULL"
+            )
+
+            # Committed here regardless of whether anything was applied, so
+            # the no-work path releases the write lock rather than leaving
+            # the transaction open.
+            connection.execute("COMMIT")
+        except Exception:
+            connection.execute("ROLLBACK")
+            raise
+    finally:
+        connection.isolation_level = previous_isolation
+
     return applied
 
 
@@ -351,6 +453,12 @@ def migrate_class_schedules(connection):
     came from - nothing reads them operationally any more, and dropping them
     would destroy information this migration cannot recreate.
 
+    **The dates are marked provisional.** The legacy model stored no semester
+    dates at all, so the ones written here are assumed. That fact is recorded
+    on the schedule itself (`dates_provisional`), not inferred later from the
+    notes on its blocks: once blocks can be edited, deleting the last migrated
+    block must not erase the knowledge that nobody chose these dates.
+
     **Confirmation is not invented.** A migrated schedule is confirmed only
     when the stored meetings are PROVED to be a validated demo timetable: the
     worker's `seed_key` must name a worker the generator produces, and their
@@ -415,8 +523,9 @@ def migrate_class_schedules(connection):
                 connection.execute(
                     """
                     INSERT INTO semester_schedules
-                        (employee_id, start_date, end_date, confirmed_at)
-                    VALUES (?, ?, ?, ?)
+                        (employee_id, start_date, end_date, confirmed_at,
+                         dates_provisional)
+                    VALUES (?, ?, ?, ?, 1)
                     """,
                     (
                         employee_id,

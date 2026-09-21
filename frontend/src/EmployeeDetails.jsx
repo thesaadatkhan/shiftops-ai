@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import {
   EMPLOYEES_URL,
+  WEEKDAY_NAMES,
   studentTypeLabel,
   timetableLabel,
   weekdayName,
@@ -23,6 +24,15 @@ const COVERAGE_SENTENCES = {
     'These dates cover part of the reporting week shown above, not all seven days.',
   full: 'These dates cover the whole reporting week shown above.',
 }
+
+const FEEDBACK_CLASSES = {
+  success: 'backend-status backend-status-success',
+  error: 'backend-status backend-status-error',
+  notice: 'backend-status backend-status-loading',
+}
+
+const EMPTY_SEMESTER = { start_date: '', end_date: '' }
+const EMPTY_BLOCK = { day_of_week: '0', start_time: '', end_time: '' }
 
 // Response validation.
 //
@@ -73,6 +83,9 @@ const COVERAGE_STATES = ['outside', 'partial', 'full']
 function isValidClassBlock(block) {
   return (
     isObject(block) &&
+    // The id addresses this block when editing or removing it, so a response
+    // without one cannot be acted on and is not rendered.
+    Number.isInteger(block.id) &&
     Number.isInteger(block.day_of_week) &&
     block.day_of_week >= 0 &&
     block.day_of_week <= 6 &&
@@ -84,6 +97,7 @@ function isValidClassBlock(block) {
 function isValidSemester(semester) {
   return (
     isObject(semester) &&
+    Number.isInteger(semester.id) &&
     hasStrings(semester, ['start_date', 'end_date']) &&
     // Null is meaningful here - it is what "not confirmed" looks like - so it
     // is accepted, and anything that is neither a string nor null is not.
@@ -121,15 +135,102 @@ function isValidDetailResponse(data) {
   )
 }
 
-function SemesterPanel({ semester }) {
+// Validation of a successful MUTATION response.
+//
+// A 2xx status means the backend accepted and applied the request - that is
+// decided once, from the status code, and is never revisited. What is NOT
+// guaranteed is that the response body is well-formed JSON matching what a
+// healthy backend would send: a proxy, a future backend change, or a bug
+// could still return `200 OK` with an empty, null, or short body. Review
+// found that `submit()` handed such a body straight to `describe(payload)`,
+// which threw reading a missing field and skipped `setSaving(false)` -
+// locking the editor even though the write had genuinely succeeded.
+//
+// So every success shape is validated the same way the read-only response
+// is: before anything reads a field from it. An invalid body is NEVER
+// treated as a refusal - the status code already said otherwise - it just
+// means the specific "Added the semester 2026-08-24 to 2026-12-11" message
+// cannot be built, so a generic, still-truthful one is shown instead and an
+// authoritative reload is fetched to show what is actually stored now.
+
+function isValidScheduleWrite(payload) {
+  // What create and update both return: the schedule's id and dates.
+  return (
+    isObject(payload) &&
+    Number.isInteger(payload.id) &&
+    hasStrings(payload, ['start_date', 'end_date'])
+  )
+}
+
+function isValidScheduleDeletion(payload) {
+  return (
+    isObject(payload) &&
+    hasStrings(payload, ['start_date', 'end_date']) &&
+    Number.isInteger(payload.class_blocks)
+  )
+}
+
+function isValidBlockWrite(payload) {
+  return (
+    isObject(payload) &&
+    Number.isInteger(payload.id) &&
+    Number.isInteger(payload.day_of_week) &&
+    payload.day_of_week >= 0 &&
+    payload.day_of_week <= 6 &&
+    hasStrings(payload, ['start_time', 'end_time'])
+  )
+}
+
+function isValidBlockDeletion(payload) {
+  return (
+    isObject(payload) &&
+    Number.isInteger(payload.day_of_week) &&
+    payload.day_of_week >= 0 &&
+    payload.day_of_week <= 6 &&
+    hasStrings(payload, ['start_time', 'end_time'])
+  )
+}
+
+async function fetchDetail(employeeCode) {
+  const response = await fetch(
+    `${EMPLOYEES_URL}/${encodeURIComponent(employeeCode)}`,
+  )
+  if (response.status === 404) {
+    // Distinct from a failure, because retrying will not help.
+    const error = new Error('not found')
+    error.notFound = true
+    throw error
+  }
+  if (!response.ok) {
+    throw new Error(`status ${response.status}`)
+  }
+  const data = await response.json()
+  // The second half is belt and braces: the response must be about the worker
+  // that was actually asked for, whatever the timing.
+  if (
+    !isValidDetailResponse(data) ||
+    data.employee.employee_code !== employeeCode
+  ) {
+    throw new Error('unexpected shape')
+  }
+  return data
+}
+
+function describeSemester(semester) {
+  return `${semester.start_date} to ${semester.end_date}`
+}
+
+function describeBlock(block) {
+  return `${weekdayName(block.day_of_week)} ${block.start_time} to ${block.end_time}`
+}
+
+function SemesterPanel({ semester, busy, onEditDates, onDeleteSemester, onAddBlock, onEditBlock, onDeleteBlock }) {
   const blocks = semester.class_blocks
   const confirmed = semester.confirmed_at !== null
 
   return (
     <div className="detail-panel">
-      <h5>
-        {semester.start_date} to {semester.end_date}
-      </h5>
+      <h5>{describeSemester(semester)}</h5>
 
       <p className="table-note">
         {/* This semester's OWN confirmation. It is not the readiness figure
@@ -153,9 +254,37 @@ function SemesterPanel({ semester }) {
           way of storing them, which recorded no semester dates at all. Nobody
           has confirmed that this is really when their semester runs, so check
           the dates before relying on them. The class days and times
-          themselves came across unchanged.
+          themselves came across unchanged. Saving the dates below records
+          them as yours and removes this notice.
         </p>
       )}
+
+      <div className="list-controls">
+        <button
+          type="button"
+          onClick={() => onEditDates(semester)}
+          disabled={busy}
+          aria-label={`Edit dates for the semester ${describeSemester(semester)}`}
+        >
+          Edit dates
+        </button>
+        <button
+          type="button"
+          onClick={() => onAddBlock(semester)}
+          disabled={busy}
+          aria-label={`Add a class to the semester ${describeSemester(semester)}`}
+        >
+          Add class
+        </button>
+        <button
+          type="button"
+          onClick={() => onDeleteSemester(semester)}
+          disabled={busy}
+          aria-label={`Delete the semester ${describeSemester(semester)}`}
+        >
+          Delete semester
+        </button>
+      </div>
 
       {blocks.length === 0 ? (
         <p className="backend-status backend-status-loading">
@@ -168,8 +297,7 @@ function SemesterPanel({ semester }) {
         <div className="table-wrapper">
           <table className="data-table">
             <caption className="table-caption">
-              Recurring weekly classes, {semester.start_date} to{' '}
-              {semester.end_date}
+              Recurring weekly classes, {describeSemester(semester)}
             </caption>
             <thead>
               <tr>
@@ -177,19 +305,36 @@ function SemesterPanel({ semester }) {
                 <th scope="col">Starts</th>
                 <th scope="col">Ends</th>
                 <th scope="col">Hours</th>
+                <th scope="col">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {blocks.map((block, index) => (
-                // Two identical blocks are legitimate - the old model let one
-                // worker hold the same meeting under two courses, and the
-                // migration kept both - so the position in the ordered list
-                // is the only thing that distinguishes them.
-                <tr key={index}>
+              {blocks.map((block) => (
+                <tr key={block.id}>
                   <td>{weekdayName(block.day_of_week)}</td>
                   <td>{block.start_time}</td>
                   <td>{block.end_time}</td>
                   <td>{block.hours}</td>
+                  <td>
+                    {/* Two classes can legitimately look identical, so the
+                        accessible name carries the times to tell them apart. */}
+                    <button
+                      type="button"
+                      onClick={() => onEditBlock(semester, block)}
+                      disabled={busy}
+                      aria-label={`Edit the class ${describeBlock(block)}`}
+                    >
+                      Edit
+                    </button>{' '}
+                    <button
+                      type="button"
+                      onClick={() => onDeleteBlock(semester, block)}
+                      disabled={busy}
+                      aria-label={`Remove the class ${describeBlock(block)}`}
+                    >
+                      Remove
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -200,7 +345,7 @@ function SemesterPanel({ semester }) {
   )
 }
 
-function EmployeeDetails({ employeeCode, onClose }) {
+function EmployeeDetails({ employeeCode, onClose, onChanged }) {
   const [status, setStatus] = useState('loading')
   const [detail, setDetail] = useState(null)
   // Bumped by Try again. Changing it re-runs the effect below, which is the
@@ -211,11 +356,19 @@ function EmployeeDetails({ employeeCode, onClose }) {
   // state left over from the last.
   const [attempt, setAttempt] = useState(0)
 
-  function tryAgain() {
-    setStatus('loading')
-    setDetail(null)
-    setAttempt(attempt + 1)
-  }
+  // Exactly one editing action is open at a time, described by this object:
+  // {kind, semester?, block?}. Holding the records rather than only their ids
+  // means every form and confirmation can name what it is about.
+  const [action, setAction] = useState(null)
+  const [semesterForm, setSemesterForm] = useState(EMPTY_SEMESTER)
+  const [blockForm, setBlockForm] = useState(EMPTY_BLOCK)
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState(null)
+  const [feedback, setFeedback] = useState(null)
+  // A failed reload AFTER a confirmed write is its own outcome. It never
+  // means the write failed, and it is reported separately so it cannot be
+  // mistaken for one.
+  const [refreshError, setRefreshError] = useState(null)
 
   useEffect(() => {
     // `cancelled` is the guard against a late response. The cleanup runs both
@@ -226,74 +379,163 @@ function EmployeeDetails({ employeeCode, onClose }) {
     // longer a component to set state on.
     let cancelled = false
 
-    async function loadDetail() {
-      let response
-
-      try {
-        response = await fetch(
-          `${EMPLOYEES_URL}/${encodeURIComponent(employeeCode)}`,
-        )
-      } catch {
+    fetchDetail(employeeCode).then(
+      (data) => {
         if (!cancelled) {
-          setStatus('error')
+          setDetail(data)
+          setStatus('success')
         }
-        return
-      }
-
-      if (cancelled) {
-        return
-      }
-
-      if (response.status === 404) {
-        // Somebody else deleted them, or the list is stale. Distinct from a
-        // failure, because retrying will not help.
-        setStatus('notfound')
-        return
-      }
-
-      if (!response.ok) {
-        setStatus('error')
-        return
-      }
-
-      let data
-      try {
-        data = await response.json()
-      } catch {
+      },
+      (error) => {
         if (!cancelled) {
-          setStatus('error')
+          setStatus(error.notFound ? 'notfound' : 'error')
         }
-        return
-      }
-
-      if (cancelled) {
-        return
-      }
-
-      // The second half of this test is belt and braces: the response must be
-      // about the worker that was actually asked for, whatever the timing.
-      if (
-        !isValidDetailResponse(data) ||
-        data.employee.employee_code !== employeeCode
-      ) {
-        setStatus('error')
-        return
-      }
-
-      setDetail(data)
-      setStatus('success')
-    }
-
-    loadDetail()
+      },
+    )
 
     return () => {
       cancelled = true
     }
   }, [employeeCode, attempt])
 
+  function tryAgain() {
+    setStatus('loading')
+    setDetail(null)
+    setAttempt(attempt + 1)
+  }
+
+  // One action owns this view at a time, guarded in the handlers as well as
+  // through `disabled`, so a forced click cannot start a second conflicting
+  // write or retarget an open confirmation at a different record.
+  function busy() {
+    return action !== null || saving
+  }
+
+  function openAction(next, prefill) {
+    if (busy()) {
+      return
+    }
+    setAction(next)
+    setFormError(null)
+    setFeedback(null)
+    if (prefill?.semester !== undefined) {
+      setSemesterForm(prefill.semester)
+    }
+    if (prefill?.block !== undefined) {
+      setBlockForm(prefill.block)
+    }
+  }
+
+  function closeAction() {
+    setAction(null)
+    setFormError(null)
+    setSemesterForm(EMPTY_SEMESTER)
+    setBlockForm(EMPTY_BLOCK)
+  }
+
+  async function reloadDetail() {
+    // Only ever a GET, so it is safe to call again from Retry: it can never
+    // repeat a write the server has already applied.
+    try {
+      setDetail(await fetchDetail(employeeCode))
+      setRefreshError(null)
+      return true
+    } catch {
+      setRefreshError(
+        'Could not reload this worker’s details. This does not undo anything that was already saved.',
+      )
+      return false
+    }
+  }
+
+  /**
+   * Send one write, then report its outcome honestly.
+   *
+   * The write's own response is the only thing that decides whether we claim
+   * it succeeded - and that decision is made ONCE, from the HTTP status, and
+   * never revisited because of what the body looks like. A 2xx response with
+   * a malformed or unreadable body is still a confirmed write: the backend
+   * applied it, so this must not resend the request, must not tell the
+   * supervisor it failed, and must not invite pressing Save again.
+   *
+   * `validate` checks the response shape this particular mutation is
+   * expected to return; `describe` turns a body that PASSES that check into
+   * the specific success message. If validation fails, or if `describe`
+   * itself throws for any reason, `fallbackMessage` is shown instead - still
+   * true, just not specific - and an authoritative reload fetches what is
+   * actually stored. `saving` is cleared in a `finally` so no path, expected
+   * or not, can leave the editor locked after a write the server accepted.
+   */
+  async function submit({ url, method, body, validate, describe, fallbackMessage }) {
+    if (saving) {
+      return
+    }
+    setSaving(true)
+    setFormError(null)
+
+    let response
+    try {
+      response = await fetch(url, {
+        method,
+        headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      })
+    } catch {
+      // No response at all, so whether the server applied it is genuinely
+      // unknown. Claiming it was not saved could be wrong.
+      setFormError(
+        'Could not reach the backend, so it is unclear whether this was saved. ' +
+          'Go back and reopen this worker to check before trying again.',
+      )
+      setSaving(false)
+      return
+    }
+
+    let payload
+    try {
+      payload = await response.json()
+    } catch {
+      // No body, or a body that is not JSON at all. Handled the same as any
+      // other unreadable success below - NOT as a parse failure that stops
+      // here, because the status code has already been read.
+      payload = null
+    }
+
+    if (!response.ok) {
+      // Genuinely refused - an invalid date, an overlapping semester, a
+      // duplicate class. The backend explains which; keep the form open with
+      // what was typed so it can be corrected.
+      setFormError(payload?.detail ?? `Save failed (status ${response.status}).`)
+      setSaving(false)
+      return
+    }
+
+    // From here on the write is CONFIRMED. Close the form first so a second
+    // Save cannot resubmit a request the server has already applied, and
+    // mark the list stale, before even looking at what the body contains.
+    closeAction()
+    onChanged()
+
+    let message
+    try {
+      message = validate(payload) ? describe(payload) : fallbackMessage
+    } catch {
+      // describe() threw on a body that passed validation - a bug in this
+      // component, not a failed write. The confirmed outcome still stands.
+      message = fallbackMessage
+    }
+    setFeedback({ tone: 'success', message })
+
+    try {
+      await reloadDetail()
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const backButton = (
     <div className="list-controls">
-      <button type="button" onClick={onClose}>
+      <button type="button" onClick={onClose} disabled={saving}>
         Back to employee list
       </button>
     </div>
@@ -339,6 +581,291 @@ function EmployeeDetails({ employeeCode, onClose }) {
 
   const { employee, semesters, shift_preferences, approved_leave } = detail
 
+  function startAddSemester() {
+    openAction({ kind: 'add-semester' }, { semester: EMPTY_SEMESTER })
+  }
+
+  function startEditSemester(semester) {
+    openAction(
+      { kind: 'edit-semester', semester },
+      {
+        semester: {
+          start_date: semester.start_date,
+          end_date: semester.end_date,
+        },
+      },
+    )
+  }
+
+  function startDeleteSemester(semester) {
+    // Opening a confirmation sends no request of any kind.
+    openAction({ kind: 'delete-semester', semester })
+  }
+
+  function startAddBlock(semester) {
+    openAction({ kind: 'add-block', semester }, { block: EMPTY_BLOCK })
+  }
+
+  function startEditBlock(semester, block) {
+    openAction(
+      { kind: 'edit-block', semester, block },
+      {
+        block: {
+          day_of_week: String(block.day_of_week),
+          start_time: block.start_time,
+          end_time: block.end_time,
+        },
+      },
+    )
+  }
+
+  function startDeleteBlock(semester, block) {
+    openAction({ kind: 'delete-block', semester, block })
+  }
+
+  const semesterBase = `${EMPLOYEES_URL}/${encodeURIComponent(employeeCode)}/semesters`
+
+  function saveSemester(event) {
+    event.preventDefault()
+    const creating = action.kind === 'add-semester'
+    submit({
+      url: creating ? semesterBase : `${semesterBase}/${action.semester.id}`,
+      method: creating ? 'POST' : 'PUT',
+      body: {
+        start_date: semesterForm.start_date,
+        end_date: semesterForm.end_date,
+      },
+      validate: isValidScheduleWrite,
+      describe: (saved) =>
+        creating
+          ? `Added the semester ${describeSemester(saved)}. It is not confirmed yet.`
+          // Re-saving a semester's own unchanged dates still withdraws its
+          // confirmation (D035), so this must stay true whether or not the
+          // dates actually changed - it does not claim they are "different".
+          : `Saved the semester dates ${describeSemester(saved)}. Saving semester dates withdraws any previous confirmation.`,
+      fallbackMessage: creating
+        ? 'The semester was saved, but its details could not be read from the response. Reloading to show what is now stored.'
+        : 'The semester dates were saved, but the response could not be read. Reloading to show what is now stored. Saving semester dates withdraws any previous confirmation.',
+    })
+  }
+
+  function saveBlock(event) {
+    event.preventDefault()
+    const creating = action.kind === 'add-block'
+    const blocks = `${semesterBase}/${action.semester.id}/blocks`
+    submit({
+      url: creating ? blocks : `${blocks}/${action.block.id}`,
+      method: creating ? 'POST' : 'PUT',
+      body: {
+        // The select holds a string; the backend requires a whole number.
+        day_of_week: Number(blockForm.day_of_week),
+        start_time: blockForm.start_time,
+        end_time: blockForm.end_time,
+      },
+      validate: isValidBlockWrite,
+      describe: (saved) =>
+        `${creating ? 'Added' : 'Saved'} the class ${describeBlock(saved)}. This semester is no longer confirmed.`,
+      fallbackMessage: `The class was saved, but the response could not be read. Reloading to show what is now stored. This semester is no longer confirmed.`,
+    })
+  }
+
+  function confirmDeleteSemester() {
+    submit({
+      url: `${semesterBase}/${action.semester.id}`,
+      method: 'DELETE',
+      validate: isValidScheduleDeletion,
+      describe: (removed) =>
+        `Deleted the semester ${describeSemester(removed)}` +
+        (removed.class_blocks > 0
+          ? ` and its ${removed.class_blocks} ${removed.class_blocks === 1 ? 'class' : 'classes'}.`
+          : '.'),
+      fallbackMessage:
+        'The semester was deleted, but the response could not be read. Reloading to show what remains.',
+    })
+  }
+
+  function confirmDeleteBlock() {
+    submit({
+      url: `${semesterBase}/${action.semester.id}/blocks/${action.block.id}`,
+      method: 'DELETE',
+      validate: isValidBlockDeletion,
+      describe: (removed) =>
+        `Removed the class ${describeBlock(removed)}. This semester is no longer confirmed.`,
+      fallbackMessage:
+        'The class was removed, but the response could not be read. Reloading to show what remains. This semester is no longer confirmed.',
+    })
+  }
+
+  // Each panel is a FUNCTION, not a value, so only the one that is actually
+  // open is built. Building them all eagerly meant the delete panels read
+  // `action.semester` while some other action was open, and crashed the
+  // render on a value that was legitimately absent.
+  const renderSemesterForm = () => (
+    <form className="employee-form" onSubmit={saveSemester}>
+      <h5>
+        {action.kind === 'add-semester'
+          ? 'Add a semester'
+          : `Edit the semester ${describeSemester(action.semester)}`}
+      </h5>
+      <div className="list-controls">
+        <label htmlFor="semester-start">Starts</label>
+        <input
+          id="semester-start"
+          type="date"
+          value={semesterForm.start_date}
+          onChange={(event) =>
+            setSemesterForm({ ...semesterForm, start_date: event.target.value })
+          }
+        />
+        <label htmlFor="semester-end">Ends</label>
+        <input
+          id="semester-end"
+          type="date"
+          value={semesterForm.end_date}
+          onChange={(event) =>
+            setSemesterForm({ ...semesterForm, end_date: event.target.value })
+          }
+        />
+        <button type="submit" disabled={saving}>
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+        <button type="button" onClick={closeAction} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+      <p className="table-note">
+        Both dates are included in the semester. A worker&rsquo;s semesters
+        cannot overlap, so two of them may not share even a single day. Saving
+        these dates records them as yours and leaves the timetable
+        unconfirmed &mdash; confirming it is a separate step that is not built
+        yet.
+      </p>
+      {formError !== null && (
+        <p className="backend-status backend-status-error">{formError}</p>
+      )}
+    </form>
+  )
+
+  const renderBlockForm = () => (
+    <form className="employee-form" onSubmit={saveBlock}>
+      <h5>
+        {action.kind === 'add-block'
+          ? `Add a class to ${describeSemester(action.semester)}`
+          : 'Edit this class'}
+      </h5>
+      <div className="list-controls">
+        <label htmlFor="block-day">Day</label>
+        <select
+          id="block-day"
+          value={blockForm.day_of_week}
+          onChange={(event) =>
+            setBlockForm({ ...blockForm, day_of_week: event.target.value })
+          }
+        >
+          {WEEKDAY_NAMES.map((name, index) => (
+            <option key={name} value={String(index)}>
+              {name}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="block-start">Starts</label>
+        <input
+          id="block-start"
+          type="time"
+          value={blockForm.start_time}
+          onChange={(event) =>
+            setBlockForm({ ...blockForm, start_time: event.target.value })
+          }
+        />
+        <label htmlFor="block-end">Ends</label>
+        <input
+          id="block-end"
+          type="time"
+          value={blockForm.end_time}
+          onChange={(event) =>
+            setBlockForm({ ...blockForm, end_time: event.target.value })
+          }
+        />
+        <button type="submit" disabled={saving}>
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+        <button type="button" onClick={closeAction} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+      <p className="table-note">
+        The class repeats every week of this semester. It must end after it
+        starts on the same day, and it cannot duplicate or overlap another
+        class in this semester &mdash; though one class may start exactly when
+        another ends. Saving leaves the timetable unconfirmed.
+      </p>
+      {formError !== null && (
+        <p className="backend-status backend-status-error">{formError}</p>
+      )}
+    </form>
+  )
+
+  const renderDeleteSemester = () => (
+    <div className="employee-form" role="alertdialog" aria-label="Confirm semester deletion">
+      <h5>Delete the semester {describeSemester(action.semester)}?</h5>
+      <p className="table-note">
+        This removes the semester and every class in it
+        {action.semester.class_blocks.length > 0
+          ? ` — ${action.semester.class_blocks.length} ${action.semester.class_blocks.length === 1 ? 'class' : 'classes'}`
+          : ''}
+        . It cannot be undone. The worker keeps everything else: their other
+        semesters, shift preferences, approved leave and shift history are all
+        left alone.
+      </p>
+      <div className="list-controls">
+        <button type="button" onClick={confirmDeleteSemester} disabled={saving}>
+          {saving ? 'Deleting...' : 'Delete semester'}
+        </button>
+        <button type="button" onClick={closeAction} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+      {formError !== null && (
+        <p className="backend-status backend-status-error">{formError}</p>
+      )}
+    </div>
+  )
+
+  const renderDeleteBlock = () => (
+    <div className="employee-form" role="alertdialog" aria-label="Confirm class removal">
+      <h5>Remove the class {describeBlock(action.block)}?</h5>
+      <p className="table-note">
+        This removes that class from {describeSemester(action.semester)}.
+        It cannot be undone, and it leaves the semester unconfirmed &mdash;
+        including if it was the last class, because &ldquo;no classes&rdquo; is
+        a statement that needs confirming in its own right.
+      </p>
+      <div className="list-controls">
+        <button type="button" onClick={confirmDeleteBlock} disabled={saving}>
+          {saving ? 'Removing...' : 'Remove class'}
+        </button>
+        <button type="button" onClick={closeAction} disabled={saving}>
+          Cancel
+        </button>
+      </div>
+      {formError !== null && (
+        <p className="backend-status backend-status-error">{formError}</p>
+      )}
+    </div>
+  )
+
+  const openPanel =
+    action === null
+      ? null
+      : {
+          'add-semester': renderSemesterForm,
+          'edit-semester': renderSemesterForm,
+          'add-block': renderBlockForm,
+          'edit-block': renderBlockForm,
+          'delete-semester': renderDeleteSemester,
+          'delete-block': renderDeleteBlock,
+        }[action.kind]()
+
   return (
     <section aria-label={`Details for ${employee.full_name}`}>
       {backButton}
@@ -347,11 +874,26 @@ function EmployeeDetails({ employeeCode, onClose }) {
         {employee.full_name} ({employee.employee_code})
       </h3>
       <p className="table-note">
-        Everything here is read-only. Entering and editing semester dates,
-        class blocks, shift preferences and approved leave is not built yet,
-        so this view shows what is stored rather than offering controls that
-        would not work.
+        Semester dates and class times can be edited here. Confirming a
+        timetable, and editing shift preferences and approved leave, are not
+        built yet, so those sections show what is stored without offering
+        controls that would not work.
       </p>
+
+      {feedback !== null && (
+        <p className={FEEDBACK_CLASSES[feedback.tone]} aria-live="polite">
+          {feedback.message}
+        </p>
+      )}
+
+      {refreshError !== null && (
+        <p className="backend-status backend-status-error" aria-live="polite">
+          {refreshError}{' '}
+          <button type="button" onClick={reloadDetail} disabled={saving}>
+            Retry loading
+          </button>
+        </p>
+      )}
 
       <h4>Details</h4>
       <dl className="detail-list">
@@ -403,16 +945,31 @@ function EmployeeDetails({ employeeCode, onClose }) {
         has nothing covering it.
       </p>
 
+      <div className="list-controls">
+        <button type="button" onClick={startAddSemester} disabled={busy()}>
+          Add semester
+        </button>
+      </div>
+
+      {openPanel}
+
       {semesters.length === 0 ? (
         <p className="backend-status backend-status-loading">
           No semester timetable has been entered for this worker. That is
           missing information &mdash; it does not mean they have no classes.
+          Add a semester above to enter their class times.
         </p>
       ) : (
         semesters.map((semester) => (
           <SemesterPanel
-            key={`${semester.start_date}-${semester.end_date}`}
+            key={semester.id}
             semester={semester}
+            busy={busy()}
+            onEditDates={startEditSemester}
+            onDeleteSemester={startDeleteSemester}
+            onAddBlock={startAddBlock}
+            onEditBlock={startEditBlock}
+            onDeleteBlock={startDeleteBlock}
           />
         ))
       )}
@@ -423,7 +980,7 @@ function EmployeeDetails({ employeeCode, onClose }) {
         other shift is neutral, which is stored as the absence of a preference
         rather than as a third value. Preferences are soft: a low-preference
         shift is still one the worker can be assigned to, and a preferred one
-        is not a claim on it.
+        is not a claim on it. Editing them is not built yet.
       </p>
 
       {shift_preferences.length === 0 ? (
@@ -465,7 +1022,8 @@ function EmployeeDetails({ employeeCode, onClose }) {
       <h4>Approved leave</h4>
       <p className="table-note">
         Leave that has already been approved, with the dates and times it
-        actually covers. Pending requests are not part of this application.
+        actually covers. Pending requests are not part of this application, and
+        editing approved leave is not built yet.
       </p>
 
       {approved_leave.length === 0 ? (

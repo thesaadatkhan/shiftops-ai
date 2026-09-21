@@ -1,9 +1,10 @@
 from datetime import timedelta
+from typing import Annotated, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import MIGRATION_NOTE_PREFIX, ensure_schema, get_connection
+from database import ensure_schema, get_connection
 from employees import (
     CodeAllocationError,
     DeactivationBlocked,
@@ -16,6 +17,17 @@ from employees import (
     find_by_code,
     set_active,
     update_employee,
+)
+from timetables import (
+    TimetableConflict,
+    TimetableNotFound,
+    TimetableValidationError,
+    create_block,
+    create_schedule,
+    delete_block,
+    delete_schedule,
+    update_block,
+    update_schedule,
 )
 from reporting import (
     InvalidWorkDuration,
@@ -304,19 +316,20 @@ def semester_payload(schedule, blocks_by_schedule):
     """
     blocks = blocks_by_schedule.get(schedule["id"], [])
     return {
+        # Ids are exposed because the editing routes address records by them.
+        # They are internal database keys, not a second public identifier for
+        # a worker - that is still the employee code.
+        "id": schedule["id"],
         "start_date": schedule["start_date"],
         "end_date": schedule["end_date"],
         "confirmed_at": schedule["confirmed_at"],
         "reporting_week_coverage": week_coverage_state(
             schedule_covered_days(schedule)
         ),
-        "dates_provisional": any(
-            block["source_note"] is not None
-            and block["source_note"].startswith(MIGRATION_NOTE_PREFIX)
-            for block in blocks
-        ),
+        "dates_provisional": bool(schedule["dates_provisional"]),
         "class_blocks": [
             {
+                "id": block["id"],
                 "day_of_week": block["day_of_week"],
                 "start_time": block["start_time"],
                 "end_time": block["end_time"],
@@ -350,7 +363,8 @@ def employee_detail_payload(connection, employee_code):
     employee_id = employee["id"]
 
     schedules = connection.execute(
-        "SELECT id, employee_id, start_date, end_date, confirmed_at"
+        "SELECT id, employee_id, start_date, end_date, confirmed_at,"
+        " dates_provisional"
         " FROM semester_schedules WHERE employee_id = ?"
         " ORDER BY start_date, end_date, id",
         (employee_id,),
@@ -361,7 +375,7 @@ def employee_detail_payload(connection, employee_code):
     # so two identical blocks keep a stable relative position.
     blocks = connection.execute(
         """
-        SELECT b.schedule_id, b.day_of_week, b.start_time, b.end_time, b.source_note
+        SELECT b.id, b.schedule_id, b.day_of_week, b.start_time, b.end_time
         FROM class_blocks b
         JOIN semester_schedules s ON s.id = b.schedule_id
         WHERE s.employee_id = ?
@@ -467,6 +481,83 @@ def get_employee_details(employee_code: str):
     )
 
 
+# --------------------------------------------------------------------------
+# Semester schedules and class blocks (D035).
+#
+# Addressed by employee code first, then by the id of the record within that
+# worker, so ownership is part of the route rather than something the handler
+# has to remember to check. All six share `run_employee_action`'s error
+# mapping, so they answer in the same `{"detail": ...}` shape as every other
+# employee route (D033).
+#
+# None of these confirm a timetable. Confirmation controls are the next
+# increment; here, every change that alters what a timetable says withdraws
+# any confirmation it had.
+# --------------------------------------------------------------------------
+
+
+# Accept parsed JSON here so timetable validation owns the object check and
+# its 400/string-detail error. None also sends null or a missing body through
+# that validator, rather than FastAPI's required-body 422 response.
+@app.post("/api/employees/{employee_code}/semesters", status_code=201)
+def add_semester(employee_code: str, payload: Annotated[Any, Body()] = None):
+    return run_employee_action(
+        lambda connection: create_schedule(connection, employee_code, payload)
+    )
+
+
+@app.put("/api/employees/{employee_code}/semesters/{schedule_id}")
+def edit_semester(
+    employee_code: str, schedule_id: int, payload: Annotated[Any, Body()] = None
+):
+    return run_employee_action(
+        lambda connection: update_schedule(
+            connection, employee_code, schedule_id, payload
+        )
+    )
+
+
+@app.delete("/api/employees/{employee_code}/semesters/{schedule_id}")
+def remove_semester(employee_code: str, schedule_id: int):
+    return run_employee_action(
+        lambda connection: delete_schedule(connection, employee_code, schedule_id)
+    )
+
+
+@app.post(
+    "/api/employees/{employee_code}/semesters/{schedule_id}/blocks", status_code=201
+)
+def add_class_block(
+    employee_code: str, schedule_id: int, payload: Annotated[Any, Body()] = None
+):
+    return run_employee_action(
+        lambda connection: create_block(
+            connection, employee_code, schedule_id, payload
+        )
+    )
+
+
+@app.put("/api/employees/{employee_code}/semesters/{schedule_id}/blocks/{block_id}")
+def edit_class_block(
+    employee_code: str, schedule_id: int, block_id: int,
+    payload: Annotated[Any, Body()] = None,
+):
+    return run_employee_action(
+        lambda connection: update_block(
+            connection, employee_code, schedule_id, block_id, payload
+        )
+    )
+
+
+@app.delete("/api/employees/{employee_code}/semesters/{schedule_id}/blocks/{block_id}")
+def remove_class_block(employee_code: str, schedule_id: int, block_id: int):
+    return run_employee_action(
+        lambda connection: delete_block(
+            connection, employee_code, schedule_id, block_id
+        )
+    )
+
+
 def employee_response(row):
     """The stored row as the frontend sees it after a save."""
     return {
@@ -507,6 +598,19 @@ def run_employee_action(action):
         # 500: the request was fine, but the server cannot issue a code. The
         # transaction rolled back, so no worker was created.
         raise HTTPException(status_code=500, detail=str(error)) from error
+    except TimetableValidationError as error:
+        # 400, same as any other unusable input.
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except TimetableNotFound as error:
+        # 404. A schedule or block id that belongs to a different worker lands
+        # here too: from this worker's point of view it does not exist, and
+        # answering 403 would confirm that somebody else holds that id.
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except TimetableConflict as error:
+        # 409: well-formed, but it clashes with what is already stored - an
+        # overlapping semester, or a duplicate or overlapping class. Nothing
+        # was written; the transaction rolled back.
+        raise HTTPException(status_code=409, detail=str(error)) from error
     finally:
         connection.close()
 

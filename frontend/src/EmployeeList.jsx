@@ -155,6 +155,11 @@ function EmployeeList() {
   // always read fresh from the database rather than from a row that may have
   // been sitting in this list since before someone else edited it.
   const [detailCode, setDetailCode] = useState(null)
+  // Set when the details view reports a successful write. The list's own
+  // figures - class-block count, class hours, timetable readiness - are
+  // computed by the backend, so an edit made in the details view leaves this
+  // table stale until it is re-read.
+  const [detailChangedSomething, setDetailChangedSomething] = useState(false)
   const [formError, setFormError] = useState(null)
   const [feedback, setFeedback] = useState(null)
   const [listError, setListError] = useState(null)
@@ -216,14 +221,25 @@ function EmployeeList() {
       return
     }
     setDetailCode(employee.employee_code)
+    setDetailChangedSomething(false)
     setFeedback(null)
   }
 
-  function closeDetails() {
+  async function closeDetails() {
     // The details view unmounts, which cancels any request still in flight
     // inside it. Search text, sorting and the status filter live out here and
     // are not touched, so the list comes back exactly as it was left.
     setDetailCode(null)
+
+    // If anything was edited in there, this table's figures for that worker
+    // are now out of date. Re-read them on the way back rather than while the
+    // details view is on screen: a reload failure belongs to the list, and
+    // showing its banner behind a view the supervisor is still working in
+    // would report a problem they cannot act on yet.
+    if (detailChangedSomething) {
+      setDetailChangedSomething(false)
+      await refreshList()
+    }
   }
 
   function openCreateForm() {
@@ -544,6 +560,7 @@ function EmployeeList() {
         key={detailCode}
         employeeCode={detailCode}
         onClose={closeDetails}
+        onChanged={() => setDetailChangedSomething(true)}
       />
     )
   }
