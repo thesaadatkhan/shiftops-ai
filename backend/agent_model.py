@@ -88,13 +88,22 @@ class OpenAIModelAdapter:
     def complete(self, messages, tools):
         client = self._ensure_client()
         full_messages = [{"role": "system", "content": SYSTEM_PROMPT}, *messages]
+        request = {
+            "model": self._model,
+            "messages": full_messages,
+            "tools": tools,
+            "tool_choice": "auto",
+        }
+        # GPT-5.6 models default to reasoning, but Chat Completions currently
+        # rejects function tools when reasoning_effort is enabled. ShiftOps
+        # deliberately stays on Chat Completions because its persisted tool
+        # transcript already implements that contract. Explicitly disabling
+        # reasoning preserves tool calling; other model families receive no
+        # extra parameter, retaining their existing behavior.
+        if self._model.startswith("gpt-5.6-"):
+            request["reasoning_effort"] = "none"
         try:
-            response = client.chat.completions.create(
-                model=self._model,
-                messages=full_messages,
-                tools=tools,
-                tool_choice="auto",
-            )
+            response = client.chat.completions.create(**request)
         except Exception as error:  # noqa: BLE001 - deliberately broad: any
             # provider-side failure (auth, rate limit, network, timeout) is
             # reported the same controlled way, never a raw traceback. The

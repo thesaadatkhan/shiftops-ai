@@ -8,8 +8,8 @@ Its target product is a housing-operations scheduling agent: a supervisor can
 ask it to investigate staffing gaps, find replacements, propose a feasible
 change, and carry out that specific change after approval. Employee management,
 eligibility rules and optimization supply its reliable operational tools.
-This agent is Phase 9 work; it is functionally implemented (see section
-below) with only its live-provider demonstration still pending.
+This agent was delivered in Phase 9, including a live-provider demonstration
+of the approved replacement workflow (see the section below).
 
 The application models a fictional university housing front-desk operation in which professional staff and student workers provide coverage across multiple residence halls.
 
@@ -649,8 +649,12 @@ requiring Reload/Reconcile, never as a failed write. A missing
 `OPENAI_API_KEY` surfaces as a clear 503 setup message; no key is ever
 requested, stored, or displayed in the browser.
 
-A live-model demonstration against a real `OPENAI_API_KEY` remains the
-only work left for Phase 9 (see `.ai/DECISIONS.md` D054).
+The live-model acceptance demonstration completed against `gpt-5.6-luna`
+using an isolated database: the model investigated a call-out and created the
+pending top-ranked proposal, explicit supervisor approval applied it, and the
+post-commit readback verified the replacement. GPT-5.6 requests explicitly
+use `reasoning_effort="none"` because Chat Completions rejects function tools
+with reasoning enabled; other model families keep their prior request shape.
 
 A call-out statement by itself does not remove an assignment or create leave.
 Ambiguous names/dates require clarification. If no eligible worker exists,
