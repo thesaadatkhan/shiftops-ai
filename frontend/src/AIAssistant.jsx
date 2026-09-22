@@ -721,7 +721,7 @@ export default function AIAssistant() {
           onChange={(event) => setInput(event.target.value)}
           onKeyDown={handleComposerKeyDown}
           placeholder="e.g. Jordan called out for tonight's Capella shift. Find a replacement."
-          rows={3}
+          rows={1}
           disabled={anyBusy || sendBlocked}
         />
         <div className="schedule-actions">

@@ -113,7 +113,16 @@
 .ai-assistant-page .page-header {
   width: min(100% - (var(--space-8) * 2), 820px);
   margin: 0 auto;
-  padding: var(--space-5) 0 var(--space-4);
+  padding: var(--space-3) 0 var(--space-2);
+}
+
+.ai-assistant-page .page-header h2 {
+  margin: 0;
+  font-size: var(--font-lg);
+}
+
+.ai-assistant-page .page-header p {
+  display: none;
 }
 
 @media (max-width: 700px) {
@@ -1155,11 +1164,12 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
 .agent-composer {
   display: flex;
   flex: 0 0 auto;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: flex-end;
   gap: 8px;
   width: min(100% - (var(--space-8) * 2), 820px);
   margin: 0 auto;
-  padding: var(--space-4) 0 var(--space-5);
+  padding: var(--space-2) 0 var(--space-3);
   border: none;
   border-radius: 0;
   background: color-mix(in srgb, var(--surface) 95%, transparent);
@@ -1167,19 +1177,45 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
 }
 
 .agent-composer textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-height: 120px;
   font: inherit;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--text-h);
-  resize: vertical;
+  resize: none;
+  overflow-y: auto;
 }
 
 .agent-composer .schedule-actions {
   display: flex;
+  flex: 0 0 auto;
   justify-content: flex-end;
   margin: 0;
+}
+
+.dashboard-metric-details,
+.employee-column-details {
+  margin-top: var(--space-4);
+}
+
+.dashboard-metric-details summary,
+.employee-column-details summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: var(--font-sm);
+  font-weight: 600;
+}
+
+.dashboard-metric-details .metric-cards {
+  margin-top: var(--space-3);
+}
+
+.employee-column-details .table-note {
+  margin-top: var(--space-3);
 }
 
 .agent-help-panel {

@@ -160,45 +160,48 @@ export default function Dashboard({ weekStart }) {
             {coverage.scheduled_coverage_hours} of {coverage.required_coverage_hours} hours).
           </p>
           <div className="metric-cards">
-            <MetricCard label="Stored shifts" value={coverage.shift_count} />
             <MetricCard label="Required positions" value={coverage.required_positions} />
             <MetricCard label="Filled positions" value={coverage.filled_positions} />
             <MetricCard label="Uncovered positions" value={coverage.uncovered_positions} />
-            <MetricCard label="Unfilled shifts" value={coverage.unfilled_shift_count} />
-            <MetricCard
-              label="Excess assignments"
-              value={coverage.excess_assignments}
-              note={coverage.excess_assignments > 0 ? 'More workers assigned than a shift requires.' : null}
-            />
           </div>
+          <details className="dashboard-metric-details">
+            <summary>More coverage details</summary>
+            <div className="metric-cards">
+              <MetricCard label="Stored shifts" value={coverage.shift_count} />
+              <MetricCard label="Unfilled shifts" value={coverage.unfilled_shift_count} />
+              <MetricCard
+                label="Excess assignments"
+                value={coverage.excess_assignments}
+                note={coverage.excess_assignments > 0 ? 'More workers assigned than a shift requires.' : null}
+              />
+            </div>
+          </details>
           </section>
         )}
         <section className="dashboard-section">
         <h3>Workforce</h3>
         <div className="metric-cards">
-          <MetricCard label="Total workers" value={workforce.total_workers} />
-          <MetricCard label="Active workers" value={workforce.active_workers} />
-          <MetricCard label="Timetable-ready workers" value={workforce.timetable_ready_workers} />
           <MetricCard
-            label="Active & timetable-ready"
-            value={workforce.active_and_timetable_ready_workers}
+            label="Active & ready workers"
+            value={`${workforce.active_and_timetable_ready_workers} of ${workforce.total_workers} total`}
+            note={`${workforce.active_workers} active; ${workforce.timetable_ready_workers} timetable-ready.`}
           />
           <MetricCard
-            label="Active theoretical capacity"
-            value={`${workforce.active_theoretical_capacity_hours} hrs`}
-            note="Sum of active workers' weekly hour limits - not eligibility."
-          />
-          <MetricCard label="Active assigned hours" value={`${workforce.active_assigned_hours} hrs`} />
-          <MetricCard
-            label="Theoretical remaining capacity"
-            value={`${workforce.theoretical_remaining_active_capacity_hours} hrs`}
-          />
-          <MetricCard
-            label="Recorded hours, all workers"
-            value={`${workforce.recorded_assigned_hours_all_workers} hrs`}
-            note="Includes workers who are now inactive."
+            label="Assigned hours"
+            value={`${workforce.active_assigned_hours} of ${workforce.active_theoretical_capacity_hours} hrs`}
+            note={`${workforce.theoretical_remaining_active_capacity_hours} theoretical hrs remaining; limits are not eligibility.`}
           />
         </div>
+        <details className="dashboard-metric-details">
+          <summary>Recorded-hours detail</summary>
+          <div className="metric-cards">
+            <MetricCard
+              label="Recorded hours, all workers"
+              value={`${workforce.recorded_assigned_hours_all_workers} hrs`}
+              note="Includes workers who are now inactive."
+            />
+          </div>
+        </details>
 
         </section>
       </div>

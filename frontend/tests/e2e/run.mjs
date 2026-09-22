@@ -1003,6 +1003,19 @@ async function journeyDashboardAndWorkforcePlanning(page) {
 
   await navButton(page, 'Dashboard').click()
   await metricValue('Filled positions').waitFor({ timeout: 10000 })
+  const coverageDetails = page.locator('.dashboard-metric-details').first()
+  const workforceDetails = page.locator('.dashboard-metric-details').nth(1)
+  check(
+    !(await coverageDetails.evaluate((element) => element.open)) &&
+      !(await workforceDetails.evaluate((element) => element.open)),
+    'Dashboard keeps secondary coverage and recorded-hours metrics collapsed by default',
+  )
+  await coverageDetails.locator('summary').click()
+  check(
+    await coverageDetails.getByText('Stored shifts', { exact: true }).isVisible() &&
+      await coverageDetails.getByText('Unfilled shifts', { exact: true }).isVisible(),
+    'Dashboard keeps secondary coverage metrics available in an expandable detail section',
+  )
   const assignmentGrid = page.getByRole('table', { name: 'Weekly employee assignment grid' })
   await assignmentGrid.waitFor({ timeout: 10000 })
   const dashboardTabs = page.getByRole('tablist', { name: 'Dashboard detail view' })
@@ -1088,6 +1101,14 @@ async function journeyDashboardAndWorkforcePlanning(page) {
 async function journeyEmployeesResponsiveLayout(page) {
   await navButton(page, 'Employees').click()
   await page.locator('.employee-table-wrapper').waitFor({ timeout: 10000 })
+  const columnDetails = page.locator('.employee-column-details')
+  check(!(await columnDetails.evaluate((element) => element.open)), 'Employees keeps column explanations collapsed by default')
+  await columnDetails.locator('summary').click()
+  check(
+    await columnDetails.getByText(/Remaining capacity is the unused part/).isVisible() &&
+      await columnDetails.getByText(/Class blocks and class hours count only/).isVisible(),
+    'Employees exposes the retained column explanations through its disclosure',
+  )
 
   for (const width of [1366, 1024]) {
     await page.setViewportSize({ width, height: 768 })
@@ -1220,6 +1241,12 @@ async function journeyAgentHelpPanel(page) {
 async function journeyAgentChatShellBehavior(page) {
   await navButton(page, 'AI Assistant').click()
   await startNewAgentTask(page)
+  const compactComposer = chatTextarea(page)
+  check(
+    (await compactComposer.getAttribute('rows')) === '1' &&
+      (await page.locator('.agent-composer').evaluate((element) => getComputedStyle(element).flexDirection)) === 'row',
+    'the AI Assistant keeps a one-line composer and inline Send action so the transcript has priority',
+  )
 
   // Slow one real request enough to observe the transient working notice.
   await page.route('**/api/agent/tasks', async (route) => {

@@ -837,29 +837,32 @@ function EmployeeList({ weekStart }) {
         Showing {visibleEmployees.length} of {employees.length} employees
       </p>
 
-      <p className="table-note">
-        Remaining capacity is the unused part of each worker&rsquo;s 20-hour
-        weekly limit for {week.start} to {week.end}, after the shifts they are
-        already assigned. It is theoretical spare capacity only &mdash; it does
-        not mean a worker is eligible or available for a given shift, and class
-        hours and approved leave are not subtracted from it.
-      </p>
+      <details className="employee-column-details">
+        <summary>What do these columns mean?</summary>
+        <p className="table-note">
+          Remaining capacity is the unused part of each worker&rsquo;s 20-hour
+          weekly limit for {week.start} to {week.end}, after the shifts they are
+          already assigned. It is theoretical spare capacity only &mdash; it does
+          not mean a worker is eligible or available for a given shift, and class
+          hours and approved leave are not subtracted from it.
+        </p>
 
-      <p className="table-note">
-        Class blocks and class hours count only the classes that actually fall
-        between {week.start} and {week.end} &mdash; a Monday class is counted
-        only if that Monday is inside the worker&rsquo;s semester. Timetable
-        describes this week specifically: &ldquo;Not set up&rdquo; means no
-        semester has been entered at all, &ldquo;Other semester only&rdquo;
-        means their timetable is for a different period, &ldquo;Part of
-        week&rdquo; means only some days are confirmed, and
-        &ldquo;Confirmed&rdquo; with no class blocks means a deliberate
-        &ldquo;no classes this week&rdquo;. None of this is shift eligibility
-        &mdash; see the Coverage section for that, which requires a
-        confirmed AND accepted (non-provisional) timetable, not merely this
-        readiness figure &mdash; and it is separate from whether a worker is
-        active.
-      </p>
+        <p className="table-note">
+          Class blocks and class hours count only the classes that actually fall
+          between {week.start} and {week.end} &mdash; a Monday class is counted
+          only if that Monday is inside the worker&rsquo;s semester. Timetable
+          describes this week specifically: &ldquo;Not set up&rdquo; means no
+          semester has been entered at all, &ldquo;Other semester only&rdquo;
+          means their timetable is for a different period, &ldquo;Part of
+          week&rdquo; means only some days are confirmed, and
+          &ldquo;Confirmed&rdquo; with no class blocks means a deliberate
+          &ldquo;no classes this week&rdquo;. None of this is shift eligibility
+          &mdash; see the Coverage section for that, which requires a
+          confirmed AND accepted (non-provisional) timetable, not merely this
+          readiness figure &mdash; and it is separate from whether a worker is
+          active.
+        </p>
+      </details>
 
       {visibleEmployees.length === 0 ? (
         <p className="backend-status backend-status-loading">
