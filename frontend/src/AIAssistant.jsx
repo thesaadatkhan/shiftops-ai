@@ -9,7 +9,7 @@
 // exact stored action to the exact two decision endpoints - never anything
 // derived from chat input or model output.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import {
   ApiError,
@@ -291,6 +291,11 @@ export default function AIAssistant() {
   const [decisionBlocked, setDecisionBlocked] = useState(false)
   const [readbackByProposal, setReadbackByProposal] = useState({})
   const [reconciling, setReconciling] = useState(false)
+  const transcriptRef = useRef(null)
+  // A new message should be visible immediately when the supervisor is
+  // following the conversation. Once they deliberately scroll up, preserve
+  // that reading position instead of pulling them away from history.
+  const transcriptNearBottom = useRef(true)
 
   useEffect(() => {
     if (taskId === null) {
@@ -343,6 +348,18 @@ export default function AIAssistant() {
   const proposal = task && task.proposals.length > 0 ? task.proposals[0] : null
   const pendingProposal = proposal && proposal.status === 'pending' ? proposal : null
   const visibleMessages = task ? visibleTranscriptMessages(task.messages) : []
+
+  useEffect(() => {
+    const transcript = transcriptRef.current
+    if (transcript && transcriptNearBottom.current) {
+      transcript.scrollTop = transcript.scrollHeight
+    }
+  }, [visibleMessages.length])
+
+  function trackTranscriptScroll(event) {
+    const { scrollHeight, scrollTop, clientHeight } = event.currentTarget
+    transcriptNearBottom.current = scrollHeight - scrollTop - clientHeight < 48
+  }
 
   /** Fetches a decided, verified proposal's current shift readback through
    * the read-only decision-state endpoint - never the approval endpoint,
@@ -601,7 +618,7 @@ export default function AIAssistant() {
       {phase === 'loading' && <p className="backend-status backend-status-loading">Loading your active task…</p>}
 
       {task && (
-        <div className="agent-transcript" aria-live="polite">
+        <div className="agent-transcript" ref={transcriptRef} onScroll={trackTranscriptScroll} aria-live="polite">
           {visibleMessages.map((message) => (
             <TranscriptMessage key={message.id} message={message} />
           ))}

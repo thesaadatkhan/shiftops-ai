@@ -1009,6 +1009,18 @@ async function journeyAgentInfoAndApprovedTrap(page) {
   await sendChat(page, 'How many hours has Taylor Brooks worked this week, and is everything approved?')
   await page.getByText(/approved as originally scheduled/i).waitFor({ timeout: 15000 })
   check(true, 'an ordinary informational question gets a plain-text answer')
+  const transcript = page.locator('.agent-transcript')
+  const latestMessage = transcript.locator('.agent-message').last()
+  await latestMessage.waitFor()
+  const transcriptMetrics = await transcript.evaluate((element) => ({
+    remainingBelow: element.scrollHeight - element.scrollTop - element.clientHeight,
+  }))
+  check(transcriptMetrics.remainingBelow < 2, 'a newly received assistant message auto-scrolls into view when the transcript is at its latest position')
+  const [latestBox, composerBox] = await Promise.all([latestMessage.boundingBox(), page.locator('.agent-composer').boundingBox()])
+  check(
+    latestBox !== null && composerBox !== null && latestBox.y + latestBox.height <= composerBox.y,
+    'the composer is laid out after the transcript and never covers the newest message',
+  )
   check(
     (await page.locator('.agent-proposal-card').count()) === 0,
     'no proposal card appears for a plain informational answer',

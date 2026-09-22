@@ -713,6 +713,7 @@
   gap: var(--space-4);
   margin-top: var(--space-4);
   width: min(100%, 820px);
+  min-height: 0;
 }
 
 .agent-toolbar {
@@ -792,9 +793,11 @@
 
 .agent-transcript {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 10px;
   max-height: 480px;
+  min-height: 0;
   overflow-y: auto;
   padding: 12px;
   border: 1px solid var(--border);
@@ -883,11 +886,9 @@
 
 .agent-composer {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   gap: 8px;
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
