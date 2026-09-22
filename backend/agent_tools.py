@@ -34,7 +34,7 @@ data** (str/int/float/bool/list/dict/None) - suitable for both the OpenAI
 tool-calling wire format and a scripted fake model in tests.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from eligibility import (
     ShiftNotFound as CoverageShiftNotFound,
@@ -122,7 +122,9 @@ def find_shift(connection, shift_id=None, hall=None, date=None, time=None):
     `shift_id` alone is authoritative and skips every other filter. Without
     it, `hall` (case-insensitive exact) and `date` ('YYYY-MM-DD') are
     required, and `time` ('HH:MM', the shift's exact start time) further
-    narrows the match. Zero matches is `not_found`; more than one is
+    narrows the match. If the requested date's week has no stored shifts,
+    the result is `week_not_prepared` rather than the misleading
+    `not_found`. Otherwise zero matches is `not_found`; more than one is
     `ambiguous` (typically: `time` was not given and the hall had more than
     one shift that day); exactly one is `found`.
     """
@@ -144,6 +146,10 @@ def find_shift(connection, shift_id=None, hall=None, date=None, time=None):
         )
     if not isinstance(date, str) or len(date) != 10 or date[4] != "-" or date[7] != "-":
         raise ToolError("invalid_arguments", "date must be 'YYYY-MM-DD'.")
+    try:
+        requested_date = datetime.strptime(date, "%Y-%m-%d")
+    except ValueError as error:
+        raise ToolError("invalid_arguments", "date must be a valid 'YYYY-MM-DD' date.") from error
 
     if time is not None:
         if not isinstance(time, str) or len(time) != 5 or time[2] != ":":
@@ -163,6 +169,28 @@ def find_shift(connection, shift_id=None, hall=None, date=None, time=None):
         ).fetchall()
 
     if not rows:
+        week_start = requested_date - timedelta(days=requested_date.weekday())
+        week_end = week_start + timedelta(days=7)
+        week_has_shifts = connection.execute(
+            "SELECT 1 FROM shifts WHERE start_datetime >= ? AND start_datetime < ? LIMIT 1",
+            (
+                week_start.strftime("%Y-%m-%d %H:%M"),
+                week_end.strftime("%Y-%m-%d %H:%M"),
+            ),
+        ).fetchone()
+        if week_has_shifts is None:
+            return {
+                "status": "week_not_prepared",
+                "hall": hall,
+                "date": date,
+                "time": time,
+                "week_start": week_start.strftime("%Y-%m-%d"),
+                "message": (
+                    f"The schedule week starting {week_start.strftime('%Y-%m-%d')} "
+                    "has not been prepared, so no shifts exist to evaluate yet. "
+                    "Prepare that week in the Schedule screen, then retry."
+                ),
+            }
         return {"status": "not_found", "hall": hall, "date": date, "time": time}
     if len(rows) > 1:
         return {
@@ -604,7 +632,11 @@ TOOL_SPECS = [
             "description": (
                 "Resolve a dated shift by its stable shift_id, or by hall + "
                 "date (and optionally its exact start time). Returns "
-                "status 'found', 'not_found', or 'ambiguous'."
+                "status 'found', 'not_found', 'ambiguous', or "
+                "'week_not_prepared'. A week_not_prepared result means no "
+                "shifts exist for that schedule week yet; tell the supervisor "
+                "to prepare it in the Schedule screen and do not claim that "
+                "the hall has no shift."
             ),
             "parameters": {
                 "type": "object",

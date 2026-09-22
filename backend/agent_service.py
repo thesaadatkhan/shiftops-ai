@@ -264,6 +264,8 @@ def _update_flags(tool_name, result, flags):
         return
     if result.get("status") == "ambiguous":
         flags["ambiguous"] = True
+    if result.get("status") == "week_not_prepared":
+        flags["week_not_prepared"] = True
     if tool_name == "get_eligible_candidates" and result.get("eligible_count") == 0:
         flags["no_candidates"] = True
     if tool_name == "inspect_uncovered_shift" and result.get("eligible_candidates") == []:
@@ -281,7 +283,7 @@ def run_loop(connection, task_id, model_adapter=None, max_steps=DEFAULT_MAX_STEP
     """
     adapter = model_adapter or OpenAIModelAdapter()
     messages = _load_prior_conversation(connection, task_id)
-    flags = {"ambiguous": False, "no_candidates": False}
+    flags = {"ambiguous": False, "no_candidates": False, "week_not_prepared": False}
     created_proposal = None
     steps_used = 0
     final_message = None
@@ -391,7 +393,7 @@ def run_loop(connection, task_id, model_adapter=None, max_steps=DEFAULT_MAX_STEP
     elif blocked_reason is not None:
         kind = "blocked"
         status = "blocked"
-    elif flags["no_candidates"]:
+    elif flags["no_candidates"] or flags["week_not_prepared"]:
         kind = "blocked"
         status = "blocked"
     elif flags["ambiguous"]:

@@ -148,6 +148,30 @@ check(assignment_count(connection) == before, "the call-out produced NO change t
 # ----------------------------------------------------------------- check 2
 
 connection = fixture_database()
+turns = [
+    ModelTurn(tool_calls=[ToolCallRequest(
+        id="c1", name="find_shift", arguments={"hall": "Capella", "date": "2026-10-12"}
+    )]),
+    ModelTurn(message=(
+        "The schedule week starting October 12 has not been prepared. "
+        "Prepare it in the Schedule screen, then retry."
+    )),
+]
+outcome = agent_service.create_task(
+    connection, "Who is eligible for Capella shifts on October 12?",
+    model_adapter=ScriptedModelAdapter(turns),
+)
+check(outcome["result"]["kind"] == "blocked", "an unprepared week is a blocked result, not an ordinary answer")
+check(outcome["task"]["status"] == "blocked", "the task records that schedule data must be prepared")
+tool_results = [m for m in outcome["task"]["messages"] if m["role"] == "tool_result"]
+check(
+    len(tool_results) == 1 and "week_not_prepared" in tool_results[0]["content"],
+    "the factual unprepared-week result is preserved in the transcript",
+)
+
+# ----------------------------------------------------------------- check 2
+
+connection = fixture_database()
 add_shift(connection, "Capella", "2026-10-06 22:00", "2026-10-07 03:00")
 bad_json_call = ToolCallRequest(id="c1", name="get_shift_details", arguments=None, raw_arguments="{shift_id: 1")
 turns = [

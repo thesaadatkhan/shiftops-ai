@@ -659,6 +659,10 @@ with reasoning enabled; other model families keep their prior request shape.
 A call-out statement by itself does not remove an assignment or create leave.
 Ambiguous names/dates require clarification. If no eligible worker exists,
 report the blocker without relaxing constraints or changing records.
+Likewise, looking up a shift in an unprepared schedule week must report that
+the week has not been prepared and direct the supervisor to the Schedule
+screen. Absence of stored rows for an unprepared week is not evidence that a
+particular hall has no shift.
 
 Proposals identify the hall, dated shift, affected workers, before/after
 assignment and hours impact. Store proposal and approval state on the backend;

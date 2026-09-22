@@ -187,6 +187,32 @@ check(
 result = agent_tools.call_tool(connection, "find_shift", {"shift_id": 999999})
 check(result["status"] == "not_found", "a nonexistent shift_id is not_found, not fabricated")
 
+result = agent_tools.call_tool(
+    connection, "find_shift", {"hall": "Capella", "date": "2026-10-12"}
+)
+check(
+    result["status"] == "week_not_prepared"
+    and result["week_start"] == "2026-10-12"
+    and "Prepare that week" in result["message"],
+    "an unprepared schedule week is distinguished from a genuine missing shift",
+)
+
+result = agent_tools.call_tool(
+    connection, "find_shift", {"hall": "Vega", "date": "2026-10-06"}
+)
+check(
+    result["status"] == "not_found",
+    "a missing hall shift inside a prepared week remains a genuine not_found",
+)
+
+try:
+    agent_tools.call_tool(
+        connection, "find_shift", {"hall": "Capella", "date": "2026-99-99"}
+    )
+    check(False, "an impossible calendar date is rejected")
+except agent_tools.ToolError as error:
+    check(error.code == "invalid_arguments", "an impossible calendar date is rejected")
+
 # ----------------------------------------------------------------- check 6
 
 add_assignment(connection, jordan, shift_a)
