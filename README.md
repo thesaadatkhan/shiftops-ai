@@ -13,13 +13,14 @@ atomic execution, verification, audit history and the chat UI are implemented.
 
 ## Project Status
 
-ShiftOps AI is in early active development. It currently runs locally only and is not deployed.
+ShiftOps AI is feature-complete for its local interview demonstration. It currently runs locally only; Azure deployment remains a future phase.
 
 **Implemented:**
 
 - A React application shell (Vite + JavaScript) with sidebar navigation covering all planned sections (Dashboard, Employees, Schedule, Coverage, Workforce Planning, AI Assistant). Every section is functional. Dashboard, Employees, Schedule and Workforce Planning share one reporting-week selection.
+- A cohesive light interface built around a white/slate/blue design system, compact navigation and controls, responsive employee views, hall-by-day schedule grids, and a ChatGPT-inspired AI conversation surface. The visual redesign changed presentation only; scheduling, approval, and data-fetching behavior remained behind the same tested interfaces.
 - Deterministic shift coverage (Phase 6) and a full schedule-generation pipeline (Phase 7): a read-only eligibility engine and Coverage screen; a Google OR-Tools draft optimizer; and a stored proposal/approval workflow so a supervisor must explicitly approve a generated draft, with full revalidation against current data, before any assignment becomes real. Every generated proposal persists its full coverage review (existing/proposed assignments, totals, uncovered reasons) and can be recovered by week after a refresh or navigation, not only for the browser session that generated it. Explicit operations for filling an uncovered position and replacing an assigned worker reuse the same locked eligibility validation and append-only assignment audit trail. The Schedule screen surfaces all of this: preparing a week's required shifts, manually filling an uncovered position with an eligible worker after confirmation, generating and reviewing a proposal with an explicit approval-confirmation step, approving or rejecting it, and replacing an individual assignment.
-- A FastAPI backend covering the employee lifecycle and semester timetables across fourteen endpoints:
+- A FastAPI backend whose employee-lifecycle and semester-timetable routes include:
 
   | Endpoint | Purpose |
   |---|---|
@@ -51,13 +52,13 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 
   | Status | Meaning |
   |---|---|
-  | Not set up | No semester has been entered for this worker at all |
-  | Other semester only | They have a timetable, but for a different period |
-  | Awaiting confirmation | Something covers this week, but nobody has checked it |
-  | Part of week | Confirmed for some days of this week, not all seven |
-  | Confirmed | Confirmed for the whole week |
+  | No schedule added | No semester has been entered for this worker at all |
+  | Outside this week | They have a class schedule, but for a different period |
+  | Needs review | Something covers this week, but nobody has checked it |
+  | Partial week | Confirmed for some days of this week, not all seven |
+  | Current | Confirmed for the whole week |
 
-  **Confirmed with no class blocks** means a deliberate "no classes this week", which stays distinct from **Not set up**. This describes timetable readiness only. It is not shift eligibility - that is a separate backend calculation (see below) - and it is separate from whether a worker is active.
+  **Confirmed with no class blocks** means a deliberate "no classes this week", which stays distinct from **No schedule added**. This describes schedule readiness only. It is not shift eligibility - that is a separate backend calculation (see below) - and it is separate from whether a worker is active.
 - **A details view for one worker**, opened with the View details button on their row and closed with Back to employee list. It shows their basic details, every semester timetable stored for them with its recurring class blocks, their shift preferences and their approved leave. Semester dates and class times can be **edited** here, a semester's timetable can be **confirmed**, shift preferences can be **set** on any existing shift, and approved leave can be **added, edited and removed**. This completes Phase 5C's employee-setup editing.
 - **Supervisor entry and editing of semester timetables.** From the details view a supervisor can add a semester with inclusive start and end dates, change those dates, delete a semester behind an explicit confirmation, and add, edit and remove the recurring weekly classes inside it. Entry is entirely structured &mdash; a date picker for the semester, and a weekday plus start and end times for each class. There are no course names, no course IDs, no document uploads and no text for an AI to interpret.
   - The backend is authoritative and validates everything again: real ISO dates with the start on or before the end; no two of a worker's semesters sharing even one calendar date, because the dates are inclusive; a weekday from Monday to Sunday; real 24-hour times; a class that ends after it starts on the same day; and no class duplicating or overlapping another in the same semester, though one class may start exactly when another ends. Each operation runs in a single transaction, so a failure part-way leaves the database exactly as it was.
@@ -83,7 +84,7 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 - **Phase 9A demo-readiness closeout is complete:** the canonical supervisor journey has been accepted end to end, including manual fill, generated-schedule review, replacement, AI proposal approval, analytics/readback and reload recovery. Its verification uses isolated databases and ports; the managed demo database is never reseeded during normal startup.
 - **Deterministic shift-eligibility logic**, with a Coverage screen in the interface: given a stored shift and worker, it decides whether that worker is eligible using only current stored records, and if not, exactly why. It checks the worker is active; that a CONFIRMED AND ACCEPTED (non-provisional) semester timetable covers every calendar date the shift touches (missing, unconfirmed, provisional/unaccepted or expired information does not establish availability - a schedule migrated with assumed dates is not coverage until a supervisor accepts them by confirming, and a deliberately confirmed, non-provisional "no classes" semester counts as coverage); that no recurring class, approved leave period or existing assignment overlaps the shift; and that adding the shift would not exceed the worker's weekly hour limit for the week its start falls in. Every applicable reason is returned, not just the first, and a preferred/low/neutral preference is reported as a fact, never as a reason a shift is unavailable. A read-only `GET /api/shifts/{shift_id}/coverage` answers "who can cover this shift", returning every worker's result plus the eligible subset, with an optional worker excluded from that subset (for replacing whoever is calling out); `GET /api/shifts` lists every stored shift for the screen's picker.
 - **The Coverage screen itself**, in the sidebar: pick a stored shift through a progressive selector - hall, then a readable weekday/date, then the matching shift's time - rather than scanning or typing a raw id. Times are friendly and 12-hour, a cross-midnight shift shows both of its dates, the stable id stays secondary, and the number of matching shifts is shown once a hall and date are chosen. Choosing a shift shows its eligible and ineligible workers in two separate tables. Ineligible rows show every reason the backend returned, in its own words; eligible rows show preference, assigned hours this week, projected hours if assigned, and the weekly limit, so a low-preference worker who clears every hard rule reads as plainly eligible. An "Exclude worker" picker (for a replacement or call-out) re-requests coverage naming a worker to leave out of the eligible list - it changes no stored record and makes no assignment, and an eligible-but-excluded worker is called out with a note rather than silently disappearing. If the excluded worker no longer exists, the screen offers "Clear exclusion and retry" rather than only a plain Retry that would resend the same refused request. The same hall/day/shift picker is used by Employee Details' general "Set a shift preference" action.
-- **Phase 9 increment 1 - AI scheduling agent backend foundation** (no chat UI yet). Provider configuration (`backend/ai_config.py`) reads `OPENAI_API_KEY` and an optional `OPENAI_MODEL` from the environment only, failing clearly before anything is written if the key is missing rather than attempting a request or leaving an orphaned task behind; no key is required to run the test suite. A deterministic tool registry (`backend/agent_tools.py`) wraps existing eligibility/reporting functions - resolving a worker or shift with explicit ambiguity handling, reading shift coverage, ranking eligible replacement candidates (preferred before neutral before low, then lower projected weekly hours, then employee code), inspecting an uncovered shift, and reading employee-hours facts - and exposes exactly one write, creating a PENDING proposal. That write computes its stored explanation entirely from those same deterministic facts (never from the model) and requires the proposed worker to be the authoritative top-ranked eligible candidate; at most one proposal is allowed per task, enforced in code and by a database constraint. There is no tool that can create leave, remove an assignment, edit a worker, or approve/execute anything. A provider-independent bounded tool-calling loop (`backend/agent_service.py`, `backend/agent_model.py`) validates every tool call, stops after a fixed maximum number of steps, and derives its result kind (`answer`/`clarification_required`/`blocked`/`proposal`) from what the tools actually returned rather than the model's own wording. New tables (`agent_tasks`, `agent_messages`, `agent_proposals`) persist the task, its factual transcript, and any proposal it produced. Three endpoints - `POST /api/agent/tasks`, `POST /api/agent/tasks/{id}/messages`, `GET /api/agent/tasks/{id}` - were the entire API surface for that increment.
+- **Phase 9 increment 1 - AI scheduling agent backend foundation.** This was the backend-only first increment; the completed chat UI is described below. Provider configuration (`backend/ai_config.py`) reads `OPENAI_API_KEY` and an optional `OPENAI_MODEL` from the environment only, failing clearly before anything is written if the key is missing rather than attempting a request or leaving an orphaned task behind; no key is required to run the test suite. A deterministic tool registry (`backend/agent_tools.py`) wraps existing eligibility/reporting functions - resolving a worker or shift with explicit ambiguity handling, reading shift coverage, ranking eligible replacement candidates (preferred before neutral before low, then lower projected weekly hours, then employee code), inspecting an uncovered shift, and reading employee-hours facts - and exposes exactly one write, creating a PENDING proposal. That write computes its stored explanation entirely from those same deterministic facts (never from the model) and requires the proposed worker to be the authoritative top-ranked eligible candidate; at most one proposal is allowed per task, enforced in code and by a database constraint. There is no tool that can create leave, remove an assignment, edit a worker, or approve/execute anything. A provider-independent bounded tool-calling loop (`backend/agent_service.py`, `backend/agent_model.py`) validates every tool call, stops after a fixed maximum number of steps, and derives its result kind (`answer`/`clarification_required`/`blocked`/`proposal`) from what the tools actually returned rather than the model's own wording. New tables (`agent_tasks`, `agent_messages`, `agent_proposals`) persist the task, its factual transcript, and any proposal it produced. Three endpoints - `POST /api/agent/tasks`, `POST /api/agent/tasks/{id}/messages`, `GET /api/agent/tasks/{id}` - were the entire API surface for that increment.
 - **Phase 9 increment 2 - supervisor approval, atomic execution, audit linkage, and verification.** Two new routes - `POST /api/agent/proposals/{id}/approve` and `POST /api/agent/proposals/{id}/reject` - are the only way a proposal can be decided; no tool, model output, or transcript text can reach them. A third, read-only `GET /api/agent/proposals/{id}` returns that same decision-state shape (including a fresh readback once verified) without deciding or changing anything, for recovering an already-decided proposal's current state after a refresh. Approval requires resubmitting the proposal's exact stored action (a mismatch is a 409, never a silent approval of unseen content) and, inside one atomic transaction, fully revalidates current live state - active status, confirmed timetable coverage, class/leave/assignment conflicts, the weekly-hour limit, and (for an uncovered-shift fill) that a position is still genuinely open - using the SAME validated replacement/creation logic Phase 7's manual replacement already uses (extracted into shared, transaction-internal helpers in `backend/proposals.py`, so the proposal decision, the assignment mutation, and the linked `assignment_audit` row all commit together, exactly once). The original ranking is not re-required at approval time; only the specific approved worker's current standing is rechecked, never silently substituted. Both decisions are idempotent for a repeat of the same outcome, refuse to contradict an already-final decision (409), and stay correct under concurrent or racing requests, including recovering an "applied but never verified" proposal (a process/write failure between the execution commit and the verification write) by running only the missing verification on a later retry - never repeating the assignment mutation, and never automatically re-running an already-recorded verification failure. After a successful write commits, a genuine post-commit readback (through the same deterministic functions the agent's own tools use) verifies the result; a verification failure is recorded separately and is never reported as a failed or rolled-back write, and is never silently retried. `assignment_audit` gained an additive, nullable `agent_proposal_id` column linking Phase 9 execution to the same audit trail Phase 7 already writes to - not a second, parallel history. Employee deletion continues to refuse (with the existing controlled error) when a worker is still referenced by any agent proposal.
 - **Phase 9 increment 3 - the AI Assistant chat frontend.** A chat-style supervisor interface (`frontend/src/AIAssistant.jsx`, `frontend/src/agent.js`) over the existing agent backend: starting and continuing a task, recovering the active task from `localStorage` after a refresh, and rendering the full stored transcript as plain text (never HTML). A pending proposal renders as a structured card - hall, exact date/time, outgoing worker or "Uncovered position", proposed incoming worker, and the server-generated rationale - never model prose standing in for it. Approval and rejection each require an explicit confirmation panel naming the exact action before the real decision endpoint is called; chat input and model output have no path to either endpoint. Every backend response is defensively validated before it reaches the screen (task/proposal identity and ownership, exact shift and worker fields, execution/verification outcomes, readback shape), reusing the same three-way ApiError/ResponseValidationError/NetworkOutcomeUnknownError split and Reload/Reconcile-before-retry discipline Schedule.jsx already established - a network or malformed-response failure is never treated as a silent success, and nothing is ever automatically resent. An applied-but-verification-failed outcome is shown as a distinct warning requiring Reload/Reconcile, never as if the write itself failed. A missing `OPENAI_API_KEY` on the backend surfaces as a clear 503 setup message; no key is ever requested, stored, or displayed in the browser.
 - Agent shift lookup distinguishes a schedule week that has not been prepared from a genuine missing shift inside a prepared week. For an unprepared week it tells the supervisor to prepare that week in the Schedule screen before asking for eligibility; it does not falsely claim that the hall has no shift.
@@ -196,7 +197,20 @@ FastAPI validation errors (422).
 Migration concurrency checks use separate SQLite connections in threads;
 they cover concurrent execution without guaranteeing a particular interleaving.
 
-## Planned Capabilities
+The complete backend verification set currently contains **36 `verify_*.py`
+scripts**. The repository-tracked browser suite is run from `frontend/` with
+`node tests/e2e/run.mjs`; its current acceptance baseline is **135 passing
+checks** against isolated backend/frontend ports, a temporary database and a
+deterministic fake model. A separate 2026-09-22 exploratory pass added 33
+user-style checks across navigation, employee lifecycle/details, Coverage and
+Workforce Planning. All passed. Real-model spot checks also passed factual,
+ambiguity, replacement, no-candidate, direct-fill and authorization-boundary
+scenarios. The known model-routing limitation is documented in the project
+specification: wording a request as a replacement when the named worker is not
+actually assigned can still stop at the failed replacement path instead of
+automatically switching to an uncovered-position fill.
+
+## Implementation Status and Future Extensions
 
 Development order: Phase 5B employee lifecycle controls are complete, and
 **Phase 5C - complete employee setup - is functionally complete**: automatic
@@ -215,7 +229,7 @@ Phase 9 (the AI scheduling agent) is complete: the backend foundation,
 supervisor approval/execution/verification, AI Assistant chat frontend and
 live-provider demonstration are all finished.
 
-Goals for the finished application are listed below. Employee records, shift preferences and approved leave are stored and editable, and the workforce summary and individual details are viewable. Semester and class editing, timetable confirmation, and preference and leave editing are all implemented. Deterministic eligibility/coverage and schedule evaluation/generation (optimizer draft, stored proposal, explicit approval, and explicit replacement) are also implemented. Dashboard and Workforce Planning analytics and the AI scheduling agent are implemented.
+The implemented product includes the following capabilities. RAG over fictional reference documents and MCP integration remain optional future extensions rather than claims about the current build.
 
 - Workforce and coverage dashboard
 - Complete employee setup, **built**: supervisor entry of semester dates and recurring class times without course names; explicit confirmation that a timetable is complete, including a deliberate "no classes"; editing shift preferences on any existing shift; and adding, editing and removing approved leave. Incomplete class information will block scheduling until confirmed.
@@ -224,7 +238,8 @@ Goals for the finished application are listed below. Employee records, shift pre
 - Automated schedule generation
 - Coverage-gap identification
 - Workforce capacity analysis
-- AI scheduling agent with an approved call-out replacement workflow; optional RAG for fictional reference documents and optional MCP integration after core deployment
+- AI scheduling agent with an approved call-out replacement workflow
+- Optional future extensions: RAG over fictional reference documents and MCP integration
 
 ## Technology Stack
 
@@ -236,10 +251,13 @@ Goals for the finished application are listed below. Employee records, shift pre
 - **API:** REST/JSON (health, workforce and single-worker reads, plus employee create, update, status changes and deletion)
 - **Version Control:** Git and GitHub
 
+**In use for completed scheduling and AI workflows:**
+
+- **Optimization:** Google OR-Tools CP-SAT
+- **AI:** OpenAI Chat Completions with validated function tools and backend-enforced approval
+
 **Planned:**
 
-- **Optimization:** Google OR-Tools
-- **AI:** LLM API integration
 - **Deployment:** Microsoft Azure
 
 ## Data and Scenario Disclaimer

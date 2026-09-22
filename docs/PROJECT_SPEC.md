@@ -656,6 +656,20 @@ post-commit readback verified the replacement. GPT-5.6 requests explicitly
 use `reasoning_effort="none"` because Chat Completions rejects function tools
 with reasoning enabled; other model families keep their prior request shape.
 
+**Current acceptance note (2026-09-22):** the final browser suite passes
+135/135 checks and all 36 isolated backend verification scripts pass. A
+separate real-model prompt matrix confirmed factual hour lookup, ambiguous-name
+clarification and follow-up, replacement proposal creation, no-candidate
+blocking, direct uncovered-position filling, and refusal to delete workers or
+publish schedules. One model-routing limitation remains: if the supervisor
+phrases an uncovered shift as "replace [worker]" and that worker is not
+actually assigned, the model can correctly report both facts and identify the
+top candidate but still stop after the replacement call is refused instead of
+switching to the fill form of the proposal tool. Directly asking to fill the
+same uncovered shift succeeds. This is an orchestration/prompt clarity issue,
+not a missing deterministic capability or an approval bypass; no assignment is
+changed in the failed case.
+
 A call-out statement by itself does not remove an assignment or create leave.
 Ambiguous names/dates require clarification. If no eligible worker exists,
 report the blocker without relaxing constraints or changing records.
