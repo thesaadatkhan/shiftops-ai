@@ -206,6 +206,12 @@ async function showScheduleTab(page, label) {
   await tab.getAttribute('aria-selected')
 }
 
+async function showScheduleList(page) {
+  const toggle = mainButton(page, 'Switch to list view')
+  await toggle.waitFor({ timeout: 10000 })
+  await toggle.click()
+}
+
 /** The AI Assistant chat textarea, identified by its placeholder text. */
 function chatTextarea(page) {
   return page.getByRole('textbox', { name: 'Message the AI Assistant' })
@@ -365,6 +371,7 @@ async function main() {
     }
 
     await journeyManualUncoveredFill(page)
+    await journeyScheduleGrid(page)
     await journeyGenerateReviewApprove(page)
     await journeyConflictAndReplace(page)
     await journeyUncertainGenerateBlocksRetry(page)
@@ -442,6 +449,7 @@ async function main() {
 /** uncovered shift -> choose an eligible worker -> cancel -> confirm */
 async function journeyManualUncoveredFill(page) {
   await showScheduleTab(page, 'Shifts')
+  await showScheduleList(page)
   const before = await backendJson('/api/schedule/weeks/2026-09-21')
   const target = before.shifts.find((shift) => !shift.covered)
   check(Boolean(target), 'fixture sanity: the selected week has an uncovered shift for manual fill')
@@ -472,6 +480,46 @@ async function journeyManualUncoveredFill(page) {
     filled.assigned_employees.some((worker) => worker.employee_code === incoming.employee_code),
     'explicit confirmation persists the selected manual assignment',
   )
+}
+
+/** The grid is the default Shift view. Its actions intentionally reuse the
+ * established fill/replace modals; this journey only reaches them through
+ * the contextual grid menu. */
+async function journeyScheduleGrid(page) {
+  await mainButton(page, 'Switch to grid view').click()
+  const grid = page.getByRole('table', { name: 'Weekly hall shift grid' })
+  await grid.waitFor({ timeout: 10000 })
+  check(
+    (await grid.getByRole('row').count()) > 1 &&
+      (await grid.locator('.schedule-shift-covered').count()) > 0 &&
+      (await grid.locator('.schedule-shift-uncovered').count()) > 0,
+    'the Shifts tab defaults to a hall-by-day grid with covered and uncovered shift blocks',
+  )
+
+  const week = await backendJson('/api/schedule/weeks/2026-09-21')
+  const covered = week.shifts.find((shift) => shift.covered && shift.assigned_employees.length > 0)
+  const uncovered = week.shifts.find((shift) => !shift.covered)
+  check(Boolean(covered) && Boolean(uncovered), 'fixture sanity: the grid has both an assigned and uncovered shift')
+  if (!covered || !uncovered) return
+
+  await grid.locator(`.schedule-grid-shift[data-shift-id="${covered.id}"]`).click()
+  await page.getByRole('menu', { name: `${covered.hall} shift actions` }).getByRole('menuitem', { name: new RegExp(`Replace ${covered.assigned_employees[0].full_name}`) }).click()
+  await page.getByRole('alertdialog', { name: 'Replace assignment' }).waitFor()
+  check(true, 'choosing Replace from a covered grid block opens the existing replacement modal')
+  await page.getByRole('alertdialog', { name: 'Replace assignment' }).getByRole('button', { name: 'Cancel', exact: true }).click()
+
+  const coverage = await backendJson(`/api/shifts/${uncovered.id}/coverage`)
+  const incoming = coverage.eligible_candidates[0]
+  check(Boolean(incoming), 'fixture sanity: the grid uncovered shift has an eligible worker')
+  if (!incoming) return
+  await grid.locator(`.schedule-grid-shift[data-shift-id="${uncovered.id}"]`).click()
+  await page.getByRole('menu', { name: `${uncovered.hall} shift actions` }).getByRole('menuitem', { name: 'Assign', exact: true }).click()
+  const dialog = page.getByRole('alertdialog', { name: 'Assign worker' })
+  await dialog.waitFor()
+  await dialog.locator('select').selectOption(incoming.employee_code)
+  await dialog.getByRole('button', { name: 'Confirm assignment', exact: true }).click()
+  await dialog.waitFor({ state: 'hidden', timeout: 10000 })
+  check(true, 'choosing Assign from an uncovered grid block completes through the existing assignment modal')
 }
 
 /** generate -> review -> cancel approval -> approve -> reload/recover */
@@ -557,6 +605,7 @@ async function journeyConflictAndReplace(page) {
   await page.getByText(/Added the approved leave|Saved the approved leave/i).first().waitFor({ timeout: 10000 })
 
   await navButton(page, 'Schedule').click()
+  await showScheduleList(page)
   const conflictText = page.getByText('Assignment conflict — see details', { exact: true }).first()
   await conflictText.waitFor({ timeout: 10000 })
   check(await conflictText.isVisible(), 'the leave edit surfaces a visible conflict label on the affected assignment')
@@ -650,6 +699,7 @@ async function journeyUncertainReplaceBlocksRetry(page) {
   await navButton(page, 'Schedule').click()
   await mainButton(page, 'Next week').click()
   await page.getByText('September 28, 2026').first().waitFor({ timeout: 5000 })
+  await showScheduleList(page)
 
   const row = page.locator('.schedule-hall li', { hasText: worker.employee_code }).first()
   await row.getByRole('button', { name: 'Replace', exact: true }).click()
@@ -717,6 +767,7 @@ async function journeyUncertainReplaceBlocksRetry(page) {
 
 /** cancel delayed replacement loading -> late response -> another action succeeds */
 async function journeyCancelDelayedReplacement(page) {
+  await showScheduleList(page)
   const week = await backendJson('/api/schedule/weeks/2026-09-21')
   const target = week.shifts.find((shift) => shift.assigned_employees.length > 0)
   check(Boolean(target), 'fixture sanity: a replaceable assignment exists for the cancellation journey')
@@ -766,6 +817,7 @@ async function journeyMutualExclusion(page) {
   check(proposal === 201 || proposal === 503 || proposal === 409, `a proposal exists or was just created for the mutual-exclusion journey (${proposal})`)
   await page.reload()
   await navButton(page, 'Schedule').click()
+  await showScheduleList(page)
 
   const row = page.locator('.schedule-hall li', { hasText: worker.employee_code }).first()
   await row.getByRole('button', { name: 'Replace', exact: true }).click()

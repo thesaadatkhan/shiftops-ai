@@ -71,6 +71,72 @@ function upsertProposal(list, updated) {
   return copy
 }
 
+function weekdayLabel(date) {
+  return new Date(`${date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })
+}
+
+function ScheduleShiftGrid({ shifts, onAssign, onReplace, actionDisabled }) {
+  const byDay = groupByDayThenHall(shifts)
+  const dates = [...byDay.keys()].sort()
+  const halls = orderedHalls(new Map(shifts.map((shift) => [shift.hall, true])))
+  const [menuShift, setMenuShift] = useState(null)
+
+  function toggleMenu(shift) {
+    setMenuShift((current) => current?.id === shift.id ? null : shift)
+  }
+
+  return (
+    <div className="schedule-grid-wrapper">
+      <div className="weekly-schedule-grid schedule-shift-grid" role="table" aria-label="Weekly hall shift grid">
+        <div className="weekly-schedule-header" role="row">
+          <div role="columnheader">Hall</div>
+          {dates.map((date) => <div key={date} role="columnheader">{weekdayLabel(date)}</div>)}
+        </div>
+        {halls.map((hall) => (
+          <div key={hall} className="weekly-schedule-row" role="row">
+            <div className="weekly-schedule-worker" role="rowheader"><strong>{hall}</strong></div>
+            {dates.map((date) => {
+              const dayShifts = byDay.get(date)?.get(hall) || []
+              return (
+                <div key={date} className="weekly-schedule-day schedule-grid-day" role="cell">
+                  {dayShifts.map((shift) => {
+                    const isOpen = menuShift?.id === shift.id
+                    const assignedNames = shift.assigned_employees.map((worker) => worker.full_name).join(', ')
+                    return (
+                      <div key={shift.id} className="schedule-grid-block">
+                        <button
+                          type="button"
+                          className={`schedule-grid-shift ${shift.covered ? 'schedule-shift-covered' : 'schedule-shift-uncovered'}`}
+                          data-shift-id={shift.id}
+                          aria-expanded={isOpen}
+                          onClick={() => toggleMenu(shift)}
+                        >
+                          <span>{shiftTimeLabel(shift)}</span>
+                          <small>{shift.covered ? `Covered: ${assignedNames}` : `${shift.required_staff - shift.assigned_count} open`}</small>
+                        </button>
+                        {isOpen && (
+                          <div className="schedule-grid-menu" role="menu" aria-label={`${hall} shift actions`}>
+                            {!shift.covered && <button type="button" role="menuitem" disabled={actionDisabled} onClick={() => { setMenuShift(null); onAssign(shift) }}>Assign</button>}
+                            {shift.assigned_employees.map((worker) => (
+                              <button key={worker.employee_id} type="button" role="menuitem" disabled={actionDisabled} onClick={() => { setMenuShift(null); onReplace(shift, worker) }}>
+                                Replace {worker.full_name}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ProposalReview({ review, filter, onFilterChange }) {
   const groups = groupProposalReviewShifts(review.shifts, filter)
   return (
@@ -143,6 +209,7 @@ export default function Schedule({ weekStart }) {
   // These tabs only decide which already-loaded part of this one workflow is
   // visible. They deliberately do not own a second schedule/proposal state.
   const [activeTab, setActiveTab] = useState('shifts')
+  const [shiftView, setShiftView] = useState('grid')
 
   const [generateNotice, setGenerateNotice] = useState(null)
   // True only while a Generate request's outcome is genuinely unresolved -
@@ -664,9 +731,12 @@ export default function Schedule({ weekStart }) {
 
   return (
     <div className="schedule-view">
-      <div className="schedule-tabs" role="tablist" aria-label="Schedule views">
-        <button type="button" role="tab" aria-selected={activeTab === 'shifts'} className={activeTab === 'shifts' ? 'is-selected' : ''} onClick={() => setActiveTab('shifts')}>Shifts</button>
-        <button type="button" role="tab" aria-selected={activeTab === 'proposals'} className={activeTab === 'proposals' ? 'is-selected' : ''} onClick={() => setActiveTab('proposals')}>Proposals</button>
+      <div className="schedule-view-controls">
+        <div className="schedule-tabs" role="tablist" aria-label="Schedule views">
+          <button type="button" role="tab" aria-selected={activeTab === 'shifts'} className={activeTab === 'shifts' ? 'is-selected' : ''} onClick={() => setActiveTab('shifts')}>Shifts</button>
+          <button type="button" role="tab" aria-selected={activeTab === 'proposals'} className={activeTab === 'proposals' ? 'is-selected' : ''} onClick={() => setActiveTab('proposals')}>Proposals</button>
+        </div>
+        {activeTab === 'shifts' && !isUnprepared && <button type="button" className="schedule-view-toggle" onClick={() => setShiftView((view) => view === 'grid' ? 'list' : 'grid')}>Switch to {shiftView === 'grid' ? 'list' : 'grid'} view</button>}
       </div>
 
       {isUnprepared && activeTab === 'shifts' ? (
@@ -857,7 +927,9 @@ export default function Schedule({ weekStart }) {
           )}
           </>}
 
-          {activeTab === 'shifts' && Array.from(groupByDayThenHall(data.shifts).entries()).map(([date, byHall]) => (
+          {activeTab === 'shifts' && shiftView === 'grid' && <ScheduleShiftGrid shifts={data.shifts} onAssign={openFill} onReplace={openReplace} actionDisabled={anyActionInFlight} />}
+
+          {activeTab === 'shifts' && shiftView === 'list' && Array.from(groupByDayThenHall(data.shifts).entries()).map(([date, byHall]) => (
             <section key={date} className="schedule-day">
               <h3>{friendlyDate(date)}</h3>
               {orderedHalls(byHall).map((hall) => (

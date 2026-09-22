@@ -661,6 +661,69 @@
   font-weight: 600;
 }
 
+.schedule-view-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.schedule-view-controls .schedule-tabs { margin-bottom: 0; }
+
+.schedule-view-toggle {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--font-xs);
+}
+
+.schedule-grid-wrapper {
+  overflow-x: auto;
+  padding-bottom: var(--space-2);
+}
+
+.schedule-shift-grid { min-width: 860px; }
+.schedule-shift-grid .weekly-schedule-header,
+.schedule-shift-grid .weekly-schedule-row { grid-template-columns: minmax(130px, 1.1fr) repeat(7, minmax(100px, 1fr)); }
+.schedule-grid-day { position: relative; }
+.schedule-grid-block { position: relative; }
+
+button.schedule-grid-shift {
+  width: 100%;
+  border: 1px solid transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.schedule-grid-shift:hover:not(:disabled),
+button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-border); }
+.schedule-shift-covered { background: var(--success-bg); }
+.schedule-shift-uncovered { background: var(--error-bg); color: var(--error-text); }
+
+.schedule-grid-menu {
+  position: absolute;
+  z-index: 2;
+  top: calc(100% + 3px);
+  left: 0;
+  display: grid;
+  gap: var(--space-1);
+  min-width: max-content;
+  padding: var(--space-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.schedule-grid-menu button { text-align: left; white-space: nowrap; }
+
+@media (max-width: 700px) {
+  .schedule-view-controls { align-items: flex-start; flex-direction: column; gap: var(--space-2); }
+}
+
 /* Phase 8: Dashboard and Workforce Planning. Cards and a plain progress bar
    only - deliberately no chart library, per the interview-friendly,
    readable-over-elaborate goal. */
