@@ -556,8 +556,13 @@
 .proposal-shift { margin: 8px 0; }
 .proposal-shift p { margin: 5px 0; }
 .proposal-shift-title { font-weight: 600; }
-.proposal-workers strong, .proposal-uncovered strong { display: inline-block; min-width: 72px; }
-.proposal-uncovered { color: var(--text-h); }
+.proposal-workers strong { display: inline-block; min-width: 72px; }
+.proposal-uncovered,
+.assignment-conflict { margin-top: 8px; color: var(--text-h); }
+.proposal-uncovered summary,
+.assignment-conflict summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.proposal-uncovered p,
+.assignment-conflict p { margin: 6px 0 0; }
 .proposal-technical-details { margin-top: 8px; font-size: 12px; color: var(--text); }
 .proposal-technical-details p { margin-bottom: 0; }
 .proposal-shift-collapsed { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface-muted); }

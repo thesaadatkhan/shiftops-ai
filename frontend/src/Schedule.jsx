@@ -103,7 +103,12 @@ function ProposalReview({ review, filter, onFilterChange }) {
                       <p><strong>Current</strong> {shift.existing_assignments.length ? shift.existing_assignments.map((worker) => worker.full_name).join(', ') : 'Nobody assigned'}</p>
                       {shift.proposed_assignments.length > 0 && <p><strong>Proposed</strong> {shift.proposed_assignments.map((worker) => worker.full_name).join(', ')}</p>}
                     </div>
-                    {shift.uncovered_positions > 0 && <p className="proposal-uncovered"><strong>Why uncovered</strong> {(shift.uncovered_reasons || []).map((reason) => reason.detail).join('; ') || 'No explanation was recorded.'}</p>}
+                    {shift.uncovered_positions > 0 && (
+                      <details className="proposal-uncovered">
+                        <summary>Why {shift.uncovered_positions} position{shift.uncovered_positions === 1 ? '' : 's'} remain uncovered</summary>
+                        <p>{(shift.uncovered_reasons || []).map((reason) => reason.detail).join('; ') || 'No explanation was recorded.'}</p>
+                      </details>
+                    )}
                     <details className="proposal-technical-details"><summary>Technical details</summary><p>Shift #{shift.id}. Current: {shift.existing_assignments.map((worker) => `${worker.employee_code} (#${worker.employee_id})`).join(', ') || 'none'}. Proposed: {shift.proposed_assignments.map((worker) => `${worker.employee_code} (#${worker.employee_id})`).join(', ') || 'none'}.</p></details>
                   </>
                   return unchangedCovered ? <details key={shift.id} className="proposal-shift proposal-shift-collapsed"><summary>{shiftTimeLabel(shift)} — unchanged and covered</summary>{content}</details> : <article key={shift.id} className="proposal-shift">{content}</article>
@@ -885,9 +890,12 @@ export default function Schedule({ weekStart }) {
                                       // staffing; this only surfaces the
                                       // conflict for the supervisor to resolve
                                       // explicitly, through Replace.
-                                      <p role="alert" className="table-note">
-                                        Conflict: {worker.conflicts.reasons.join('; ')}
-                                      </p>
+                                      <details className="assignment-conflict">
+                                        <summary>Assignment conflict — see details</summary>
+                                        <p role="alert" className="table-note">
+                                          {worker.conflicts.reasons.join('; ')}
+                                        </p>
+                                      </details>
                                     )}
                                   </li>
                                 ))}
