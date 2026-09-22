@@ -540,6 +540,24 @@ result = agent_service.approve_agent_proposal(connection, fixture["proposal_id"]
 check(result["proposal"]["verification_outcome"] == "verified", "successful post-write verification is recorded")
 check(result["readback"] is not None, "a successful verification includes a readback")
 
+# ------------------------------------------------------- check 19b (read-only GET)
+
+read_only = agent_service.get_agent_proposal_decision(connection, fixture["proposal_id"])
+check(read_only == result, "the read-only decision-state read reproduces the exact same result for a verified proposal")
+
+pending_connection = fixture_database()
+pending_fixture = build_fill_fixture(pending_connection)
+pending_before = assignment_count(pending_connection)
+pending_read = agent_service.get_agent_proposal_decision(pending_connection, pending_fixture["proposal_id"])
+check(pending_read["readback"] is None, "the read-only decision-state read returns no readback for a still-pending proposal")
+check(assignment_count(pending_connection) == pending_before, "reading decision state for a pending proposal writes nothing")
+
+try:
+    agent_service.get_agent_proposal_decision(pending_connection, 999999)
+    check(False, "reading decision state for an unknown proposal is refused")
+except agent_service.AgentProposalNotFound:
+    check(True, "reading decision state for an unknown proposal is refused")
+
 # ---------------------------------------------------------------- check 20
 
 

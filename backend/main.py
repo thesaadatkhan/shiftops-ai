@@ -1226,6 +1226,23 @@ def get_agent_task(task_id: int):
 # calls `approve_agent_proposal`/`reject_agent_proposal`.
 
 
+@app.get("/api/agent/proposals/{proposal_id}")
+def get_agent_proposal(proposal_id: int):
+    """Read-only decision-state snapshot: task id/status, the stored
+    proposal exactly as decided, and a fresh readback when
+    `verification_outcome == 'verified'` (otherwise `null`). No mutation,
+    no model/provider call - used to recover an already-verified
+    proposal's current readback after a refresh/navigation without
+    re-invoking the approval endpoint. Same response shape as approve/reject."""
+    connection = get_connection()
+    try:
+        return agent_service.get_agent_proposal_decision(connection, proposal_id)
+    except AgentProposalNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    finally:
+        connection.close()
+
+
 @app.post("/api/agent/proposals/{proposal_id}/approve")
 def approve_agent_proposal(proposal_id: int, payload: Annotated[Any, Body()] = None):
     """Approve a stored agent proposal, atomically revalidating current

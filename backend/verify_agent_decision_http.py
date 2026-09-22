@@ -226,6 +226,15 @@ def run():
         check(approved["proposal"]["verification_outcome"] == "verified", "verification_outcome is 'verified'")
         check(approved["readback"] is not None, "a current readback is included on success")
 
+        # -------------------------------------------- read-only decision-state GET
+        status, body = request("GET", "/api/agent/proposals/999999")
+        check(status == 404, f"GET on an unknown proposal_id is 404 ({status})")
+
+        status, body = request("GET", f"/api/agent/proposals/{proposal_id}")
+        check(status == 200, f"GET on a decided proposal is 200 ({status})")
+        read_only = json.loads(body)
+        check(read_only == approved, "GET reproduces the exact same decision-state response as the approval itself")
+
         # ----------------------------------------------------- idempotent retry
         status, body = request("POST", f"/api/agent/proposals/{proposal_id}/approve", payload)
         check(status == 200, f"repeating the same successful approval is still 200 ({status})")

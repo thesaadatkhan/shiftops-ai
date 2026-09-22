@@ -63,13 +63,24 @@ def main_entry():
         allow_headers=["Content-Type"],
     )
 
+    import e2e_agent_fixtures
     import e2e_fixtures
 
     connection = database.get_connection()
     try:
         e2e_fixtures.journeys(connection)
+        agent_scenarios = e2e_agent_fixtures.seed(connection)
     finally:
         connection.close()
+
+    # Phase 9 increment 3: every agent-task/message route calls
+    # `main._agent_model_adapter()` fresh per request. Overriding it here -
+    # only on THIS isolated process's own `main` module object, never
+    # main.py's source - swaps in a deterministic, rule-based fake model
+    # instead of the real `OpenAIModelAdapter` default, so the browser
+    # journeys never need `OPENAI_API_KEY` and never make a live provider
+    # call. See e2e_agent_fixtures.E2EAgentModel.
+    main._agent_model_adapter = lambda: e2e_agent_fixtures.E2EAgentModel(agent_scenarios)
 
     import uvicorn
 

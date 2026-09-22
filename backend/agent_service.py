@@ -626,6 +626,23 @@ def _agent_decision_response(connection, proposal_id):
     }
 
 
+def get_agent_proposal_decision(connection, proposal_id):
+    """Read-only decision-state snapshot for a stored proposal - the exact
+    same shape `approve_agent_proposal`/`reject_agent_proposal` return,
+    including a fresh readback whenever `verification_outcome == 'verified'`.
+    No mutation, no model/provider call. This is how a recovered task (a
+    refresh or navigation back to an already-decided proposal) gets its
+    current shift readback again without re-invoking the approval endpoint
+    merely to read something that already happened.
+    """
+    exists = connection.execute(
+        "SELECT id FROM agent_proposals WHERE id = ?", (proposal_id,)
+    ).fetchone()
+    if exists is None:
+        raise AgentProposalNotFound(f"No agent proposal {proposal_id}.")
+    return _agent_decision_response(connection, proposal_id)
+
+
 def approve_agent_proposal(connection, proposal_id, payload, verify_fn=None, reference_time=None):
     """Approve a stored agent proposal, atomically revalidating and applying
     it, or refuse the whole thing.

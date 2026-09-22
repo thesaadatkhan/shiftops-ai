@@ -8,7 +8,8 @@ Its target product is a housing-operations scheduling agent: a supervisor can
 ask it to investigate staffing gaps, find replacements, propose a feasible
 change, and carry out that specific change after approval. Employee management,
 eligibility rules and optimization supply its reliable operational tools.
-This agent is planned Phase 9 work, not an implemented capability today.
+This agent is Phase 9 work; it is functionally implemented (see section
+below) with only its live-provider demonstration still pending.
 
 The application models a fictional university housing front-desk operation in which professional staff and student workers provide coverage across multiple residence halls.
 
@@ -591,7 +592,11 @@ enforced both in application code and by a database constraint.
 **Increment 2 status (supervisor approval, execution, verification -
 implemented):** two new routes, `POST /api/agent/proposals/{id}/approve`
 and `POST /api/agent/proposals/{id}/reject`, are the ONLY way a proposal
-can be decided - no tool, model output, or transcript text reaches them.
+can be decided - no tool, model output, or transcript text reaches them. A
+third, read-only `GET /api/agent/proposals/{id}` returns the identical
+decision-state shape (proposal, task status, and a fresh readback once
+verified) without deciding or writing anything, for recovering an
+already-decided proposal's state after a refresh.
 Approval requires the caller to resubmit the proposal's exact stored
 action (`shift_id`, `outgoing_employee_code` or `null`,
 `incoming_employee_code`); a mismatch is refused (409), never silently
@@ -615,10 +620,37 @@ commits, a genuine post-commit readback verifies the expected state
 through the same deterministic backend functions the agent's own
 investigation tools use; a verification failure is recorded separately
 from execution and never reported as a failed or rolled-back write, and
-is never silently retried.
+is never silently retried. A proposal that was durably applied but never
+verified - a process or write failure between the execution commit and
+the verification write - is reconciled on a later exact-content approval
+retry by running only the missing verification, never repeating the
+assignment mutation and never automatically rerunning an
+already-recorded verification failure.
 
-The chat UI and a live-model demonstration remain the only work left for
-Phase 9.
+**Increment 3 status (AI Assistant chat frontend - implemented):** a
+chat-style supervisor interface (`frontend/src/AIAssistant.jsx`,
+`frontend/src/agent.js`) over the increment 1-2 backend. Starting and
+continuing a task, recovering the active task via `localStorage` and a
+read-only GET after a refresh, and rendering the full transcript as plain
+text/data (never HTML). A pending proposal renders as a structured card -
+hall, exact date/time, outgoing worker or "Uncovered position", incoming
+worker, and the server-generated rationale - never model prose standing
+in for it. Approval and rejection each require an explicit confirmation
+panel naming the exact action before the real decision endpoint is
+called; chat input and model output have no path to either endpoint.
+Every backend response is defensively validated (task/proposal identity
+and ownership, exact shift/worker fields, execution/verification
+outcomes, readback shape) before it reaches the screen, using the same
+confirmed-refusal/uncertain-outcome/malformed-response split and
+Reload-before-retry discipline `Schedule.jsx`/`schedule.js` already
+established - nothing is ever automatically resent. An
+applied-but-verification-failed outcome is shown as a distinct warning
+requiring Reload/Reconcile, never as a failed write. A missing
+`OPENAI_API_KEY` surfaces as a clear 503 setup message; no key is ever
+requested, stored, or displayed in the browser.
+
+A live-model demonstration against a real `OPENAI_API_KEY` remains the
+only work left for Phase 9 (see `.ai/DECISIONS.md` D054).
 
 A call-out statement by itself does not remove an assignment or create leave.
 Ambiguous names/dates require clarification. If no eligible worker exists,

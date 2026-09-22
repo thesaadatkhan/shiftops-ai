@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import './App.css'
+import AIAssistant from './AIAssistant.jsx'
 import Coverage from './Coverage.jsx'
 import Dashboard from './Dashboard.jsx'
 import EmployeeList from './EmployeeList.jsx'
@@ -44,7 +45,8 @@ const SECTION_CONTENT = {
   },
   'ai-assistant': {
     title: 'AI Assistant',
-    description: 'Natural-language scheduling questions will appear here.',
+    description:
+      'Describe a scheduling problem in plain language and the agent will investigate using the same deterministic backend data as the rest of this app. It can propose a specific replacement or fill, but nothing changes until you explicitly approve it.',
   },
 }
 
@@ -110,6 +112,7 @@ function App() {
         {activeSection === 'schedule' && <Schedule key={weekStart} weekStart={weekStart} />}
         {activeSection === 'coverage' && <Coverage />}
         {activeSection === 'workforce-planning' && <WorkforcePlanning weekStart={weekStart} />}
+        {activeSection === 'ai-assistant' && <AIAssistant />}
       </main>
     </>
   )

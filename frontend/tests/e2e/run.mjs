@@ -200,6 +200,24 @@ function mainButton(page, label) {
   return page.getByRole('main').getByRole('button', { name: label, exact: true })
 }
 
+/** The AI Assistant chat textarea, identified by its placeholder text. */
+function chatTextarea(page) {
+  return page.getByPlaceholder(/Jordan called out/)
+}
+
+async function sendChat(page, text) {
+  await chatTextarea(page).fill(text)
+  await page.getByRole('button', { name: 'Send', exact: true }).click()
+}
+
+/** Always safe to click - the AI Assistant screen renders this button
+ * unconditionally - so every agent journey starts from a known, blank
+ * state rather than recovering whatever task an earlier journey left
+ * active in localStorage. */
+async function startNewAgentTask(page) {
+  await mainButton(page, 'Start new task').click()
+}
+
 function toIsolatedUrl(originalUrl) {
   const url = new URL(originalUrl)
   url.protocol = 'http:'
@@ -344,6 +362,20 @@ async function main() {
     await journeyCorruptedApprovalResponse(page)
     await journeyWeekChangeDuringDelayedRefresh(page)
     await journeyDashboardAndWorkforcePlanning(page)
+
+    // ----------------------------------------------- Phase 9 increment 3: AI Assistant
+    await journeyAgentInfoAndApprovedTrap(page)
+    await journeyAgentAmbiguousClarification(page)
+    await journeyAgentNoCandidates(page)
+    await journeyAgentCalloutApproveVerify(page)
+    await journeyAgentRecoverVerifiedReadback(page)
+    await journeyAgentReject(page)
+    await journeyAgentStaleConflict(page)
+    await journeyAgentDuplicateClicks(page)
+    await journeyAgentNetworkUnknownReconcile(page)
+    await journeyAgentVerificationFailedDisplay(page)
+    await journeyAgentAppliedUnverifiedReconcile(page)
+    await journeyAgentMissingConfiguration(page)
 
     check(consoleErrors.length === 0, `no uncaught page errors occurred (${consoleErrors.join('; ')})`)
   } catch (error) {
@@ -838,6 +870,395 @@ async function journeyDashboardAndWorkforcePlanning(page) {
   await mainButton(page, '← Previous week').click()
   await mainButton(page, '← Previous week').click()
   await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
+}
+
+// --------------------------------------------------------- AI Assistant (Phase 9)
+//
+// Every scenario's shift is dated in 2027 and only its own dedicated
+// worker(s) have a schedule covering that date at all (see
+// backend/e2e_agent_fixtures.py) - each journey's eligible-candidate set is
+// exactly and only what that scenario constructs, deterministically. The
+// fake model (also in e2e_agent_fixtures.py) is a rule-based router over
+// the supervisor's own chat text, never a real network call and never
+// `OPENAI_API_KEY`.
+
+/** ordinary informational question, and: model text saying "approved"
+ * cannot execute anything - the assistant's own final reply uses that word
+ * as plain prose, with no proposal ever created and no request ever
+ * reaching an approval endpoint. */
+async function journeyAgentInfoAndApprovedTrap(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  let approveRequests = 0
+  const listener = (request) => {
+    if (request.url().includes('/approve')) approveRequests += 1
+  }
+  page.on('request', listener)
+
+  await sendChat(page, 'How many hours has Taylor Brooks worked this week, and is everything approved?')
+  await page.getByText(/approved as originally scheduled/i).waitFor({ timeout: 15000 })
+  check(true, 'an ordinary informational question gets a plain-text answer')
+  check(
+    (await page.locator('.agent-proposal-card').count()) === 0,
+    'no proposal card appears for a plain informational answer',
+  )
+
+  await sleep(300)
+  page.off('request', listener)
+  check(approveRequests === 0, 'the model\'s own text saying "approved" never triggers a real approval request')
+}
+
+/** ambiguity followed by supervisor clarification */
+async function journeyAgentAmbiguousClarification(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await sendChat(page, 'Can you check on Blaine for me?')
+  await page.getByText(/which one did you mean/i).waitFor({ timeout: 15000 })
+  check(true, 'an ambiguous name produces a clarification request, not a guess')
+
+  await sendChat(page, 'I meant Blaine Sato')
+  await page.getByText(/Found Blaine Sato/i).waitFor({ timeout: 15000 })
+  check(true, "the supervisor's clarification reply resolves the ambiguity")
+}
+
+/** no eligible candidates */
+async function journeyAgentNoCandidates(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await sendChat(page, 'Morgan Reyes called out for the Helix shift - can anyone cover it?')
+  await page.getByText(/Nobody is currently eligible/i).waitFor({ timeout: 15000 })
+  check(true, 'a call-out with zero eligible candidates is reported as blocked, not a fabricated candidate')
+  check(
+    (await page.locator('.agent-proposal-card').count()) === 0,
+    'no proposal card appears when there are no eligible candidates',
+  )
+}
+
+/** call-out investigation -> exactly one pending replacement proposal ->
+ * refresh/navigation recovery -> explicit approval confirmation -> applied
+ * and verified. */
+async function journeyAgentCalloutApproveVerify(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await sendChat(page, "Jordan Rivera called out for tonight's Capella shift. Find a replacement.")
+  await page.locator('.agent-proposal-card').waitFor({ timeout: 15000 })
+  check(true, 'the call-out investigation produces exactly one pending replacement proposal')
+  check((await page.locator('.agent-proposal-card').count()) === 1, 'exactly one proposal card is shown')
+  check(await page.getByText('Sam Osei').first().isVisible(), 'the proposal card names the proposed incoming worker')
+  check(
+    await page
+      .getByText('No assignment changes are made until this proposal is explicitly approved.')
+      .isVisible(),
+    'the card states plainly that nothing has changed yet',
+  )
+
+  await page.reload()
+  await navButton(page, 'AI Assistant').click()
+  await page.locator('.agent-proposal-card').waitFor({ timeout: 15000 })
+  check(true, 'refreshing the page recovers the active task and its pending proposal from the backend')
+
+  await page.getByRole('button', { name: 'Approve', exact: true }).click()
+  await page.getByRole('alertdialog', { name: 'Confirm approval' }).waitFor()
+  check(true, 'clicking Approve opens an explicit confirmation panel, not an immediate write')
+  await page.getByRole('button', { name: 'Confirm approval', exact: true }).click()
+  await page.getByText('Approved, applied, and verified.').waitFor({ timeout: 15000 })
+  check(true, 'confirming approval applies the assignment and reports it verified')
+  await page.getByText('Sam Osei (SW-705)').first().waitFor({ timeout: 5000 })
+  check(true, 'the verified-success readback lists the current occupant')
+}
+
+/** Recover a previously approved and verified task after a SECOND
+ * refresh/navigation (distinct from journeyAgentCalloutApproveVerify's own
+ * pre-approval recovery check above) and confirm its current worker
+ * readback is shown again - via the new read-only
+ * GET /api/agent/proposals/{id} route, never by re-invoking approval. */
+async function journeyAgentRecoverVerifiedReadback(page) {
+  await page.reload()
+  await navButton(page, 'AI Assistant').click()
+  await page.getByText('Approved, applied, and verified.').waitFor({ timeout: 15000 })
+  check(true, 'refreshing after approval recovers the already-decided, verified proposal')
+  await page.getByText('Sam Osei (SW-705)').first().waitFor({ timeout: 5000 })
+  check(true, "the verified proposal's current worker readback is shown again after refresh, via the read-only GET route")
+}
+
+/** rejecting a proposal changes no assignment */
+async function journeyAgentReject(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await sendChat(page, 'Devon Cole called out for the Vega shift. Find a replacement.')
+  await page.locator('.agent-proposal-card').waitFor({ timeout: 15000 })
+
+  await page.getByRole('button', { name: 'Reject', exact: true }).click()
+  await page.getByRole('alertdialog', { name: 'Confirm rejection' }).waitFor()
+  await page.getByRole('button', { name: 'Confirm rejection', exact: true }).click()
+  await page.getByText('Rejected. No assignment was changed. This task is closed.').waitFor({ timeout: 15000 })
+  check(true, 'confirming rejection changes no assignment and closes the task')
+
+  const taskId = await page.evaluate(() => Number(window.localStorage.getItem('shiftops.agent.activeTaskId')))
+  const task = await backendJson(`/api/agent/tasks/${taskId}`)
+  check(
+    task.status === 'closed' && task.proposals[0].status === 'rejected',
+    'the backend itself confirms the rejection - the closed status is not merely a client-side label',
+  )
+}
+
+/** stale approval displays structured conflicts - a real change to live
+ * state (deactivating the proposed incoming worker) between proposal
+ * creation and the approval confirmation click, not a mocked response. */
+async function journeyAgentStaleConflict(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await sendChat(page, 'Riley Chen called out for the Sirius shift. Find a replacement.')
+  await page.locator('.agent-proposal-card').waitFor({ timeout: 15000 })
+
+  await page.evaluate(async (backendOrigin) => {
+    await fetch(`${backendOrigin}/api/employees/SW-710/deactivate`, { method: 'POST' })
+  }, BACKEND_ORIGIN)
+
+  await page.getByRole('button', { name: 'Approve', exact: true }).click()
+  await page.getByRole('button', { name: 'Confirm approval', exact: true }).click()
+  await page.getByText(/stale and could not be approved/i).waitFor({ timeout: 15000 })
+  check(true, 'a stale approval displays the structured revalidation conflicts')
+  check(
+    await page.getByText(/not active/i).isVisible(),
+    'the real, specific stale-conflict reason is shown, not a single generic string',
+  )
+  check(
+    await page.locator('.agent-proposal-card').isVisible(),
+    'the stored proposal remains visible after a stale-approval refusal',
+  )
+}
+
+/** duplicate clicks cannot send duplicate approval requests */
+async function journeyAgentDuplicateClicks(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await sendChat(page, 'Jamie Fox called out for the Andromeda shift. Find a replacement.')
+  await page.locator('.agent-proposal-card').waitFor({ timeout: 15000 })
+
+  let approveRequests = 0
+  await page.route('**/api/agent/proposals/*/approve', async (route) => {
+    approveRequests += 1
+    await route.continue({ url: toIsolatedUrl(route.request().url()) })
+  })
+
+  await page.getByRole('button', { name: 'Approve', exact: true }).click()
+  const confirmButton = page.getByRole('button', { name: 'Confirm approval', exact: true })
+  await confirmButton.waitFor()
+  await confirmButton.click()
+  // A second click while the button is already disabled (decisionStatus !==
+  // 'idle') - Playwright's actionability check means this either never
+  // dispatches at all, or the disabled DOM element itself swallows it; both
+  // are the desired outcome and neither should throw the whole journey.
+  await confirmButton.click({ timeout: 1000 }).catch(() => {})
+
+  await page.getByText('Approved, applied, and verified.').waitFor({ timeout: 15000 })
+  await sleep(300)
+  check(
+    approveRequests === 1,
+    `duplicate clicks on Confirm approval never send more than one approval request (sent ${approveRequests})`,
+  )
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await page.route(`${REAL_BACKEND_ORIGIN}/**`, (route) => {
+    route.continue({ url: toIsolatedUrl(route.request().url()) })
+  })
+}
+
+/** network-unknown approval outcome reconciles through GET without a blind
+ * retry - the real backend already committed the write; only the
+ * DELIVERED response body is corrupted here (the same technique
+ * journeyCorruptedApprovalResponse already uses for Phase 7 approval). */
+async function journeyAgentNetworkUnknownReconcile(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await sendChat(page, "Quinn Adams called out for tonight's Capella shift. Find a replacement.")
+  await page.locator('.agent-proposal-card').waitFor({ timeout: 15000 })
+
+  let approveRequests = 0
+  await page.route('**/api/agent/proposals/*/approve', async (route) => {
+    approveRequests += 1
+    const response = await route.fetch({ url: toIsolatedUrl(route.request().url()) })
+    await route.fulfill({ status: response.status(), body: 'not valid json{{{' })
+  })
+
+  await page.getByRole('button', { name: 'Approve', exact: true }).click()
+  await page.getByRole('button', { name: 'Confirm approval', exact: true }).click()
+  await page.getByText(/could not be (read|parsed)|response body/i).first().waitFor({ timeout: 10000 })
+  check(true, 'an unreadable-but-committed approval response is reported honestly, not as a silent failure')
+
+  await page.getByRole('button', { name: 'Reload / Reconcile', exact: true }).click()
+  await page.getByText('Approved, applied, and verified.').waitFor({ timeout: 15000 })
+  check(true, 'Reload/Reconcile recovers the real, already-applied and verified state via GET, without a blind retry')
+
+  await sleep(300)
+  check(approveRequests === 1, 'exactly one approval request was sent despite the uncertain outcome')
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await page.route(`${REAL_BACKEND_ORIGIN}/**`, (route) => {
+    route.continue({ url: toIsolatedUrl(route.request().url()) })
+  })
+}
+
+/** assignment applied but verification failed is displayed accurately. The
+ * real backend commits and genuinely verifies this write - a real backend
+ * cannot be made to fail its own verification on demand without breaking
+ * it, so only the DELIVERED response body is altered here, exactly the
+ * same "commit is real, only the delivered body is corrupted" technique
+ * the other mocked journeys in this file already use. */
+async function journeyAgentVerificationFailedDisplay(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await sendChat(page, 'Skyler Moss called out for the Vega shift. Find a replacement.')
+  await page.locator('.agent-proposal-card').waitFor({ timeout: 15000 })
+
+  await page.route('**/api/agent/proposals/*/approve', async (route) => {
+    const response = await route.fetch({ url: toIsolatedUrl(route.request().url()) })
+    const body = await response.json()
+    body.proposal.verification_outcome = 'verification_failed: simulated for e2e'
+    body.task_status = 'blocked'
+    // A recorded verification_failed outcome has no confirmed current state
+    // to show - agent.js's decision-response validator now enforces a null
+    // readback for exactly this outcome, so the mocked body must be
+    // internally consistent with that rule too, not just with the outcome
+    // string alone.
+    body.readback = null
+    await route.fulfill({
+      status: response.status(),
+      body: JSON.stringify(body),
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+
+  await page.getByRole('button', { name: 'Approve', exact: true }).click()
+  await page.getByRole('button', { name: 'Confirm approval', exact: true }).click()
+  await page.getByText(/could not be verified afterward/i).waitFor({ timeout: 15000 })
+  check(true, 'an applied-but-verification-failed outcome is displayed accurately, distinct from a failed write')
+  check(
+    (await page.getByText('Approved, applied, and verified.').count()) === 0,
+    'a verification failure is never shown as a verified success',
+  )
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await page.route(`${REAL_BACKEND_ORIGIN}/**`, (route) => {
+    route.continue({ url: toIsolatedUrl(route.request().url()) })
+  })
+}
+
+/** Present an applied-but-unverified proposal - the real backend commits
+ * AND genuinely verifies on this real first approval; only that FIRST
+ * response's delivered body is altered (never the second) to display the
+ * recovery-gap state a real backend cannot be made to produce on its own
+ * without deliberately corrupting a second database write mid-flight.
+ * Clicking Reconcile then issues a genuine SECOND approval request, which
+ * the real backend answers through its own idempotent branch (D053's
+ * addendum: the resubmitted action still exactly matches what is really
+ * stored, and the real, already-'verified' outcome is simply read back -
+ * never rerun, never repeating the assignment or writing a duplicate audit
+ * entry, exactly as `verify_agent_decision.py` already proves at the
+ * backend level). */
+async function journeyAgentAppliedUnverifiedReconcile(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await sendChat(page, 'Reagan Wells called out for the Helix shift. Find a replacement.')
+  await page.locator('.agent-proposal-card').waitFor({ timeout: 15000 })
+
+  let approveRequests = 0
+  await page.route('**/api/agent/proposals/*/approve', async (route) => {
+    approveRequests += 1
+    const response = await route.fetch({ url: toIsolatedUrl(route.request().url()) })
+    if (approveRequests === 1) {
+      const body = await response.json()
+      body.proposal.verification_outcome = null
+      body.proposal.verified_at = null
+      body.task_status = 'awaiting_approval'
+      // Applied-but-unverified has no confirmed current state either -
+      // must stay internally consistent with agent.js's own validation rule.
+      body.readback = null
+      await route.fulfill({
+        status: response.status(),
+        body: JSON.stringify(body),
+        headers: { 'content-type': 'application/json' },
+      })
+      return
+    }
+    // Reconcile's own request: passed through completely unmodified.
+    await route.fulfill({
+      status: response.status(),
+      body: await response.text(),
+      headers: { 'content-type': 'application/json' },
+    })
+  })
+
+  await page.getByRole('button', { name: 'Approve', exact: true }).click()
+  await page.getByRole('button', { name: 'Confirm approval', exact: true }).click()
+  await page.getByText(/verification never completed/i).waitFor({ timeout: 15000 })
+  check(true, 'an applied-but-unverified proposal is displayed distinctly, offering Reconcile rather than a blind retry')
+
+  await page.getByRole('button', { name: 'Reconcile', exact: true }).click()
+  await page.getByText('Approved, applied, and verified.').waitFor({ timeout: 15000 })
+  check(true, 'clicking Reconcile completes verification and shows the real, already-applied assignment as verified')
+
+  await sleep(300)
+  check(
+    approveRequests === 2,
+    `Reconcile sends exactly one further approval request (2 total: the original approval plus the reconcile; sent ${approveRequests})`,
+  )
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await page.route(`${REAL_BACKEND_ORIGIN}/**`, (route) => {
+    route.continue({ url: toIsolatedUrl(route.request().url()) })
+  })
+}
+
+/** missing backend AI configuration is explained without exposing secrets.
+ * Mocked at the route level (the isolated backend genuinely has no
+ * OPENAI_API_KEY either, but asserting the FRONTEND's handling of the
+ * real 503 shape does not require actually removing server configuration
+ * mid-run) - the response body is the real backend's own exact message
+ * text (see backend/ai_config.py), not an invented one. */
+async function journeyAgentMissingConfiguration(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await page.route('**/api/agent/tasks', async (route) => {
+    if (route.request().method() !== 'POST') {
+      await route.fallback()
+      return
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        detail:
+          'AI is not configured: the OPENAI_API_KEY environment variable is not set. Set it (for ' +
+          'example in a local, gitignored .env file) before sending a message to the scheduling agent.',
+      }),
+    })
+  })
+
+  await sendChat(page, 'Anything at all - this call will be refused by configuration.')
+  await page.getByText(/OPENAI_API_KEY environment variable is not set/).waitFor({ timeout: 10000 })
+  check(true, 'a missing backend AI configuration is explained clearly, naming the environment variable to set')
+  check(
+    !(await page.locator('body').innerText()).includes('sk-'),
+    'no API key value is ever displayed, only the fact that one is missing',
+  )
+
+  await page.unrouteAll({ behavior: 'ignoreErrors' })
+  await page.route(`${REAL_BACKEND_ORIGIN}/**`, (route) => {
+    route.continue({ url: toIsolatedUrl(route.request().url()) })
+  })
 }
 
 main().catch((error) => {
