@@ -224,7 +224,13 @@ SCHEMA_STATEMENTS = [
     # apply (e.g. a proposal-level 'proposal_created' row names no single
     # assignment). `detail` is a short factual sentence, never the
     # optimizer's internal solver reasoning - this is a record of WHAT
-    # happened, not WHY the optimizer chose it.
+    # happened, not WHY the optimizer chose it. `agent_proposal_id` (Phase 9
+    # increment 2) links a row to the `agent_proposals` row that caused it -
+    # NULL for every ordinary Phase 7 row, exactly like `proposal_id` is
+    # NULL for a row that has nothing to do with a Phase 7 proposal. Forward
+    # references SQLite table (`agent_proposals` is created later in this
+    # same list) are fine: SQLite does not validate a REFERENCES target's
+    # existence at CREATE TABLE time, only at DML time.
     """
     CREATE TABLE IF NOT EXISTS assignment_audit (
         id INTEGER PRIMARY KEY,
@@ -238,6 +244,7 @@ SCHEMA_STATEMENTS = [
         shift_id INTEGER REFERENCES shifts(id),
         employee_id_before INTEGER REFERENCES employees(id),
         employee_id_after INTEGER REFERENCES employees(id),
+        agent_proposal_id INTEGER REFERENCES agent_proposals(id),
         detail TEXT NOT NULL
     )
     """,
@@ -585,6 +592,30 @@ def migrate_schema(connection):
                 "CREATE UNIQUE INDEX IF NOT EXISTS employees_seed_key "
                 "ON employees (seed_key) WHERE seed_key IS NOT NULL"
             )
+
+            # Phase 9 increment 2: links an `assignment_audit` row to the
+            # Phase 9 `agent_proposals` row that caused it (a decision event
+            # with no single shift/employee, or the actual assignment
+            # mutation an approved proposal performed), the same way
+            # `proposal_id` already links a row to a Phase 7
+            # `schedule_proposals` row. `assignment_audit` predates
+            # `agent_proposals` (Phase 7 vs. Phase 9), so - unlike
+            # `agent_proposals` itself, which is new enough this pass that
+            # editing its `CREATE TABLE` directly was safe - this column
+            # genuinely needs the `ALTER TABLE` migration path: `CREATE
+            # TABLE IF NOT EXISTS` cannot add it to a database that already
+            # has `assignment_audit` from an earlier startup. NULL for
+            # every row that has nothing to do with the agent (the entire
+            # history before this feature existed, and every ordinary Phase
+            # 7 manual replacement/approval row from now on).
+            if table_exists(
+                connection, "assignment_audit"
+            ) and "agent_proposal_id" not in table_columns(connection, "assignment_audit"):
+                connection.execute(
+                    "ALTER TABLE assignment_audit"
+                    " ADD COLUMN agent_proposal_id INTEGER REFERENCES agent_proposals(id)"
+                )
+                applied.append("assignment_audit.agent_proposal_id")
 
             # Committed here regardless of whether anything was applied, so
             # the no-work path releases the write lock rather than leaving

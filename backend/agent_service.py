@@ -52,6 +52,7 @@ import json
 from datetime import datetime
 
 import agent_tools
+import proposals as proposals_module
 from agent_model import ModelTurn, OpenAIModelAdapter
 from ai_config import resolve_ai_config
 from synthetic_data import TIME_FORMAT
@@ -68,8 +69,68 @@ class AgentValidationError(ValueError):
     """The submitted request is malformed. Maps to HTTP 400."""
 
 
+class AgentProposalNotFound(LookupError):
+    """No such agent proposal. Maps to HTTP 404."""
+
+
+class AgentProposalContentMismatch(RuntimeError):
+    """The submitted decision does not match the proposal's exact stored
+    action. Maps to HTTP 409 - never a silent approval of unseen content."""
+
+
+class AgentProposalNotPending(RuntimeError):
+    """The proposal has already been decided the other way (approved
+    cannot later be rejected, and vice versa). Maps to HTTP 409."""
+
+
+class AgentProposalRevalidationFailed(RuntimeError):
+    """One or more facts the proposal depended on are no longer true at
+    approval time (stale outgoing assignment, a candidate who is no longer
+    eligible, an uncovered position someone else already filled). Maps to
+    HTTP 409 with `.conflicts` as structured, stable-reason-code detail -
+    the same shape Phase 7's `ProposalRevalidationFailed` already uses."""
+
+    def __init__(self, conflicts):
+        self.conflicts = conflicts
+        super().__init__(f"{len(conflicts)} conflict(s) found during revalidation.")
+
+
+class AgentVerificationFailed(RuntimeError):
+    """The post-write readback did not confirm the expected state. Raised
+    only by a `verify_fn` (real or injected-for-testing) - never causes the
+    already-committed assignment write to be undone or retried; it only
+    changes what `verification_outcome` records."""
+
+
 def _now(reference_time=None):
     return (reference_time or datetime.now()).strftime(TIMESTAMP_FORMAT)
+
+
+def _in_transaction(connection, work):
+    """Run `work` inside one BEGIN IMMEDIATE transaction - the same shape
+    every other write path in this project uses (see `proposals.py`,
+    `scheduling.py`, `timetables.py`, `employees.delete_employee`,
+    `agent_tools.propose_replacement`). Used here by
+    `approve_agent_proposal`/`reject_agent_proposal` so the existing-
+    decision check, revalidation, the assignment mutation, the proposal
+    status update, and the audit write are all one atomic unit - a
+    concurrent second decision on the same proposal either serializes
+    behind this one (and then finds it already decided) or fails outright,
+    never observing or creating a half-decided state.
+    """
+    previous_isolation = connection.isolation_level
+    connection.isolation_level = None
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            result = work()
+            connection.execute("COMMIT")
+            return result
+        except Exception:
+            connection.execute("ROLLBACK")
+            raise
+    finally:
+        connection.isolation_level = previous_isolation
 
 
 def _validate_text(value, field_name):
@@ -448,3 +509,334 @@ def send_message(connection, task_id, message_text, model_adapter=None, max_step
 def get_task(connection, task_id):
     """Read-only: the task exactly as persisted."""
     return task_payload(connection, task_id)
+
+
+# ------------------------------------------------ supervisor decision (increment 2)
+#
+# Approval is authorized ONLY by calling `approve_agent_proposal` directly -
+# there is no tool, no model output, and no transcript text that can reach
+# this function. The bounded loop above never calls it, and no agent tool
+# in `agent_tools.py` references it either.
+
+
+def _parse_decision_payload(payload):
+    """Validate the caller's resubmitted exact action.
+
+    Required shape: `{"shift_id": int, "incoming_employee_code": str,
+    "outgoing_employee_code": str | null}` - `outgoing_employee_code` may be
+    omitted entirely (treated the same as explicit `null`) for an
+    uncovered-shift fill. Any other field, a wrong type, or a missing
+    required field is `AgentValidationError` (400) - never silently
+    coerced or ignored.
+    """
+    if not isinstance(payload, dict):
+        raise AgentValidationError(
+            "Expected a JSON object with shift_id, incoming_employee_code, "
+            "and outgoing_employee_code (or null)."
+        )
+    allowed = {"shift_id", "outgoing_employee_code", "incoming_employee_code"}
+    unexpected = set(payload) - allowed
+    if unexpected:
+        raise AgentValidationError(
+            f"Unexpected field(s): {', '.join(sorted(unexpected))}."
+        )
+    if "shift_id" not in payload or "incoming_employee_code" not in payload:
+        raise AgentValidationError("'shift_id' and 'incoming_employee_code' are required.")
+
+    shift_id = payload["shift_id"]
+    if isinstance(shift_id, bool) or not isinstance(shift_id, int):
+        raise AgentValidationError("'shift_id' must be an integer.")
+
+    outgoing = payload.get("outgoing_employee_code")
+    if outgoing is not None and not isinstance(outgoing, str):
+        raise AgentValidationError("'outgoing_employee_code' must be a string or null.")
+
+    incoming = payload["incoming_employee_code"]
+    if not isinstance(incoming, str) or not incoming.strip():
+        raise AgentValidationError("'incoming_employee_code' must be a non-empty string.")
+
+    return {
+        "shift_id": shift_id,
+        "outgoing_employee_code": outgoing,
+        "incoming_employee_code": incoming.strip(),
+    }
+
+
+def _conflict_detail(error):
+    """Turn a `proposals.py` revalidation exception into the structured
+    conflict list `AgentProposalRevalidationFailed` carries.
+
+    `ReplacementInvalid` already carries real, specific reason codes -
+    `evaluate_shift_eligibility`'s own codes (`worker_inactive`,
+    `timetable_not_confirmed`, `class_conflict`, `leave_conflict`,
+    `assignment_conflict`, `weekly_hour_limit_exceeded`) plus the two
+    constraint-shaped ones (`replacement_same_worker`,
+    `replacement_already_assigned`) and the fill-path's
+    `shift_already_covered` - reused verbatim, never re-derived.
+    `AssignmentNotFound` (the shift/employee itself is gone, or the
+    outgoing worker no longer holds the shift) has no structured detail of
+    its own in Phase 7, so it becomes one generic-but-still-structured
+    `stale_state` conflict naming exactly what changed.
+    """
+    if isinstance(error, proposals_module.ReplacementInvalid):
+        return [dict(error.detail)]
+    return [{"reason_codes": ["stale_state"], "reasons": [str(error)]}]
+
+
+def _default_verify(connection, shift_id, outgoing_employee_code, incoming_employee_code):
+    """The real post-write readback: reuses `agent_tools.get_shift_details`
+    (the same deterministic backend function the agent's own investigation
+    tools use) to confirm the incoming worker now holds the shift and, for
+    a replacement, that the outgoing worker no longer does. Raises
+    `AgentVerificationFailed` if either check fails; returns the shift
+    details dict (used as the response's `readback`) on success.
+    """
+    details = agent_tools.get_shift_details(connection, shift_id)
+    codes = {worker["employee_code"] for worker in details["assigned_employees"]}
+    if incoming_employee_code not in codes:
+        raise AgentVerificationFailed(
+            f"{incoming_employee_code} does not appear on shift {shift_id} after the write."
+        )
+    if outgoing_employee_code is not None and outgoing_employee_code in codes:
+        raise AgentVerificationFailed(
+            f"{outgoing_employee_code} still appears on shift {shift_id} after the write."
+        )
+    return details
+
+
+def _agent_decision_response(connection, proposal_id):
+    """The structured response every approve/reject call returns: task
+    id/status, the full proposal (exact action, status, decision timestamp,
+    execution outcome, verification outcome), and a fresh readback of
+    current shift state whenever the stored `verification_outcome` is
+    `'verified'` - recomputed on every call (including an idempotent
+    retry), never cached, since it is cheap and it is what "current
+    shift/assignment readback" means.
+    """
+    proposal = agent_tools.proposal_payload(connection, proposal_id)
+    task = task_payload(connection, proposal["task_id"])
+    readback = None
+    if proposal["verification_outcome"] == "verified":
+        readback = agent_tools.get_shift_details(connection, proposal["shift_id"])
+    return {
+        "task_id": task["id"],
+        "task_status": task["status"],
+        "proposal": proposal,
+        "readback": readback,
+    }
+
+
+def approve_agent_proposal(connection, proposal_id, payload, verify_fn=None, reference_time=None):
+    """Approve a stored agent proposal, atomically revalidating and applying
+    it, or refuse the whole thing.
+
+    **Authorization is this function call, nothing else.** No tool, no
+    model output, and no transcript text can reach this - it is invoked
+    only by the explicit `POST /api/agent/proposals/{id}/approve` route.
+
+    **Content binding.** The caller must resubmit the proposal's exact
+    stored `shift_id`/`outgoing_employee_code`/`incoming_employee_code`;
+    anything else is `AgentProposalContentMismatch` (409) - the same
+    "approve only what you actually looked at" rule
+    `proposals.approve_proposal` already established for Phase 7.
+
+    **Atomicity.** The existing-decision check, the content-match check,
+    revalidation, the assignment mutation, the `agent_proposals` status
+    update, and the `assignment_audit` write all happen inside ONE
+    `BEGIN IMMEDIATE` transaction (via `proposals._replace_assignment_locked`
+    or `proposals._create_assignment_locked`, called here rather than the
+    public, independently-committing `replace_assignment()`). Revalidation
+    re-checks live status, confirmed/non-provisional timetable coverage,
+    class conflicts, approved leave, overlapping assignments, and the
+    weekly-hour limit - all of `evaluate_shift_eligibility`'s rules, freshly
+    evaluated, never assumed still true from when the proposal was created.
+    The incoming worker is NOT required to still be top-ranked at approval
+    time - ranking only selected the original proposal; approval revalidates
+    the exact approved worker's current eligibility and target state, and
+    never silently substitutes a different candidate if ranking has since
+    changed.
+
+    **Idempotency, including recovery from a partial prior write.** Approving
+    an already-`approved` proposal with matching content never repeats the
+    assignment mutation or the approval audit row. If that earlier approval
+    also finished verification (`verification_outcome` is not `NULL` -
+    `'verified'` or a recorded `'verification_failed: ...'`), this call is a
+    pure read of the already-complete stored result: a known completed
+    verification outcome is not automatically rerun, and `verification_failed`
+    in particular is a fact requiring supervisor attention, not a retry
+    trigger. If the assignment was durably applied but `verification_outcome`
+    is still `NULL` - the process or a second database write can fail after
+    the execution commit but before the verification write persists - this
+    call performs ONLY the missing post-write verification and status update
+    (never re-running or modifying the assignment) and returns the reconciled
+    result. Approving an already-`rejected` proposal is `AgentProposalNotPending`
+    (409).
+
+    **Verification happens AFTER commit**, deliberately outside the write
+    transaction - reading back through `verify_fn` (defaults to
+    `_default_verify`) is a check against durable state, not the
+    transaction's own uncommitted view. A verification failure NEVER rolls
+    back or retries the write; it only sets `verification_outcome` and
+    leaves the parent task `blocked` instead of `closed`, so a real assignment
+    change is never reported as if it failed. `verify_fn` is the injectable
+    seam tests use to force this path deterministically.
+    """
+    submitted = _parse_decision_payload(payload)
+    verify = verify_fn or _default_verify
+
+    def work():
+        stored = connection.execute(
+            "SELECT id, task_id, status FROM agent_proposals WHERE id = ?", (proposal_id,)
+        ).fetchone()
+        if stored is None:
+            raise AgentProposalNotFound(f"No agent proposal {proposal_id}.")
+
+        stored_view = agent_tools.proposal_payload(connection, proposal_id)
+        stored_action = {
+            "shift_id": stored_view["shift_id"],
+            "outgoing_employee_code": stored_view["outgoing_employee_code"],
+            "incoming_employee_code": stored_view["incoming_employee_code"],
+        }
+        if submitted != stored_action:
+            raise AgentProposalContentMismatch(
+                f"The submitted action does not match proposal {proposal_id}'s stored "
+                "content; reload the proposal and try again."
+            )
+
+        if stored["status"] == "rejected":
+            raise AgentProposalNotPending(
+                f"Proposal {proposal_id} was already rejected and cannot be approved."
+            )
+        if stored["status"] == "approved":
+            # Idempotent retry: identical content already approved (and, if
+            # it succeeded, already verified) earlier. Nothing to redo.
+            return "idempotent"
+
+        try:
+            if submitted["outgoing_employee_code"] is not None:
+                proposals_module._replace_assignment_locked(
+                    connection,
+                    submitted["shift_id"],
+                    submitted["outgoing_employee_code"],
+                    submitted["incoming_employee_code"],
+                    reference_time=reference_time,
+                    agent_proposal_id=proposal_id,
+                )
+            else:
+                proposals_module._create_assignment_locked(
+                    connection,
+                    submitted["shift_id"],
+                    submitted["incoming_employee_code"],
+                    reference_time=reference_time,
+                    agent_proposal_id=proposal_id,
+                )
+        except (proposals_module.AssignmentNotFound, proposals_module.ReplacementInvalid) as error:
+            raise AgentProposalRevalidationFailed(_conflict_detail(error)) from error
+
+        now = _now(reference_time)
+        connection.execute(
+            "UPDATE agent_proposals SET status = 'approved', decided_at = ?,"
+            " executed_at = ?, execution_outcome = 'applied' WHERE id = ?",
+            (now, now, proposal_id),
+        )
+        connection.execute(
+            "INSERT INTO assignment_audit (occurred_at, action, agent_proposal_id, detail)"
+            " VALUES (?, 'proposal_approved', ?, ?)",
+            (now, proposal_id, f"Agent proposal {proposal_id} approved."),
+        )
+        return "executed"
+
+    outcome = _in_transaction(connection, work)
+
+    if outcome == "idempotent":
+        stored_verification = connection.execute(
+            "SELECT verification_outcome FROM agent_proposals WHERE id = ?", (proposal_id,)
+        ).fetchone()["verification_outcome"]
+        if stored_verification is not None:
+            # A completed verification outcome already exists - 'verified'
+            # or a recorded 'verification_failed: ...' - and is returned
+            # as-is, never rerun. A recorded failure is a known fact that
+            # needs supervisor attention (Reload/Reconcile), not an
+            # automatic retry on ordinary approval resubmission.
+            return _agent_decision_response(connection, proposal_id)
+        # Applied but never verified: the assignment write committed in an
+        # earlier call, but that call's process or its verification-state
+        # write failed before persisting. Never touch the assignment again
+        # here - only run the missing post-write verification below and
+        # persist its outcome, exactly as the original successful-execution
+        # path would have.
+
+    # Verification: a genuine post-commit readback, never inside the
+    # transaction that just committed - see the docstring above.
+    try:
+        verify(
+            connection,
+            submitted["shift_id"],
+            submitted["outgoing_employee_code"],
+            submitted["incoming_employee_code"],
+        )
+        verification_outcome = "verified"
+    except Exception as error:  # noqa: BLE001 - any readback failure is recorded, never retried
+        verification_outcome = f"verification_failed: {error}"
+
+    now = _now(reference_time)
+    task_id = connection.execute(
+        "SELECT task_id FROM agent_proposals WHERE id = ?", (proposal_id,)
+    ).fetchone()["task_id"]
+    connection.execute(
+        "UPDATE agent_proposals SET verified_at = ?, verification_outcome = ? WHERE id = ?",
+        (now, verification_outcome, proposal_id),
+    )
+    # A verified success closes the task - the investigation, decision, and
+    # execution are all genuinely done. A verification failure leaves the
+    # task `blocked` rather than `closed`: the assignment write DID commit
+    # (never reported as failed or rolled back), but something needs a
+    # person's attention before this task is considered finished.
+    connection.execute(
+        "UPDATE agent_tasks SET status = ?, updated_at = ? WHERE id = ?",
+        ("closed" if verification_outcome == "verified" else "blocked", now, task_id),
+    )
+    connection.commit()
+
+    return _agent_decision_response(connection, proposal_id)
+
+
+def reject_agent_proposal(connection, proposal_id, reference_time=None):
+    """Reject a pending agent proposal. Writes no assignment.
+
+    Idempotent for a repeat rejection (returns the same stored result,
+    writes no duplicate audit row); refuses (`AgentProposalNotPending`,
+    409) to reject an already-approved one. Successful rejection closes
+    the parent task - nothing is pending on it any more.
+    """
+
+    def work():
+        stored = connection.execute(
+            "SELECT id, task_id, status FROM agent_proposals WHERE id = ?", (proposal_id,)
+        ).fetchone()
+        if stored is None:
+            raise AgentProposalNotFound(f"No agent proposal {proposal_id}.")
+        if stored["status"] == "approved":
+            raise AgentProposalNotPending(
+                f"Proposal {proposal_id} was already approved and cannot be rejected."
+            )
+        if stored["status"] == "rejected":
+            return  # idempotent retry - already decided, nothing to redo
+
+        now = _now(reference_time)
+        connection.execute(
+            "UPDATE agent_proposals SET status = 'rejected', decided_at = ? WHERE id = ?",
+            (now, proposal_id),
+        )
+        connection.execute(
+            "INSERT INTO assignment_audit (occurred_at, action, agent_proposal_id, detail)"
+            " VALUES (?, 'proposal_rejected', ?, ?)",
+            (now, proposal_id, f"Agent proposal {proposal_id} rejected."),
+        )
+        connection.execute(
+            "UPDATE agent_tasks SET status = 'closed', updated_at = ? WHERE id = ?",
+            (now, stored["task_id"]),
+        )
+
+    _in_transaction(connection, work)
+    return _agent_decision_response(connection, proposal_id)

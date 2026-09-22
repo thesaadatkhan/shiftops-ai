@@ -570,17 +570,15 @@ The backend revalidates and applies an approved replacement atomically; the
 agent then reads back the assignment and coverage to confirm the outcome.
 Investigating and proposing a worker for an uncovered shift is also required.
 
-**Increment 1 status (backend foundation only - implemented):** provider
+**Increment 1 status (backend foundation - implemented):** provider
 configuration (`backend/ai_config.py`), the persistent task/message/proposal
 schema (`agent_tasks`/`agent_messages`/`agent_proposals`), a deterministic
 tool registry (`backend/agent_tools.py`) wrapping existing eligibility/
 reporting functions, a provider-independent bounded tool-calling loop
 (`backend/agent_service.py`, `backend/agent_model.py`), and the minimal
 `/api/agent/tasks` API. This increment can investigate a call-out or an
-uncovered shift and create an exact PENDING proposal; it cannot approve or
-execute one - there is no tool or route for that yet. The chat UI, proposal
-approval/execution, and result verification are later increments, not yet
-built.
+uncovered shift and create an exact PENDING proposal; no tool or model
+output can approve or execute one.
 
 The model never supplies or influences a proposal's stored explanation:
 `propose_replacement` computes it entirely from the same deterministic
@@ -589,6 +587,38 @@ the proposed worker to be that result's top-ranked eligible candidate for
 the ordinary replacement workflow - an eligible-but-lower-ranked or
 fabricated candidate is refused. At most one proposal is allowed per task,
 enforced both in application code and by a database constraint.
+
+**Increment 2 status (supervisor approval, execution, verification -
+implemented):** two new routes, `POST /api/agent/proposals/{id}/approve`
+and `POST /api/agent/proposals/{id}/reject`, are the ONLY way a proposal
+can be decided - no tool, model output, or transcript text reaches them.
+Approval requires the caller to resubmit the proposal's exact stored
+action (`shift_id`, `outgoing_employee_code` or `null`,
+`incoming_employee_code`); a mismatch is refused (409), never silently
+approved. Inside one atomic transaction, current live state is
+revalidated in full (active status, confirmed/non-provisional timetable
+coverage, class/leave/assignment conflicts, the weekly-hour limit, and -
+for an uncovered-shift fill - that a position is still actually open) via
+the SAME validated logic Phase 7's `replace_assignment` uses (extracted
+into shared, transaction-internal helpers in `backend/proposals.py` so
+both call sites commit exactly once, atomically, with the resulting
+`assignment_audit` row linked back to the agent proposal). The ranking
+that selected the original proposal is not re-required at approval time -
+only the approved worker's own current eligibility and target state are
+revalidated, never a silently substituted candidate. Approval and
+rejection are each idempotent for a repeat of the same already-decided
+outcome, refuse a decision that contradicts an already-final one (409),
+and are safe under concurrent/racing requests (a `BEGIN IMMEDIATE`
+transaction serializes competing attempts, so exactly one assignment
+change and exactly one audit row ever result). After a successful write
+commits, a genuine post-commit readback verifies the expected state
+through the same deterministic backend functions the agent's own
+investigation tools use; a verification failure is recorded separately
+from execution and never reported as a failed or rolled-back write, and
+is never silently retried.
+
+The chat UI and a live-model demonstration remain the only work left for
+Phase 9.
 
 A call-out statement by itself does not remove an assignment or create leave.
 Ambiguous names/dates require clarification. If no eligible worker exists,

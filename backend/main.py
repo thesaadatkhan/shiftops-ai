@@ -73,7 +73,14 @@ from proposals import (
     replace_assignment,
 )
 import agent_service
-from agent_service import AgentTaskNotFound, AgentValidationError
+from agent_service import (
+    AgentProposalContentMismatch,
+    AgentProposalNotFound,
+    AgentProposalNotPending,
+    AgentProposalRevalidationFailed,
+    AgentTaskNotFound,
+    AgentValidationError,
+)
 from ai_config import AIConfigurationError
 from analytics import week_analytics
 from scheduling import get_week_schedule, prepare_week
@@ -1207,5 +1214,67 @@ def get_agent_task(task_id: int):
         return agent_service.get_task(connection, task_id)
     except AgentTaskNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    finally:
+        connection.close()
+
+
+# ----------------------------------------------------- supervisor decision (increment 2)
+#
+# Authorization is exactly and only these two routes. No tool, no model
+# output, and no transcript text can approve or execute anything -
+# `agent_tools.py` has no such tool, and `agent_service.run_loop` never
+# calls `approve_agent_proposal`/`reject_agent_proposal`.
+
+
+@app.post("/api/agent/proposals/{proposal_id}/approve")
+def approve_agent_proposal(proposal_id: int, payload: Annotated[Any, Body()] = None):
+    """Approve a stored agent proposal, atomically revalidating current
+    state and applying it, or refuse the whole thing.
+
+    The request body must resubmit the proposal's exact stored action -
+    `{"shift_id": int, "incoming_employee_code": str, "outgoing_employee_code":
+    str | null}` (`null`/omitted for an uncovered-shift fill) - a mismatch is
+    409, not a silent approval of unseen content. Revalidation re-checks
+    live status, timetable coverage, class/leave/assignment conflicts and
+    the weekly-hour limit against CURRENT state; any conflict is 409 with a
+    structured `conflicts` list, and nothing is written. Approving an
+    already-approved proposal with matching content is a 200 no-op
+    (idempotent retry, including its already-recorded verification
+    outcome); approving an already-rejected one is 409. A verification
+    failure AFTER a successful write is never reported as a failed or
+    rolled-back assignment - see `agent_service.approve_agent_proposal`.
+    """
+    connection = get_connection()
+    try:
+        return agent_service.approve_agent_proposal(connection, proposal_id, payload)
+    except AgentValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except AgentProposalNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except AgentProposalContentMismatch as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except AgentProposalNotPending as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except AgentProposalRevalidationFailed as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"message": str(error), "conflicts": error.conflicts},
+        ) from error
+    finally:
+        connection.close()
+
+
+@app.post("/api/agent/proposals/{proposal_id}/reject")
+def reject_agent_proposal(proposal_id: int):
+    """Reject a pending agent proposal. Writes no assignment; closes the
+    parent task. Idempotent for a repeat rejection; refuses (409) to
+    reject an already-approved one."""
+    connection = get_connection()
+    try:
+        return agent_service.reject_agent_proposal(connection, proposal_id)
+    except AgentProposalNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except AgentProposalNotPending as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     finally:
         connection.close()

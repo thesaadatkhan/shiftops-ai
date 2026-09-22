@@ -661,6 +661,224 @@ def reject_proposal(connection, proposal_id, reference_time=None):
     return _in_transaction(connection, work)
 
 
+def _replace_assignment_locked(
+    connection, shift_id, outgoing_employee_code, incoming_employee_code,
+    reference_time=None, agent_proposal_id=None,
+):
+    """The validated replacement logic itself, assuming the caller ALREADY
+    holds the write lock (a `BEGIN IMMEDIATE` transaction is already open).
+
+    Extracted from `replace_assignment()` (Phase 9 increment 2, Codex
+    review) so the Phase 9 agent-approval transaction in `agent_service.py`
+    can perform the exact same validated replacement, the exact same
+    `assignment_audit` write, and its own `agent_proposals` status update
+    all inside ONE atomic transaction - never a public function that
+    commits on its own, followed by a second, separate transaction to
+    record the decision. `replace_assignment()` below is now a thin wrapper
+    that opens the transaction and calls this; its own behavior, signature,
+    and return value are unchanged.
+
+    `agent_proposal_id` is `None` for an ordinary Phase 7 manual
+    replacement (the column exists for exactly one purpose: linking an
+    audit row back to the Phase 9 proposal that caused it) and the calling
+    agent proposal's id when invoked from proposal approval.
+    """
+    shift = connection.execute(
+        "SELECT id, hall, start_datetime, end_datetime, required_staff"
+        " FROM shifts WHERE id = ?",
+        (shift_id,),
+    ).fetchone()
+    if shift is None:
+        raise AssignmentNotFound(f"No shift {shift_id}.")
+
+    outgoing = find_by_code(connection, outgoing_employee_code)
+    if outgoing is None:
+        raise AssignmentNotFound(f"No employee with code {outgoing_employee_code}.")
+    incoming = find_by_code(connection, incoming_employee_code)
+    if incoming is None:
+        raise AssignmentNotFound(f"No employee with code {incoming_employee_code}.")
+
+    existing = connection.execute(
+        "SELECT id FROM assignments WHERE shift_id = ? AND employee_id = ?",
+        (shift_id, outgoing["id"]),
+    ).fetchone()
+    if existing is None:
+        raise AssignmentNotFound(
+            f"{outgoing_employee_code} does not currently hold shift "
+            f"{shift_id}; nothing to replace."
+        )
+
+    # Two constraint-shaped refusals, checked before eligibility and
+    # before any write: a "replacement" naming the same worker twice, and
+    # an incoming worker who already holds this exact shift (a second
+    # assignment row for them here would violate the schema's own
+    # (employee_id, shift_id) uniqueness). Both are refused as a
+    # controlled 409 rather than ever reaching a raw database
+    # IntegrityError, and neither writes an audit row.
+    if incoming["id"] == outgoing["id"]:
+        raise ReplacementInvalid(
+            {
+                "shift_id": shift_id,
+                "employee_code": incoming_employee_code,
+                "reason_codes": ["replacement_same_worker"],
+                "reasons": [
+                    "The incoming worker is the same as the outgoing worker; "
+                    "there is nothing to replace."
+                ],
+            }
+        )
+
+    already_holds_shift = connection.execute(
+        "SELECT 1 FROM assignments WHERE shift_id = ? AND employee_id = ?",
+        (shift_id, incoming["id"]),
+    ).fetchone()
+    if already_holds_shift:
+        raise ReplacementInvalid(
+            {
+                "shift_id": shift_id,
+                "employee_code": incoming_employee_code,
+                "reason_codes": ["replacement_already_assigned"],
+                "reasons": [
+                    f"{incoming_employee_code} already holds shift {shift_id}."
+                ],
+            }
+        )
+
+    result = evaluate_shift_eligibility(connection, shift, incoming)
+    if not result["eligible"]:
+        raise ReplacementInvalid(
+            {
+                "shift_id": shift_id,
+                "employee_code": incoming_employee_code,
+                "reason_codes": result["reason_codes"],
+                "reasons": result["reasons"],
+            }
+        )
+
+    # The outgoing row is deleted only now, inside the same transaction
+    # as the incoming insert and the audit row - a failure anywhere
+    # above this point leaves it completely untouched.
+    connection.execute("DELETE FROM assignments WHERE id = ?", (existing["id"],))
+    connection.execute(
+        "INSERT INTO assignments (employee_id, shift_id) VALUES (?, ?)",
+        (incoming["id"], shift_id),
+    )
+    now = _now(reference_time)
+    connection.execute(
+        """
+        INSERT INTO assignment_audit
+            (occurred_at, action, shift_id, employee_id_before, employee_id_after,
+             agent_proposal_id, detail)
+        VALUES (?, 'assignment_replaced', ?, ?, ?, ?, ?)
+        """,
+        (
+            now, shift_id, outgoing["id"], incoming["id"], agent_proposal_id,
+            f"Shift {shift_id}: {outgoing_employee_code} replaced by "
+            f"{incoming_employee_code}.",
+        ),
+    )
+    return {
+        "shift_id": shift_id,
+        "outgoing_employee_code": outgoing_employee_code,
+        "incoming_employee_code": incoming_employee_code,
+        "occurred_at": now,
+    }
+
+
+def _create_assignment_locked(
+    connection, shift_id, incoming_employee_code, reference_time=None, agent_proposal_id=None,
+):
+    """Validated creation of ONE new assignment into a genuinely uncovered
+    position, assuming the caller already holds the write lock. The
+    fill-an-uncovered-shift counterpart to `_replace_assignment_locked` -
+    same lock-already-held contract, same validated-then-write shape, same
+    single `assignment_audit` row, added for Phase 9's uncovered-shift
+    proposal path (there is no outgoing worker to replace, so
+    `employee_id_before` is `NULL`).
+
+    Refuses (never writes) if the shift does not exist, the worker does
+    not exist, the worker already holds this shift, the shift is already
+    covered (`required_staff` positions already filled - creating another
+    would overstaff it), or the worker fails any current hard eligibility
+    rule.
+    """
+    shift = connection.execute(
+        "SELECT id, hall, start_datetime, end_datetime, required_staff"
+        " FROM shifts WHERE id = ?",
+        (shift_id,),
+    ).fetchone()
+    if shift is None:
+        raise AssignmentNotFound(f"No shift {shift_id}.")
+
+    incoming = find_by_code(connection, incoming_employee_code)
+    if incoming is None:
+        raise AssignmentNotFound(f"No employee with code {incoming_employee_code}.")
+
+    already_holds_shift = connection.execute(
+        "SELECT 1 FROM assignments WHERE shift_id = ? AND employee_id = ?",
+        (shift_id, incoming["id"]),
+    ).fetchone()
+    if already_holds_shift:
+        raise ReplacementInvalid(
+            {
+                "shift_id": shift_id,
+                "employee_code": incoming_employee_code,
+                "reason_codes": ["replacement_already_assigned"],
+                "reasons": [f"{incoming_employee_code} already holds shift {shift_id}."],
+            }
+        )
+
+    assigned_count = connection.execute(
+        "SELECT COUNT(*) AS n FROM assignments WHERE shift_id = ?", (shift_id,)
+    ).fetchone()["n"]
+    if assigned_count >= shift["required_staff"]:
+        raise ReplacementInvalid(
+            {
+                "shift_id": shift_id,
+                "reason_codes": ["shift_already_covered"],
+                "reasons": [
+                    f"Shift {shift_id} already has {assigned_count} of "
+                    f"{shift['required_staff']} required position(s) filled; there is "
+                    "no uncovered position to fill."
+                ],
+            }
+        )
+
+    result = evaluate_shift_eligibility(connection, shift, incoming)
+    if not result["eligible"]:
+        raise ReplacementInvalid(
+            {
+                "shift_id": shift_id,
+                "employee_code": incoming_employee_code,
+                "reason_codes": result["reason_codes"],
+                "reasons": result["reasons"],
+            }
+        )
+
+    connection.execute(
+        "INSERT INTO assignments (employee_id, shift_id) VALUES (?, ?)",
+        (incoming["id"], shift_id),
+    )
+    now = _now(reference_time)
+    connection.execute(
+        """
+        INSERT INTO assignment_audit
+            (occurred_at, action, shift_id, employee_id_after, agent_proposal_id, detail)
+        VALUES (?, 'assignment_created', ?, ?, ?, ?)
+        """,
+        (
+            now, shift_id, incoming["id"], agent_proposal_id,
+            f"Shift {shift_id}: {incoming_employee_code} assigned to fill an "
+            "uncovered position.",
+        ),
+    )
+    return {
+        "shift_id": shift_id,
+        "incoming_employee_code": incoming_employee_code,
+        "occurred_at": now,
+    }
+
+
 def replace_assignment(
     connection, shift_id, outgoing_employee_code, incoming_employee_code, reference_time=None
 ):
@@ -673,107 +891,14 @@ def replace_assignment(
     candidacy is unaffected by the outgoing assignment being removed, since
     they do not hold it). Records the exact before/after employee ids in one
     `assignment_audit` row.
+
+    A thin transaction wrapper around `_replace_assignment_locked` - see
+    that function for the actual validation and write logic.
     """
-
-    def work():
-        shift = connection.execute(
-            "SELECT id, hall, start_datetime, end_datetime, required_staff"
-            " FROM shifts WHERE id = ?",
-            (shift_id,),
-        ).fetchone()
-        if shift is None:
-            raise AssignmentNotFound(f"No shift {shift_id}.")
-
-        outgoing = find_by_code(connection, outgoing_employee_code)
-        if outgoing is None:
-            raise AssignmentNotFound(f"No employee with code {outgoing_employee_code}.")
-        incoming = find_by_code(connection, incoming_employee_code)
-        if incoming is None:
-            raise AssignmentNotFound(f"No employee with code {incoming_employee_code}.")
-
-        existing = connection.execute(
-            "SELECT id FROM assignments WHERE shift_id = ? AND employee_id = ?",
-            (shift_id, outgoing["id"]),
-        ).fetchone()
-        if existing is None:
-            raise AssignmentNotFound(
-                f"{outgoing_employee_code} does not currently hold shift "
-                f"{shift_id}; nothing to replace."
-            )
-
-        # Two constraint-shaped refusals, checked before eligibility and
-        # before any write: a "replacement" naming the same worker twice, and
-        # an incoming worker who already holds this exact shift (a second
-        # assignment row for them here would violate the schema's own
-        # (employee_id, shift_id) uniqueness). Both are refused as a
-        # controlled 409 rather than ever reaching a raw database
-        # IntegrityError, and neither writes an audit row.
-        if incoming["id"] == outgoing["id"]:
-            raise ReplacementInvalid(
-                {
-                    "shift_id": shift_id,
-                    "employee_code": incoming_employee_code,
-                    "reason_codes": ["replacement_same_worker"],
-                    "reasons": [
-                        "The incoming worker is the same as the outgoing worker; "
-                        "there is nothing to replace."
-                    ],
-                }
-            )
-
-        already_holds_shift = connection.execute(
-            "SELECT 1 FROM assignments WHERE shift_id = ? AND employee_id = ?",
-            (shift_id, incoming["id"]),
-        ).fetchone()
-        if already_holds_shift:
-            raise ReplacementInvalid(
-                {
-                    "shift_id": shift_id,
-                    "employee_code": incoming_employee_code,
-                    "reason_codes": ["replacement_already_assigned"],
-                    "reasons": [
-                        f"{incoming_employee_code} already holds shift {shift_id}."
-                    ],
-                }
-            )
-
-        result = evaluate_shift_eligibility(connection, shift, incoming)
-        if not result["eligible"]:
-            raise ReplacementInvalid(
-                {
-                    "shift_id": shift_id,
-                    "employee_code": incoming_employee_code,
-                    "reason_codes": result["reason_codes"],
-                    "reasons": result["reasons"],
-                }
-            )
-
-        # The outgoing row is deleted only now, inside the same transaction
-        # as the incoming insert and the audit row - a failure anywhere
-        # above this point leaves it completely untouched.
-        connection.execute("DELETE FROM assignments WHERE id = ?", (existing["id"],))
-        connection.execute(
-            "INSERT INTO assignments (employee_id, shift_id) VALUES (?, ?)",
-            (incoming["id"], shift_id),
-        )
-        now = _now(reference_time)
-        connection.execute(
-            """
-            INSERT INTO assignment_audit
-                (occurred_at, action, shift_id, employee_id_before, employee_id_after, detail)
-            VALUES (?, 'assignment_replaced', ?, ?, ?, ?)
-            """,
-            (
-                now, shift_id, outgoing["id"], incoming["id"],
-                f"Shift {shift_id}: {outgoing_employee_code} replaced by "
-                f"{incoming_employee_code}.",
-            ),
-        )
-        return {
-            "shift_id": shift_id,
-            "outgoing_employee_code": outgoing_employee_code,
-            "incoming_employee_code": incoming_employee_code,
-            "occurred_at": now,
-        }
-
-    return _in_transaction(connection, work)
+    return _in_transaction(
+        connection,
+        lambda: _replace_assignment_locked(
+            connection, shift_id, outgoing_employee_code, incoming_employee_code,
+            reference_time=reference_time,
+        ),
+    )
