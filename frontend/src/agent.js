@@ -76,6 +76,66 @@ const TASK_STATUSES = ['open', 'awaiting_approval', 'blocked', 'closed']
 const PROPOSAL_STATUSES = ['pending', 'approved', 'rejected']
 const RESULT_KINDS = ['answer', 'clarification_required', 'blocked', 'proposal']
 
+/** Keep the complete validated transcript in application state while exposing
+ * only the two conversational roles in the supervisor-facing chat. Tool calls
+ * and results remain persisted and returned by the backend for traceability. */
+export function visibleTranscriptMessages(messages) {
+  return messages.filter((message) => message.role === 'supervisor' || message.role === 'assistant')
+}
+
+function humanizeKey(key) {
+  return key.replace(/_/g, ' ').replace(/^./, (letter) => letter.toUpperCase())
+}
+
+function readableStructuredValue(value, depth = 0) {
+  if (value === null) return 'None'
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => readableStructuredValue(item, depth + 1)).join('\n')
+  }
+  if (typeof value === 'object' && depth < 3) {
+    return Object.entries(value)
+      .map(([key, item]) => `${humanizeKey(key)}: ${readableStructuredValue(item, depth + 1)}`)
+      .join('\n')
+  }
+  return 'Structured response'
+}
+
+/** Render model prose as readable plain text. React still escapes the result;
+ * this only removes presentation syntax that would otherwise leak because the
+ * transcript deliberately does not interpret Markdown or HTML. */
+export function transcriptText(message) {
+  if (message.role !== 'assistant') return message.content
+
+  let text = message.content.trim()
+  if ((text.startsWith('{') && text.endsWith('}')) || (text.startsWith('[') && text.endsWith(']'))) {
+    try {
+      const parsed = JSON.parse(text)
+      const preferred = parsed && typeof parsed === 'object'
+        ? parsed.message ?? parsed.answer ?? parsed.response ?? parsed.content
+        : parsed
+      text = readableStructuredValue(preferred ?? parsed)
+    } catch {
+      return 'The assistant returned an unreadable structured response. Please try rephrasing your request.'
+    }
+  }
+
+  return text
+    .replace(/^```[^\n]*\n?/gm, '')
+    .replace(/```$/gm, '')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '• ')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*\n]+)\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .trim()
+}
+
 function isValidMessage(row) {
   return (
     typeof row === 'object' &&

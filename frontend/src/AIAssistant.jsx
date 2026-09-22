@@ -24,22 +24,13 @@ import {
   rejectProposal,
   sendMessage,
   storeActiveTaskId,
+  transcriptText,
+  visibleTranscriptMessages,
 } from './agent.js'
 import { friendlyDate, shiftTimeLabel } from './shiftPicker.js'
 
 function roleLabel(role) {
-  switch (role) {
-    case 'supervisor':
-      return 'You'
-    case 'assistant':
-      return 'Assistant'
-    case 'tool_call':
-      return 'Tool call'
-    case 'tool_result':
-      return 'Tool result'
-    default:
-      return role
-  }
+  return role === 'supervisor' ? 'You' : 'ShiftOps AI'
 }
 
 function roleClass(role) {
@@ -51,12 +42,10 @@ function TranscriptMessage({ message }) {
     <div className={roleClass(message.role)}>
       <div className="agent-message-meta">
         <span className="agent-message-role">{roleLabel(message.role)}</span>
-        {message.tool_name && <span className="agent-message-tool">{message.tool_name}</span>}
       </div>
-      {/* Plain text only, in every case - a model reply, a tool call's exact
-          arguments, or a tool's exact result are all rendered as data, never
-          as HTML, and never interpreted as an instruction by this screen. */}
-      <pre className="agent-message-content">{message.content}</pre>
+      {/* Still plain text and escaped by React. Formatting markers are
+          normalized for readability; model output is never rendered as HTML. */}
+      <div className="agent-message-content">{transcriptText(message)}</div>
     </div>
   )
 }
@@ -94,6 +83,23 @@ function proposalAction(proposal) {
     outgoing_employee_code: proposal.outgoing_employee_code,
     incoming_employee_code: proposal.incoming_employee_code,
   }
+}
+
+function approvalQuestion(proposal, shiftDate, timeLabel) {
+  if (proposal.outgoing_employee_code === null) {
+    return (
+      <p>
+        Assign <strong>{incomingLabel(proposal)}</strong> to the uncovered <strong>{proposal.hall}</strong> shift on{' '}
+        <strong>{shiftDate}</strong>, <strong>{timeLabel}</strong>?
+      </p>
+    )
+  }
+  return (
+    <p>
+      Replace <strong>{outgoingLabel(proposal)}</strong> with <strong>{incomingLabel(proposal)}</strong> on the{' '}
+      <strong>{proposal.hall}</strong> shift on <strong>{shiftDate}</strong>, <strong>{timeLabel}</strong>?
+    </p>
+  )
 }
 
 function ProposalCard({
@@ -157,11 +163,8 @@ function ProposalCard({
 
       {confirming === 'approve' && (
         <div className="table-note agent-confirm-panel" role="alertdialog" aria-label="Confirm approval">
-          <p>
-            Approve replacing <strong>{outgoingLabel(proposal)}</strong> with{' '}
-            <strong>{incomingLabel(proposal)}</strong> on the <strong>{proposal.hall}</strong> shift on{' '}
-            <strong>{shiftDate}</strong>, <strong>{timeLabel}</strong>?
-          </p>
+          <h5>Confirm this assignment change</h5>
+          {approvalQuestion(proposal, shiftDate, timeLabel)}
           <div className="schedule-actions">
             <button type="button" disabled={decisionStatus !== 'idle'} onClick={onConfirmApprove}>
               {decisionStatus === 'approving' ? 'Approving…' : 'Confirm approval'}
@@ -175,6 +178,7 @@ function ProposalCard({
 
       {confirming === 'reject' && (
         <div className="table-note agent-confirm-panel" role="alertdialog" aria-label="Confirm rejection">
+          <h5>Confirm rejection</h5>
           <p>
             Reject this proposal? <strong>{incomingLabel(proposal)}</strong> will not be assigned, and this task
             will close with no assignment change.
@@ -338,6 +342,7 @@ export default function AIAssistant() {
   // proposal actually exists, including while reconciling a decided one.
   const proposal = task && task.proposals.length > 0 ? task.proposals[0] : null
   const pendingProposal = proposal && proposal.status === 'pending' ? proposal : null
+  const visibleMessages = task ? visibleTranscriptMessages(task.messages) : []
 
   /** Fetches a decided, verified proposal's current shift readback through
    * the read-only decision-state endpoint - never the approval endpoint,
@@ -567,9 +572,29 @@ export default function AIAssistant() {
           Start new task
         </button>
         {task && (
-          <span className={`status-badge status-badge-${task.status}`}>{taskStatusLabel(task.status)}</span>
+          <span className={`status-badge status-badge-${task.status}`} aria-label={`Task status: ${taskStatusLabel(task.status)}`}>
+            Task: {taskStatusLabel(task.status)}
+          </span>
         )}
       </div>
+
+      {!task && phase !== 'loading' && (
+        <section className="agent-start" aria-labelledby="agent-start-title">
+          <h3 id="agent-start-title">What would you like to investigate?</h3>
+          <p>Start with a scheduling question or a specific coverage problem.</p>
+          <div className="agent-starters">
+            <button type="button" onClick={() => setInput("Someone called out for tonight's shift. Find a replacement.")}>
+              Find a call-out replacement
+            </button>
+            <button type="button" onClick={() => setInput('Who is eligible for an uncovered shift this week?')}>
+              Check an uncovered shift
+            </button>
+            <button type="button" onClick={() => setInput('How many hours has an employee worked this week?')}>
+              Check employee hours
+            </button>
+          </div>
+        </section>
+      )}
 
       {loadError && <p className="backend-status backend-status-error">{loadError}</p>}
 
@@ -577,10 +602,10 @@ export default function AIAssistant() {
 
       {task && (
         <div className="agent-transcript" aria-live="polite">
-          {task.messages.map((message) => (
+          {visibleMessages.map((message) => (
             <TranscriptMessage key={message.id} message={message} />
           ))}
-          {task.messages.length === 0 && <p className="table-note">No messages yet.</p>}
+          {visibleMessages.length === 0 && <p className="table-note">No conversation messages yet.</p>}
         </div>
       )}
 
@@ -612,8 +637,15 @@ export default function AIAssistant() {
         />
       )}
 
+      {busyMessage && (
+        <p className="backend-status backend-status-loading" role="status">
+          {decisionStatus === 'idle' ? 'The assistant is working on your request…' : 'Updating the proposal…'}
+        </p>
+      )}
+
       <form className="agent-composer" onSubmit={handleSend}>
         <textarea
+          aria-label="Message the AI Assistant"
           value={input}
           onChange={(event) => setInput(event.target.value)}
           placeholder="e.g. Jordan called out for tonight's Capella shift. Find a replacement."

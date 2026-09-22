@@ -871,20 +871,14 @@ function EmployeeList({ weekStart }) {
             : `No employees match "${searchText.trim()}" with the current status filter. Try a different name or employee ID, and choose the All status to include inactive workers.`}
         </p>
       ) : (
-        <div className="table-wrapper">
-          <table className="data-table">
+        <div className="table-wrapper employee-table-wrapper" tabIndex="0" aria-label="Employee list">
+          <table className="data-table employee-table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Name</th>
-                <th>Status</th>
-                <th>Student type</th>
-                <th>Class blocks</th>
+                <th>Employee</th>
+                <th>Worker status</th>
                 <th>Timetable</th>
-                <th>Class hours/week</th>
-                <th>Weekly limit</th>
-                <th>Assigned</th>
-                <th>Remaining capacity</th>
+                <th>Weekly hours</th>
                 <th>Approved leave</th>
                 <th>Actions</th>
               </tr>
@@ -892,18 +886,29 @@ function EmployeeList({ weekStart }) {
             <tbody>
               {visibleEmployees.map((employee) => (
                 <tr key={employee.employee_code}>
-                  <td>{employee.employee_code}</td>
-                  <td>{employee.full_name}</td>
-                  <td>{employee.is_active ? 'Active' : 'Inactive'}</td>
-                  <td>{studentTypeLabel(employee)}</td>
-                  <td>{employee.class_block_count}</td>
-                  <td>{timetableStatusDisplay(employee)}</td>
-                  <td>{employee.weekly_class_hours}</td>
-                  <td>{employee.weekly_hour_limit} h</td>
-                  <td>{employee.assigned_hours} h</td>
-                  <td>{employee.remaining_capacity_hours} h</td>
-                  <td>{employee.approved_leave_count}</td>
-                  <td>
+                  <td data-label="Employee">
+                    <strong>{employee.full_name}</strong>
+                    <span className="employee-cell-detail">{employee.employee_code}</span>
+                  </td>
+                  <td data-label="Worker status">
+                    <strong>{employee.is_active ? 'Active' : 'Inactive'}</strong>
+                    <span className="employee-cell-detail">{studentTypeLabel(employee)}</span>
+                  </td>
+                  <td data-label="Timetable">
+                    <strong>{timetableStatusDisplay(employee)}</strong>
+                    <span className="employee-cell-detail">
+                      {employee.class_block_count} blocks · {employee.weekly_class_hours} h class
+                    </span>
+                  </td>
+                  <td data-label="Weekly hours">
+                    <strong>{employee.assigned_hours} h assigned</strong>
+                    <span className="employee-cell-detail">
+                      {employee.remaining_capacity_hours} h remaining of {employee.weekly_hour_limit} h
+                    </span>
+                  </td>
+                  <td data-label="Approved leave">{employee.approved_leave_count}</td>
+                  <td data-label="Actions">
+                    <div className="employee-row-actions">
                     {/* Every row's button reads the same, so the accessible
                         name carries which worker it opens. */}
                     <button
@@ -942,6 +947,7 @@ function EmployeeList({ weekStart }) {
                     >
                       Delete
                     </button>
+                    </div>
                   </td>
                 </tr>
               ))}

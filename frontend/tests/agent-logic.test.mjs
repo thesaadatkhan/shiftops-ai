@@ -25,6 +25,8 @@ import {
   storeActiveTaskId,
   clearStoredTaskId,
   ACTIVE_TASK_STORAGE_KEY,
+  transcriptText,
+  visibleTranscriptMessages,
 } from '../src/agent.js'
 
 let passed = 0
@@ -125,6 +127,34 @@ const validReadback = {
   assigned_count: 1,
   covered: true,
 }
+
+// -------------------------------------------------------- transcript display
+
+const visibleMessages = visibleTranscriptMessages(validTask.messages)
+check(
+  visibleMessages.length === 2 && visibleMessages.every((message) => ['supervisor', 'assistant'].includes(message.role)),
+  'the display transcript keeps only supervisor and assistant messages',
+)
+check(
+  validTask.messages.some((message) => message.role === 'tool_call'),
+  'filtering the display does not remove tool messages from the validated task data',
+)
+check(
+  transcriptText({ role: 'assistant', content: '**Ready**\n- Candidate: `SW-705`' }) === 'Ready\n• Candidate: SW-705',
+  'assistant Markdown markers are normalized into readable plain text',
+)
+check(
+  transcriptText({ role: 'assistant', content: '{"message":"The shift is covered."}' }) === 'The shift is covered.',
+  'an ordinary assistant response wrapped in JSON is shown without raw JSON syntax',
+)
+check(
+  !transcriptText({ role: 'assistant', content: '{not valid JSON}' }).includes('{'),
+  'malformed structured assistant output is replaced by a readable message instead of leaking JSON markers',
+)
+check(
+  transcriptText({ role: 'supervisor', content: '**keep my exact input**' }) === '**keep my exact input**',
+  'supervisor text is preserved exactly rather than rewritten',
+)
 
 // ------------------------------------------------------------ isValidProposal
 

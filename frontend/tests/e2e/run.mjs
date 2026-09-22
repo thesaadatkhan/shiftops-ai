@@ -202,7 +202,7 @@ function mainButton(page, label) {
 
 /** The AI Assistant chat textarea, identified by its placeholder text. */
 function chatTextarea(page) {
-  return page.getByPlaceholder(/Jordan called out/)
+  return page.getByRole('textbox', { name: 'Message the AI Assistant' })
 }
 
 async function sendChat(page, text) {
@@ -367,6 +367,7 @@ async function main() {
     await journeyCorruptedApprovalResponse(page)
     await journeyWeekChangeDuringDelayedRefresh(page)
     await journeyDashboardAndWorkforcePlanning(page)
+    await journeyEmployeesResponsiveLayout(page)
 
     // ----------------------------------------------- Phase 9 increment 3: AI Assistant
     await journeyAgentInfoAndApprovedTrap(page)
@@ -911,6 +912,51 @@ async function journeyDashboardAndWorkforcePlanning(page) {
   await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
 }
 
+/** Run 2: Employees keeps its actions in view, gives the list its own
+ * vertical scroller and switches to cards at the narrower laptop width. */
+async function journeyEmployeesResponsiveLayout(page) {
+  await navButton(page, 'Employees').click()
+  await page.locator('.employee-table-wrapper').waitFor({ timeout: 10000 })
+
+  for (const width of [1366, 1024]) {
+    await page.setViewportSize({ width, height: 768 })
+    const layout = await page.evaluate(() => {
+      const root = document.documentElement
+      const wrapper = document.querySelector('.employee-table-wrapper')
+      const action = document.querySelector('.employee-row-actions button')
+      const header = document.querySelector('.employee-table th')
+      const actionRect = action.getBoundingClientRect()
+      return {
+        noPageOverflow: root.scrollWidth <= root.clientWidth,
+        ownVerticalScroll: wrapper.scrollHeight > wrapper.clientHeight,
+        actionInViewport: actionRect.left >= 0 && actionRect.right <= root.clientWidth,
+        headerPosition: getComputedStyle(header).position,
+        rowDisplay: getComputedStyle(document.querySelector('.employee-table tbody tr')).display,
+      }
+    })
+    check(layout.noPageOverflow, `Employees has no page-level horizontal scrolling at ${width}x768`)
+    check(layout.ownVerticalScroll, `Employees uses its own vertical list scroller at ${width}x768`)
+    check(layout.actionInViewport, `employee actions are visible at ${width}x768`)
+    if (width === 1366) {
+      check(layout.headerPosition === 'sticky', 'the compact Employees table header is sticky at 1366x768')
+    } else {
+      check(layout.rowDisplay === 'grid', 'Employees uses the responsive card layout at 1024x768')
+    }
+  }
+
+  const employees = await backendJson('/api/employees?week_start=2026-09-21')
+  const target = employees.employees[0]
+  await page.getByLabel('Search').fill(target.employee_code)
+  check((await page.locator('.employee-table tbody tr').count()) === 1, 'employee search still filters the responsive list')
+  await page.getByLabel('Search').fill('')
+  await page.getByLabel('Status').selectOption('all')
+  await page.getByLabel('Sort by').selectOption('full_name')
+  await page.getByLabel('Sort direction').selectOption('desc')
+  check((await page.locator('.employee-table tbody tr').count()) > 1, 'employee status and sort controls still operate after the redesign')
+
+  await page.setViewportSize({ width: 1280, height: 720 })
+}
+
 // --------------------------------------------------------- AI Assistant (Phase 9)
 //
 // Every scenario's shift is dated in 2027 and only its own dedicated
@@ -928,6 +974,11 @@ async function journeyDashboardAndWorkforcePlanning(page) {
 async function journeyAgentInfoAndApprovedTrap(page) {
   await navButton(page, 'AI Assistant').click()
   await startNewAgentTask(page)
+
+  check(
+    await page.getByRole('button', { name: 'Find a call-out replacement' }).isVisible(),
+    'the empty AI Assistant offers starting prompts',
+  )
 
   let approveRequests = 0
   const listener = (request) => {
@@ -993,6 +1044,17 @@ async function journeyAgentCalloutApproveVerify(page) {
       .getByText('No assignment changes are made until this proposal is explicitly approved.')
       .isVisible(),
     'the card states plainly that nothing has changed yet',
+  )
+  check(
+    (await page.locator('.agent-message-tool-call, .agent-message-tool-result').count()) === 0,
+    'tool calls and results are hidden from the normal AI transcript',
+  )
+  const taskIdWithTools = await page.evaluate(() => Number(window.localStorage.getItem('shiftops.agent.activeTaskId')))
+  const persistedTask = await backendJson(`/api/agent/tasks/${taskIdWithTools}`)
+  check(
+    persistedTask.messages.some((message) => message.role === 'tool_call') &&
+      persistedTask.messages.some((message) => message.role === 'tool_result'),
+    'the hidden tool calls and results remain persisted in the backend task',
   )
 
   await page.reload()
