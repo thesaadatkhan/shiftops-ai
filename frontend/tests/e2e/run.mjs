@@ -641,7 +641,19 @@ async function journeyUncertainReplaceBlocksRetry(page) {
 
   const row = page.locator('.schedule-hall li', { hasText: worker.employee_code }).first()
   await row.getByRole('button', { name: 'Replace', exact: true }).click()
-  await page.getByRole('alertdialog', { name: 'Replace assignment' }).waitFor()
+  const replacementDialog = page.getByRole('alertdialog', { name: 'Replace assignment' })
+  await replacementDialog.waitFor()
+  const [replacementBox, replacementViewport] = await Promise.all([
+    replacementDialog.boundingBox(),
+    page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight })),
+  ])
+  check(
+    replacementBox !== null &&
+      Math.abs(replacementBox.x + replacementBox.width / 2 - replacementViewport.width / 2) < 2 &&
+      Math.abs(replacementBox.y + replacementBox.height / 2 - replacementViewport.height / 2) < 2 &&
+      await page.locator('.schedule-modal-backdrop').isVisible(),
+    'replacement opens as a centered modal with a viewport backdrop rather than an inline panel',
+  )
   await page.locator('select').last().selectOption(incomingCode)
 
   let replaceRequests = 0

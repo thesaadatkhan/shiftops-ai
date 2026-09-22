@@ -932,7 +932,8 @@ export default function Schedule({ weekStart }) {
       )}
 
       {replaceTarget && (
-        <div className="replace-panel" role="alertdialog" aria-label="Replace assignment">
+        <div className="schedule-modal-backdrop">
+          <div className="replace-panel schedule-modal" role="alertdialog" aria-modal="true" aria-label="Replace assignment">
           <h3>
             Replace {replaceTarget.outgoing.full_name} ({replaceTarget.outgoing.employee_code}) on{' '}
             {replaceTarget.shift.hall}, {shiftTimeLabel(replaceTarget.shift)}?
@@ -993,11 +994,13 @@ export default function Schedule({ weekStart }) {
               Cancel
             </button>
           </div>
+          </div>
         </div>
       )}
 
       {fillTarget && (
-        <div className="replace-panel" role="alertdialog" aria-label="Assign worker">
+        <div className="schedule-modal-backdrop">
+          <div className="replace-panel schedule-modal" role="alertdialog" aria-modal="true" aria-label="Assign worker">
           <h3>Assign a worker to {fillTarget.hall}, {shiftTimeLabel(fillTarget)}?</h3>
           <p className="table-note">
             This fills one currently uncovered position. Eligibility is rechecked before saving.
@@ -1045,6 +1048,7 @@ export default function Schedule({ weekStart }) {
               </button>
             )}
             <button type="button" onClick={closeFill} disabled={fillStatus === 'loading'}>Cancel</button>
+          </div>
           </div>
         </div>
       )}

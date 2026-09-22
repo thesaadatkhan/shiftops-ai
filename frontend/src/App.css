@@ -522,6 +522,29 @@
   box-shadow: var(--shadow);
 }
 
+/* Assignment forms deliberately remain rendered beside the Schedule state
+   that owns them. This fixed wrapper changes only their presentation: the
+   action stays connected to the clicked row even when that row was far down
+   the weekly list. The backdrop is not clickable, so Cancel remains the one
+   explicit way to abandon a pending fill or replacement. */
+.schedule-modal-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--space-5);
+  background: rgba(31, 22, 43, 0.38);
+}
+
+.schedule-modal {
+  width: min(100%, var(--dialog-width));
+  max-height: calc(100vh - (var(--space-5) * 2));
+  margin: 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
 .proposal-panel h3,
 .replace-panel h3 {
   margin: 0 0 8px;
