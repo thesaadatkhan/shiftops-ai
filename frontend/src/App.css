@@ -956,19 +956,20 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
   flex-wrap: wrap;
   width: min(100% - (var(--space-8) * 2), 820px);
   margin: 0 auto;
-  padding: var(--space-3) 0;
+  padding: var(--space-4) 0 var(--space-3);
 }
 
 .agent-start {
-  display: grid;
+  display: block;
   flex: 1 1 auto;
-  place-items: center;
-  padding: var(--space-8);
   min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-6) var(--space-8) var(--space-5);
 }
 
 .agent-guide {
   width: min(100%, 680px);
+  margin: 0 auto;
 }
 
 .agent-guide h3,
@@ -980,21 +981,36 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
 
 .agent-guide p {
   max-width: 66ch;
-  margin-top: var(--space-2);
-  font-size: 14px;
+  margin-top: var(--space-3);
+  font-size: var(--font-sm);
   line-height: 150%;
 }
 
 .agent-starters {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
 }
 
 .agent-starters button {
+  flex: 0 1 calc(50% - (var(--space-2) / 2));
+  min-height: 0;
+  padding: 7px var(--space-3);
+  border-color: var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--surface-accent);
+  color: var(--text-h);
+  font-size: 13px;
+  line-height: 135%;
   text-align: left;
-  background: var(--surface);
+  box-shadow: none;
+}
+
+.agent-starters button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  box-shadow: var(--shadow-xs);
 }
 
 .agent-help-button {
@@ -1143,7 +1159,7 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
   gap: 8px;
   width: min(100% - (var(--space-8) * 2), 820px);
   margin: 0 auto;
-  padding: var(--space-3) 0 var(--space-5);
+  padding: var(--space-4) 0 var(--space-5);
   border: none;
   border-radius: 0;
   background: color-mix(in srgb, var(--surface) 95%, transparent);
