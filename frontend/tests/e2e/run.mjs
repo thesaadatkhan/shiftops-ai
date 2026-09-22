@@ -897,6 +897,14 @@ async function journeyDashboardAndWorkforcePlanning(page) {
 
   await navButton(page, 'Dashboard').click()
   await metricValue('Filled positions').waitFor({ timeout: 10000 })
+  const assignmentGrid = page.getByRole('table', { name: 'Weekly employee assignment grid' })
+  await assignmentGrid.waitFor({ timeout: 10000 })
+  check(
+    (await assignmentGrid.getByRole('row').count()) > 1 &&
+      (await assignmentGrid.getByRole('columnheader').count()) === 8 &&
+      (await assignmentGrid.locator('.schedule-grid-shift').count()) > 0,
+    'Dashboard pivots stored assignments into one employee row and seven day columns without another backend endpoint',
+  )
   const weekBFilled = await metricValue('Filled positions').innerText()
 
   await mainButton(page, 'Previous week').click()
@@ -943,6 +951,10 @@ async function journeyDashboardAndWorkforcePlanning(page) {
   await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
   await page.getByText(/No shifts are prepared for this week yet/).waitFor({ timeout: 10000 })
   check(true, 'an unprepared week is shown honestly on the dashboard - zero stored shifts, not an error')
+  check(
+    (await assignmentGrid.locator('.schedule-grid-shift').count()) === 0,
+    'the dashboard grid stays visibly empty for an unprepared week and never creates shifts while loading',
+  )
 
   const weekC = await backendJson('/api/schedule/weeks/2026-10-05')
   check(weekC.shifts.length === 0, 'browsing the dashboard for a never-prepared week never prepares it')

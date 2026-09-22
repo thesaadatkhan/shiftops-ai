@@ -9,8 +9,73 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { describeError, fetchWeekAnalytics } from './analytics.js'
+import { EMPLOYEES_URL } from './employees.js'
 import MetricCard from './MetricCard.jsx'
+import { fetchWeekSchedule } from './schedule.js'
 import { friendlyDate } from './shiftPicker.js'
+
+const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+function shiftBlockClass(hall) {
+  return `schedule-grid-shift hall-${hall.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+}
+
+async function fetchWeekEmployees(weekStart) {
+  const response = await fetch(`${EMPLOYEES_URL}?week_start=${encodeURIComponent(weekStart)}`)
+  if (!response.ok) throw new Error(`Backend responded with status ${response.status}`)
+  const data = await response.json()
+  if (!data || !Array.isArray(data.employees)) {
+    throw new Error('Employee response did not have the expected shape.')
+  }
+  return data.employees
+}
+
+function WeeklyScheduleGrid({ employees, shifts, weekStart }) {
+  const shiftsByWorkerAndDay = new Map()
+  for (const shift of shifts) {
+    const date = shift.start_datetime.split(' ')[0]
+    for (const worker of shift.assigned_employees) {
+      const key = `${worker.employee_code}:${date}`
+      shiftsByWorkerAndDay.set(key, [...(shiftsByWorkerAndDay.get(key) || []), shift])
+    }
+  }
+  const days = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(`${weekStart}T12:00:00`)
+    date.setDate(date.getDate() + index)
+    return date.toISOString().slice(0, 10)
+  })
+
+  return (
+    <section className="dashboard-section weekly-schedule-section" aria-labelledby="weekly-schedule-heading">
+      <h3 id="weekly-schedule-heading">Weekly assignment grid</h3>
+      <p className="table-note">Read-only view of stored assignments. A leave marker means approved leave is on record; this response does not provide leave dates.</p>
+      <div className="weekly-schedule-grid" role="table" aria-label="Weekly employee assignment grid">
+        <div className="weekly-schedule-header" role="row">
+          <div role="columnheader">Worker</div>
+          {days.map((date, index) => <div key={date} role="columnheader">{WEEKDAY_LABELS[index]}</div>)}
+        </div>
+        {employees.map((employee) => (
+          <div key={employee.employee_code} className="weekly-schedule-row" role="row">
+            <div className="weekly-schedule-worker" role="rowheader">
+              <strong>{employee.full_name}</strong>
+              <span>{employee.employee_code}</span>
+              {employee.approved_leave_count > 0 && <span className="weekly-status-indicator" title="Approved leave on record" aria-label="Approved leave on record">Leave</span>}
+            </div>
+            {days.map((date) => (
+              <div key={date} className="weekly-schedule-day" role="cell">
+                {(shiftsByWorkerAndDay.get(`${employee.employee_code}:${date}`) || []).map((shift) => (
+                  <div key={shift.id} className={shiftBlockClass(shift.hall)} title={`${shift.hall}, ${shift.start_datetime.slice(11)}–${shift.end_datetime.slice(11)}`}>
+                    <span>{shift.hall}</span><small>{shift.start_datetime.slice(11, 16)}</small>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
 
 function ProgressBar({ percentage }) {
   const clamped = Math.max(0, Math.min(100, percentage))
@@ -33,9 +98,13 @@ export default function Dashboard({ weekStart }) {
     const token = ++requestToken.current
     setState((current) => ({ status: 'loading', data: current.data, error: null }))
     try {
-      const data = await fetchWeekAnalytics(weekStart)
+      const [data, schedule, employees] = await Promise.all([
+        fetchWeekAnalytics(weekStart),
+        fetchWeekSchedule(weekStart),
+        fetchWeekEmployees(weekStart),
+      ])
       if (token === requestToken.current) {
-        setState({ status: 'success', data, error: null })
+        setState({ status: 'success', data: { ...data, schedule, employees }, error: null })
       }
     } catch (error) {
       if (token === requestToken.current) {
@@ -67,7 +136,7 @@ export default function Dashboard({ weekStart }) {
     )
   }
 
-  const { coverage, workforce } = state.data
+  const { coverage, workforce, schedule, employees } = state.data
 
   return (
     <div className="dashboard-view">
@@ -102,6 +171,8 @@ export default function Dashboard({ weekStart }) {
           </div>
         </section>
       )}
+
+      <WeeklyScheduleGrid employees={employees} shifts={schedule.shifts} weekStart={weekStart} />
 
       <section className="dashboard-section">
         <h3>Workforce</h3>
@@ -165,4 +236,3 @@ export default function Dashboard({ weekStart }) {
     </div>
   )
 }
-

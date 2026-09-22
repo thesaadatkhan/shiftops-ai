@@ -688,6 +688,82 @@
   color: var(--text-h);
 }
 
+.weekly-schedule-grid {
+  min-width: 760px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.weekly-schedule-header,
+.weekly-schedule-row {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.45fr) repeat(7, minmax(76px, 1fr));
+}
+
+.weekly-schedule-header {
+  background: var(--surface-muted);
+  color: var(--text-h);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.weekly-schedule-header > div,
+.weekly-schedule-worker,
+.weekly-schedule-day {
+  min-width: 0;
+  padding: var(--space-2);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.weekly-schedule-header > div:last-child,
+.weekly-schedule-day:last-child { border-right: none; }
+.weekly-schedule-row:last-child > div { border-bottom: none; }
+
+.weekly-schedule-worker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-h);
+  font-size: 12px;
+}
+
+.weekly-schedule-worker strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.weekly-schedule-worker > span:not(.weekly-status-indicator) { color: var(--text); }
+
+.weekly-status-indicator {
+  padding: 2px 6px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-pill);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.weekly-schedule-day { display: grid; align-content: start; gap: 3px; min-height: 42px; }
+
+.schedule-grid-shift {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 5px;
+  border-radius: var(--radius-sm);
+  color: var(--text-h);
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.schedule-grid-shift small { color: inherit; font-size: 10px; opacity: .78; }
+.hall-andromeda { background: var(--accent-bg); }.hall-capella { background: var(--social-bg); }.hall-vega { background: var(--success-bg); }.hall-helix { background: var(--surface-muted); }.hall-sirius { background: var(--error-bg); }
+
+@media (max-width: 900px) {
+  .weekly-schedule-section { overflow-x: auto; padding-bottom: var(--space-2); }
+}
+
 .metric-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
