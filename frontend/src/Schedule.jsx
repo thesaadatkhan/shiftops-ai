@@ -26,7 +26,7 @@ import {
   rejectProposal,
   replaceAssignment,
 } from './schedule.js'
-import { friendlyDate, shiftTimeLabel } from './shiftPicker.js'
+import { friendlyDate, friendlyTime, shiftTimeLabel } from './shiftPicker.js'
 
 const HALL_ORDER = ['Andromeda', 'Capella', 'Vega', 'Helix', 'Sirius']
 
@@ -75,6 +75,13 @@ function weekdayLabel(date) {
   return new Date(`${date}T12:00:00`).toLocaleDateString('en-US', { weekday: 'short' })
 }
 
+function compactGridTimeLabel(shift) {
+  const start = splitDateTime(shift.start_datetime)
+  const end = splitDateTime(shift.end_datetime)
+  const separator = start.date === end.date ? '–' : ' → '
+  return `${friendlyTime(start.time)}${separator}${friendlyTime(end.time)}`
+}
+
 function ScheduleShiftGrid({ shifts, onAssign, onReplace, actionDisabled }) {
   const byDay = groupByDayThenHall(shifts)
   const dates = [...byDay.keys()].sort()
@@ -111,7 +118,7 @@ function ScheduleShiftGrid({ shifts, onAssign, onReplace, actionDisabled }) {
                           aria-expanded={isOpen}
                           onClick={() => toggleMenu(shift)}
                         >
-                          <span>{shiftTimeLabel(shift)}</span>
+                          <span>{compactGridTimeLabel(shift)}</span>
                           <small>{shift.covered ? `Covered: ${assignedNames}` : `${shift.required_staff - shift.assigned_count} open`}</small>
                         </button>
                         {isOpen && (

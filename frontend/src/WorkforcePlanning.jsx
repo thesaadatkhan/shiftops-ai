@@ -13,7 +13,6 @@ import { useEffect, useRef, useState } from 'react'
 
 import { describeError, fetchWeekAnalytics, workforceScenario } from './analytics.js'
 import MetricCard from './MetricCard.jsx'
-import { friendlyDate } from './shiftPicker.js'
 
 const DEFAULT_HOURS_PER_WORKER = 20
 
@@ -88,10 +87,6 @@ export default function WorkforcePlanning({ weekStart }) {
 
   return (
     <div className="workforce-planning-view">
-      <p className="reporting-period">
-        Reporting week: {friendlyDate(coverage.week_start)} – {friendlyDate(coverage.week_end)}
-      </p>
-
       <section className="dashboard-section">
         <h3>Current operational feasibility</h3>
         {coverage.shift_count === 0 ? (
@@ -180,4 +175,3 @@ export default function WorkforcePlanning({ weekStart }) {
     </div>
   )
 }
-

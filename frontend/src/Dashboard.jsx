@@ -12,7 +12,6 @@ import { describeError, fetchWeekAnalytics } from './analytics.js'
 import { EMPLOYEES_URL } from './employees.js'
 import MetricCard from './MetricCard.jsx'
 import { fetchWeekSchedule } from './schedule.js'
-import { friendlyDate } from './shiftPicker.js'
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -141,10 +140,6 @@ export default function Dashboard({ weekStart }) {
 
   return (
     <div className="dashboard-view">
-      <p className="reporting-period">
-        Reporting week: {friendlyDate(coverage.week_start)} – {friendlyDate(coverage.week_end)}
-      </p>
-
       <div className="dashboard-summary-grid">
         {coverage.shift_count === 0 ? (
           <section className="dashboard-section"><h3>Coverage</h3><p className="table-note">
@@ -184,7 +179,7 @@ export default function Dashboard({ weekStart }) {
           <MetricCard
             label="Active & ready workers"
             value={`${workforce.active_and_timetable_ready_workers} of ${workforce.total_workers} total`}
-            note={`${workforce.active_workers} active; ${workforce.timetable_ready_workers} timetable-ready.`}
+            note={`${workforce.active_workers} workers are currently active.`}
           />
           <MetricCard
             label="Assigned hours"
@@ -219,7 +214,7 @@ export default function Dashboard({ weekStart }) {
               <tr>
                 <th>Worker</th>
                 <th>Status</th>
-                <th>Timetable ready</th>
+                <th>Availability data</th>
                 <th>Weekly limit</th>
                 <th>Assigned hours</th>
                 <th>Remaining capacity</th>
@@ -233,7 +228,7 @@ export default function Dashboard({ weekStart }) {
                     {worker.full_name} ({worker.employee_code})
                   </td>
                   <td>{worker.is_active ? 'Active' : 'Inactive'}</td>
-                  <td>{worker.scheduling_ready ? 'Yes' : 'No'}</td>
+                  <td>{worker.scheduling_ready ? 'Complete' : 'Needs review'}</td>
                   <td>{worker.weekly_hour_limit}</td>
                   <td>{worker.assigned_hours}</td>
                   <td>{worker.remaining_capacity_hours}</td>

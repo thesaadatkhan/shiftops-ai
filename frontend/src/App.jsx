@@ -22,32 +22,27 @@ const NAV_ITEMS = [
 const SECTION_CONTENT = {
   dashboard: {
     title: 'Dashboard',
-    description:
-      'Coverage and workforce metrics for the selected reporting week, computed from stored shifts, assignments and current workforce records.',
+    description: 'Weekly coverage and staffing at a glance.',
   },
   employees: {
     title: 'Employees',
-    description: 'Synthetic student workers, their course loads, and approved leave.',
+    description: 'Manage workers, class schedules, capacity, and leave.',
   },
   schedule: {
     title: 'Schedule',
-    description:
-      'The stored schedule for the selected week: every prepared shift, who is assigned, and what remains uncovered. Generate, review, and approve a proposal from here too.',
+    description: 'Review shifts, coverage gaps, and schedule proposals.',
   },
   coverage: {
     title: 'Coverage',
-    description:
-      'Select a stored shift to see which workers are deterministically eligible to cover it, and why others are not.',
+    description: 'Check who can cover a shift and understand any conflicts.',
   },
   'workforce-planning': {
     title: 'Workforce Planning',
-    description:
-      'Current operational feasibility for the selected week, plus an aggregate, lower-bound workforce-size scenario calculator - not a feasibility guarantee.',
+    description: 'Compare scheduled demand with theoretical staffing capacity.',
   },
   'ai-assistant': {
     title: 'AI Assistant',
-    description:
-      'Describe a scheduling problem in plain language and the agent will investigate using the same deterministic backend data as the rest of this app. It can propose a specific replacement or fill, but nothing changes until you explicitly approve it.',
+    description: 'Investigate scheduling questions and prepare changes for your approval.',
   },
 }
 
@@ -70,8 +65,12 @@ function App() {
       <aside className="sidebar">
         <h1 className="app-title">
           <span className="app-mark"><AppIcon name="logo" /></span>
-          ShiftOps AI
+          <span>
+            ShiftOps
+            <small>Scheduling workspace</small>
+          </span>
         </h1>
+        <p className="sidebar-label">Workspace</p>
         <nav>
           <ul>
             {NAV_ITEMS.map((item) => (
@@ -91,6 +90,10 @@ function App() {
             ))}
           </ul>
         </nav>
+        <div className="sidebar-footer">
+          <span><i /> Demo environment</span>
+          <small>Synthetic workforce data</small>
+        </div>
       </aside>
 
       <main className={activeSection === 'ai-assistant' ? 'main-content ai-assistant-page' : 'main-content'}>

@@ -880,7 +880,7 @@ function EmployeeList({ weekStart }) {
               <tr>
                 <th>Employee</th>
                 <th>Worker status</th>
-                <th>Timetable</th>
+                <th>Class schedule</th>
                 <th>Weekly hours</th>
                 <th>Approved leave</th>
                 <th>Actions</th>
@@ -897,7 +897,7 @@ function EmployeeList({ weekStart }) {
                     <strong>{employee.is_active ? 'Active' : 'Inactive'}</strong>
                     <span className="employee-cell-detail">{studentTypeLabel(employee)}</span>
                   </td>
-                  <td data-label="Timetable">
+                  <td data-label="Class schedule">
                     <strong>{timetableStatusDisplay(employee)}</strong>
                     <span className="employee-cell-detail">
                       {employee.class_block_count} blocks · {employee.weekly_class_hours} h class

@@ -8,7 +8,7 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
-  --radius-sm: 6px;
+  --radius-sm: 7px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-pill: 999px;
@@ -18,43 +18,43 @@
   --font-lg: 1.125rem;
   --font-xl: 1.5rem;
 
-  --text: #62596e;
-  --text-h: #19151f;
-  --bg: #fbfafc;
+  --text: #5f6b7a;
+  --text-h: #172033;
+  --bg: #f6f8fb;
   --surface: #ffffff;
-  --surface-muted: #f6f4ef;
-  --surface-accent: #fbf6ff;
-  --border: #e3dfe8;
-  --border-strong: #d5cede;
+  --surface-muted: #f8fafc;
+  --surface-accent: #eff6ff;
+  --border: #e3e8ef;
+  --border-strong: #cbd5e1;
   --code-bg: var(--surface-muted);
   /* Paired with white --accent-contrast: this deeper purple clears 4.5:1
      for primary-button labels, including the Schedule confirmation modals. */
-  --accent: #9333ea;
-  --accent-hover: #7e22ce;
-  --accent-bg: rgba(170, 59, 255, 0.09);
-  --accent-border: rgba(170, 59, 255, 0.38);
-  --social-bg: rgba(98, 89, 110, 0.07);
-  --success-text: #15803d;
-  --success-bg: rgba(34, 197, 94, 0.11);
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-bg: #eff6ff;
+  --accent-border: #bfdbfe;
+  --social-bg: #f1f5f9;
+  --success-text: #047857;
+  --success-bg: #ecfdf5;
   --error-text: #b91c1c;
   --error-bg: rgba(239, 68, 68, 0.1);
   /* Text color placed ON a solid --accent fill (a primary button) - kept as
      its own token rather than assuming white, because the dark-mode accent
      is a light lavender that would fail contrast against white text. */
   --accent-contrast: #fff;
-  --shadow-xs: 0 1px 2px rgba(35, 24, 48, 0.06);
-  --shadow-sm: 0 4px 14px rgba(35, 24, 48, 0.07), 0 1px 3px rgba(35, 24, 48, 0.05);
-  --shadow-md: 0 14px 34px rgba(35, 24, 48, 0.12), 0 3px 8px rgba(35, 24, 48, 0.06);
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 4px 16px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 18px 42px rgba(15, 23, 42, 0.12), 0 3px 8px rgba(15, 23, 42, 0.05);
   --shadow: var(--shadow-sm);
   --dialog-width: 680px;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
+  --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --heading: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
   font: 16px/1.5 var(--sans);
-  letter-spacing: 0.08px;
-  color-scheme: light dark;
+  letter-spacing: -0.005em;
+  color-scheme: light;
   color: var(--text);
   background: var(--bg);
   font-synthesis: none;
@@ -64,39 +64,6 @@
 
   @media (max-width: 1024px) {
     font-size: 16px;
-  }
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #15151b;
-    --surface: #1d1e26;
-    --surface-muted: #23242d;
-    --surface-accent: #23172d;
-    --border: #30323d;
-    --border-strong: #414451;
-    --code-bg: var(--surface-muted);
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(255, 255, 255, 0.06);
-    --success-text: #4ade80;
-    --success-bg: rgba(74, 222, 128, 0.15);
-    --error-text: #f87171;
-    --error-bg: rgba(248, 113, 113, 0.15);
-    /* The dark-mode accent is a light lavender - dark text keeps a primary
-       button's label readable, where white text would not. */
-    --accent-contrast: #1a0b2e;
-    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.24);
-    --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.25);
-    --shadow-md: 0 18px 38px rgba(0, 0, 0, 0.36);
-    --shadow: var(--shadow-sm);
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
   }
 }
 
@@ -119,7 +86,7 @@ body {
 h1,
 h2 {
   font-family: var(--heading);
-  font-weight: 500;
+  font-weight: 650;
   color: var(--text-h);
 }
 
@@ -170,7 +137,7 @@ button {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 38px;
+  min-height: 36px;
   font: inherit;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--border);
@@ -178,14 +145,14 @@ button {
   background: var(--surface);
   color: var(--text-h);
   cursor: pointer;
-  box-shadow: var(--shadow-xs);
+  box-shadow: none;
   transition: box-shadow 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
 }
 
 button:hover:not(:disabled) {
   border-color: var(--accent-border);
   background: var(--surface-accent);
-  box-shadow: var(--shadow-sm);
+  box-shadow: none;
 }
 
 button:disabled {
@@ -222,4 +189,16 @@ select:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

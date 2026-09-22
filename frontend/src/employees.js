@@ -30,11 +30,11 @@ export function studentTypeLabel(employee) {
 // This is the readiness of the week on screen. An individual semester's own
 // confirmation is a separate thing, shown per semester in the details view.
 export const TIMETABLE_LABELS = {
-  missing: 'Not set up',
-  outside_period: 'Other semester only',
-  unconfirmed: 'Awaiting confirmation',
-  partial: 'Part of week',
-  confirmed: 'Confirmed',
+  missing: 'No schedule added',
+  outside_period: 'Outside this week',
+  unconfirmed: 'Needs review',
+  partial: 'Partial week',
+  confirmed: 'Current',
 }
 
 export function timetableLabel(status) {
@@ -52,7 +52,7 @@ export function timetableLabel(status) {
 export function timetableStatusDisplay(employee) {
   const label = timetableLabel(employee.timetable_status)
   if (employee.timetable_status === 'confirmed' && !employee.scheduling_ready) {
-    return `${label} (provisional dates - not scheduling-ready)`
+    return 'Needs date review'
   }
   return label
 }

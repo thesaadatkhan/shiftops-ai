@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 
+import AppIcon from './AppIcon.jsx'
 import {
   ApiError,
   approveProposal,
@@ -38,14 +39,22 @@ function roleClass(role) {
 }
 
 function TranscriptMessage({ message }) {
+  const supervisor = message.role === 'supervisor'
   return (
     <div className={roleClass(message.role)}>
-      <div className="agent-message-meta">
-        <span className="agent-message-role">{roleLabel(message.role)}</span>
+      {!supervisor && (
+        <div className="agent-avatar" aria-hidden="true">
+          <AppIcon name="assistant" />
+        </div>
+      )}
+      <div className="agent-message-body">
+        <div className="agent-message-meta">
+          <span className="agent-message-role">{roleLabel(message.role)}</span>
+        </div>
+        {/* Still plain text and escaped by React. Formatting markers are
+            normalized for readability; model output is never rendered as HTML. */}
+        <div className="agent-message-content">{transcriptText(message)}</div>
       </div>
-      {/* Still plain text and escaped by React. Formatting markers are
-          normalized for readability; model output is never rendered as HTML. */}
-      <div className="agent-message-content">{transcriptText(message)}</div>
     </div>
   )
 }
@@ -61,11 +70,16 @@ const GUIDE_PROMPTS = [
 function AssistantGuide({ onChoosePrompt, compact = false }) {
   return (
     <div className={compact ? 'agent-guide agent-guide-compact' : 'agent-guide'}>
-      {!compact && <h3 id="agent-start-title">What can I help with?</h3>}
-      <p>
-        This assistant handles one shift or worker at a time. It always proposes a change for you to approve — it never
-        assigns or edits anything on its own. For week-wide or hall-wide views, use Coverage or Schedule.
-      </p>
+      {!compact && <div className="agent-welcome-mark"><AppIcon name="assistant" /></div>}
+      {!compact && <h3 id="agent-start-title">How can I help?</h3>}
+      {compact ? (
+        <p>
+          This assistant handles one shift or worker at a time. It can investigate and prepare a change, but you always
+          approve it.
+        </p>
+      ) : (
+        <p>Ask about a worker or shift. I can investigate availability and prepare a change, but you always approve it.</p>
+      )}
       <div className="agent-starters">
         {GUIDE_PROMPTS.map((prompt) => (
           <button key={prompt} type="button" onClick={() => onChoosePrompt(prompt)}>
@@ -629,7 +643,8 @@ export default function AIAssistant() {
   return (
     <div className="agent-assistant">
       <div className="agent-toolbar">
-        <button type="button" onClick={startNewTask} disabled={anyBusy}>
+        <button type="button" className="agent-new-task" onClick={startNewTask} disabled={anyBusy}>
+          <AppIcon name="plus" />
           Start new task
         </button>
         {task && (
@@ -639,7 +654,7 @@ export default function AIAssistant() {
         )}
         {task && (
           <button type="button" className="agent-help-button" aria-label="Show assistant help" onClick={() => setHelpOpen(true)}>
-            ?
+            <AppIcon name="help" />
           </button>
         )}
       </div>
@@ -725,8 +740,14 @@ export default function AIAssistant() {
           disabled={anyBusy || sendBlocked}
         />
         <div className="schedule-actions">
-          <button type="submit" disabled={anyBusy || sendBlocked || !input.trim()}>
-            {busyMessage ? 'Working…' : 'Send'}
+          <button
+            type="submit"
+            className="agent-send-button"
+            aria-label={busyMessage ? 'Working' : 'Send'}
+            disabled={anyBusy || sendBlocked || !input.trim()}
+          >
+            <AppIcon name="send" />
+            <span className="sr-only">{busyMessage ? 'Working…' : 'Send'}</span>
           </button>
         </div>
       </form>

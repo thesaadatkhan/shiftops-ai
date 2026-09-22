@@ -36,6 +36,14 @@ const PATHS = {
       <path d="m19 16 .7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16Z" />
     </>
   ),
+  plus: <path d="M12 5v14M5 12h14" />,
+  send: <path d="M12 19V5m-6 6 6-6 6 6" />,
+  help: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.8 9a2.4 2.4 0 0 1 4.6.9c0 1.8-2.4 2-2.4 3.6M12 17h.01" />
+    </>
+  ),
   'chevron-left': <path d="m15 18-6-6 6-6" />,
   'chevron-right': <path d="m9 18 6-6-6-6" />,
 }
