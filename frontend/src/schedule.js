@@ -191,15 +191,51 @@ function isValidReview(review) {
     review.shifts.every(
       (shift) =>
         typeof shift.id === 'number' &&
+        typeof shift.hall === 'string' &&
+        typeof shift.start_datetime === 'string' &&
+        typeof shift.end_datetime === 'string' &&
         typeof shift.required_staff === 'number' &&
         Array.isArray(shift.existing_assignments) &&
         Array.isArray(shift.proposed_assignments) &&
+        shift.existing_assignments.every(isValidReviewWorker) &&
+        shift.proposed_assignments.every(isValidReviewWorker) &&
         typeof shift.filled_count === 'number' &&
         typeof shift.excess_assignments === 'number' &&
         typeof shift.covered === 'boolean' &&
         typeof shift.uncovered_positions === 'number',
     )
   )
+}
+
+function isValidReviewWorker(worker) {
+  return (
+    typeof worker === 'object' && worker !== null &&
+    typeof worker.employee_id === 'number' &&
+    typeof worker.employee_code === 'string' &&
+    typeof worker.full_name === 'string'
+  )
+}
+
+// Display helpers work exclusively from the immutable stored review snapshot.
+export function proposalReviewFilter(shift, filter) {
+  if (filter === 'uncovered') return shift.uncovered_positions > 0
+  if (filter === 'all') return true
+  return shift.proposed_assignments.length > 0
+}
+
+export function groupProposalReviewShifts(shifts, filter) {
+  const dates = new Map()
+  for (const shift of shifts.filter((item) => proposalReviewFilter(item, filter))) {
+    const date = shift.start_datetime.split(' ')[0]
+    if (!dates.has(date)) dates.set(date, new Map())
+    const halls = dates.get(date)
+    if (!halls.has(shift.hall)) halls.set(shift.hall, [])
+    halls.get(shift.hall).push(shift)
+  }
+  return [...dates.entries()].map(([date, halls]) => ({
+    date,
+    halls: [...halls.entries()].map(([hall, groupedShifts]) => ({ hall, shifts: groupedShifts })),
+  }))
 }
 
 function reviewProposedPairs(review) {

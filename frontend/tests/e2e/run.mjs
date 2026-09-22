@@ -472,6 +472,25 @@ async function journeyGenerateReviewApprove(page) {
   await page.getByText(/^Proposal #\d+ — pending$/).waitFor({ timeout: 15000 })
   check(true, 'Generate Schedule produced a pending proposal')
 
+  const proposalPanel = page.getByRole('region', { name: 'Schedule proposal' })
+  await proposalPanel.getByLabel('Expected coverage summary').waitFor()
+  check(
+    await proposalPanel.getByText('Required', { exact: true }).isVisible() &&
+      await proposalPanel.getByText('Expected coverage', { exact: true }).isVisible(),
+    'the proposal review opens with a concise required/existing/proposed/uncovered coverage summary',
+  )
+  const filters = proposalPanel.getByRole('group', { name: 'Proposal shift filter' })
+  check(await filters.getByRole('button', { name: 'Changes', exact: true }).getAttribute('aria-pressed') === 'true', 'proposal review defaults to the Changes filter')
+  await filters.getByRole('button', { name: 'Uncovered', exact: true }).click()
+  await proposalPanel.getByText(/Why uncovered/, { exact: true }).first().waitFor()
+  check(true, 'the Uncovered filter reveals explanations only for positions that remain open')
+  await filters.getByRole('button', { name: 'All shifts', exact: true }).click()
+  await proposalPanel.locator('.proposal-shift-collapsed').first().waitFor()
+  check(true, 'the All shifts review keeps unchanged covered shifts collapsed')
+  await filters.getByRole('button', { name: 'Changes', exact: true }).click()
+  await proposalPanel.locator('.proposal-technical-details').first().locator('summary').click()
+  check(await proposalPanel.getByText(/Shift #\d+\. Current:/).first().isVisible(), 'worker names are primary and technical IDs are available as secondary details')
+
   await page.getByRole('button', { name: 'Approve', exact: true }).click()
   await page.getByRole('alertdialog', { name: 'Confirm approval' }).waitFor()
   check(true, 'clicking Approve opens the confirmation panel, not an immediate write')

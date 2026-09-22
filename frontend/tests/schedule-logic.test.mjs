@@ -27,6 +27,8 @@ import {
   createProposal,
   fetchProposalsForWeek,
   fetchWeekSchedule,
+  groupProposalReviewShifts,
+  proposalReviewFilter,
   rejectProposal,
   replaceAssignment,
   describeError,
@@ -84,9 +86,12 @@ const validReview = {
   shifts: [
     {
       id: 1,
+      hall: 'Andromeda',
+      start_datetime: '2026-10-05 08:00',
+      end_datetime: '2026-10-05 13:00',
       required_staff: 1,
       existing_assignments: [],
-      proposed_assignments: [{ employee_id: 1, employee_code: 'SW-001' }],
+      proposed_assignments: [{ employee_id: 1, employee_code: 'SW-001', full_name: 'A' }],
       filled_count: 1,
       excess_assignments: 0,
       covered: true,
@@ -120,6 +125,33 @@ const validProposal = {
     },
   ],
 }
+
+const unchangedCoveredReviewShift = {
+  ...validReview.shifts[0],
+  id: 2,
+  hall: 'Capella',
+  start_datetime: '2026-10-06 08:00',
+  end_datetime: '2026-10-06 13:00',
+  existing_assignments: [{ employee_id: 2, employee_code: 'SW-002', full_name: 'B' }],
+  proposed_assignments: [],
+}
+const uncoveredReviewShift = {
+  ...validReview.shifts[0],
+  id: 3,
+  hall: 'Capella',
+  start_datetime: '2026-10-06 14:00',
+  end_datetime: '2026-10-06 19:00',
+  proposed_assignments: [],
+  filled_count: 0,
+  covered: false,
+  uncovered_positions: 1,
+}
+
+check(proposalReviewFilter(validReview.shifts[0], 'changes'), 'Changes includes shifts with proposed workers')
+check(!proposalReviewFilter(unchangedCoveredReviewShift, 'changes'), 'Changes omits unchanged covered shifts')
+check(proposalReviewFilter(uncoveredReviewShift, 'uncovered'), 'Uncovered includes only shifts still needing positions')
+const reviewGroups = groupProposalReviewShifts([validReview.shifts[0], unchangedCoveredReviewShift, uncoveredReviewShift], 'all')
+check(reviewGroups.length === 2 && reviewGroups[1].halls[0].hall === 'Capella' && reviewGroups[1].halls[0].shifts.length === 2, 'review shifts group by date and hall without changing the stored snapshot')
 
 // ---- three-way error typing (Codex review finding 5) --------------------
 

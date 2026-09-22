@@ -20,6 +20,7 @@ import {
   describeError,
   fetchProposalsForWeek,
   fetchWeekSchedule,
+  groupProposalReviewShifts,
   isOutcomeUncertain,
   prepareWeek,
   rejectProposal,
@@ -70,6 +71,52 @@ function upsertProposal(list, updated) {
   return copy
 }
 
+function ProposalReview({ review, filter, onFilterChange }) {
+  const groups = groupProposalReviewShifts(review.shifts, filter)
+  return (
+    <>
+      <div className="proposal-summary" aria-label="Expected coverage summary">
+        <div><span>Required</span><strong>{review.summary.required_positions}</strong></div>
+        <div><span>Existing</span><strong>{review.summary.existing_filled_positions}</strong></div>
+        <div><span>Proposed</span><strong>{review.summary.proposed_filled_positions}</strong></div>
+        <div><span>Uncovered</span><strong>{review.summary.uncovered_positions}</strong></div>
+        <div className="proposal-coverage"><span>Expected coverage</span><strong>{review.summary.total_filled_positions} / {review.summary.required_positions}</strong></div>
+      </div>
+      {review.summary.excess_assignments > 0 && <p className="table-note">{review.summary.excess_assignments} existing overstaffed position{review.summary.excess_assignments === 1 ? '' : 's'} remain visible in the full review.</p>}
+      <div className="proposal-filter" role="group" aria-label="Proposal shift filter">
+        {[['changes', 'Changes'], ['uncovered', 'Uncovered'], ['all', 'All shifts']].map(([value, label]) => (
+          <button key={value} type="button" className={filter === value ? 'is-selected' : ''} aria-pressed={filter === value} onClick={() => onFilterChange(value)}>{label}</button>
+        ))}
+      </div>
+      <div className="proposal-review-list" aria-live="polite">
+        {groups.length === 0 ? <p className="table-note">No shifts match this filter.</p> : groups.map(({ date, halls }) => (
+          <section key={date} className="proposal-review-date">
+            <h4>{friendlyDate(date)}</h4>
+            {halls.map(({ hall, shifts }) => (
+              <div key={hall} className="proposal-review-hall">
+                <h5>{hall}</h5>
+                {shifts.map((shift) => {
+                  const unchangedCovered = shift.proposed_assignments.length === 0 && shift.uncovered_positions === 0
+                  const content = <>
+                    <p className="proposal-shift-title">{shiftTimeLabel(shift)} <span>{shift.filled_count} of {shift.required_staff} filled{shift.uncovered_positions > 0 ? ` · ${shift.uncovered_positions} uncovered` : ''}</span></p>
+                    <div className="proposal-workers">
+                      <p><strong>Current</strong> {shift.existing_assignments.length ? shift.existing_assignments.map((worker) => worker.full_name).join(', ') : 'Nobody assigned'}</p>
+                      {shift.proposed_assignments.length > 0 && <p><strong>Proposed</strong> {shift.proposed_assignments.map((worker) => worker.full_name).join(', ')}</p>}
+                    </div>
+                    {shift.uncovered_positions > 0 && <p className="proposal-uncovered"><strong>Why uncovered</strong> {(shift.uncovered_reasons || []).map((reason) => reason.detail).join('; ') || 'No explanation was recorded.'}</p>}
+                    <details className="proposal-technical-details"><summary>Technical details</summary><p>Shift #{shift.id}. Current: {shift.existing_assignments.map((worker) => `${worker.employee_code} (#${worker.employee_id})`).join(', ') || 'none'}. Proposed: {shift.proposed_assignments.map((worker) => `${worker.employee_code} (#${worker.employee_id})`).join(', ') || 'none'}.</p></details>
+                  </>
+                  return unchangedCovered ? <details key={shift.id} className="proposal-shift proposal-shift-collapsed"><summary>{shiftTimeLabel(shift)} — unchanged and covered</summary>{content}</details> : <article key={shift.id} className="proposal-shift">{content}</article>
+                })}
+              </div>
+            ))}
+          </section>
+        ))}
+      </div>
+    </>
+  )
+}
+
 export default function Schedule({ weekStart }) {
   const [weekState, setWeekState] = useState({ status: 'loading', data: null, error: null })
   const [preparing, setPreparing] = useState(false)
@@ -87,6 +134,7 @@ export default function Schedule({ weekStart }) {
   const [decisionStatus, setDecisionStatus] = useState('idle') // idle | approving | rejecting
   const [decisionError, setDecisionError] = useState(null)
   const [decisionConflicts, setDecisionConflicts] = useState(null)
+  const [reviewFilter, setReviewFilter] = useState('changes')
 
   const [generateNotice, setGenerateNotice] = useState(null)
   // True only while a Generate request's outcome is genuinely unresolved -
@@ -678,8 +726,12 @@ export default function Schedule({ weekStart }) {
                 proposes {proposal.assignments.length} new assignment{proposal.assignments.length === 1 ? '' : 's'}.
               </p>
 
+              {review && <ProposalReview review={review} filter={reviewFilter} onFilterChange={setReviewFilter} />}
+
               {review ? (
-                <div className="table-note">
+                <details className="proposal-technical-details">
+                  <summary>Detailed coverage diagnostics</summary>
+                  <div className="table-note">
                   <p>
                     Coverage if approved: {review.summary.total_filled_positions} of{' '}
                     {review.summary.required_positions} required position(s) filled (
@@ -706,14 +758,15 @@ export default function Schedule({ weekStart }) {
                       </ul>
                     </>
                   )}
-                </div>
+                  </div>
+                </details>
               ) : (
                 <p className="table-note">
                   Detailed coverage review is not available for this proposal.
                 </p>
               )}
 
-              {proposal.assignments.length > 0 && (
+              {!review && proposal.assignments.length > 0 && (
                 <ul>
                   {proposal.assignments.map((row) => (
                     <li key={`${row.shift_id}-${row.employee_id}`}>
@@ -725,7 +778,7 @@ export default function Schedule({ weekStart }) {
               )}
 
               {proposal.status === 'pending' && !confirmingApproval && (
-                <div className="list-controls">
+                <div className="list-controls proposal-actions">
                   <button type="button" disabled={anyActionInFlight} onClick={openApprovalConfirm}>
                     Approve
                   </button>
