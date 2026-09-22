@@ -376,13 +376,18 @@ export default function AIAssistant() {
   const proposal = task && task.proposals.length > 0 ? task.proposals[0] : null
   const pendingProposal = proposal && proposal.status === 'pending' ? proposal : null
   const visibleMessages = task ? visibleTranscriptMessages(task.messages) : []
+  const busyMessage = decisionStatus !== 'idle' || sending
 
   useEffect(() => {
     const transcript = transcriptRef.current
     if (transcript && transcriptNearBottom.current) {
       transcript.scrollTop = transcript.scrollHeight
     }
-  }, [visibleMessages.length])
+  // The task response can also add a proposal or switch on the working
+  // notice without adding a visible transcript message. Treat either as new
+  // transcript content too, so it lands in view for a supervisor already at
+  // the newest message while still preserving an intentional scroll-up.
+  }, [visibleMessages.length, busyMessage, proposal?.id, proposal?.status])
 
   function trackTranscriptScroll(event) {
     const { scrollHeight, scrollTop, clientHeight } = event.currentTarget
@@ -609,11 +614,16 @@ export default function AIAssistant() {
     setDecisionBlocked(true)
   }
 
-  const busyMessage = decisionStatus !== 'idle' || sending
-
   function chooseGuidePrompt(prompt) {
     setInput(prompt)
     setHelpOpen(false)
+  }
+
+  function handleComposerKeyDown(event) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault()
+      event.currentTarget.form?.requestSubmit()
+    }
   }
 
   return (
@@ -681,18 +691,35 @@ export default function AIAssistant() {
                 {decisionStatus === 'idle' ? 'The assistant is working on your request…' : 'Updating the proposal…'}
               </p>
             )}
+
+            {sendError && (
+              <div className="agent-outcome agent-outcome-warning">
+                <p>{describeError(sendError)}</p>
+                {sendBlocked && (
+                  <button type="button" disabled={reconciling} onClick={reloadTask}>
+                    {reconciling ? 'Reloading…' : 'Reload / Reconcile'}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {!task && loadError && <p className="backend-status backend-status-error">{loadError}</p>}
       {!task && phase === 'loading' && <p className="backend-status backend-status-loading">Loading your active task…</p>}
+      {!task && busyMessage && (
+        <p className="backend-status backend-status-loading" role="status">
+          The assistant is working on your request…
+        </p>
+      )}
 
       <form className="agent-composer" onSubmit={handleSend}>
         <textarea
           aria-label="Message the AI Assistant"
           value={input}
           onChange={(event) => setInput(event.target.value)}
+          onKeyDown={handleComposerKeyDown}
           placeholder="e.g. Jordan called out for tonight's Capella shift. Find a replacement."
           rows={3}
           disabled={anyBusy || sendBlocked}
@@ -704,7 +731,7 @@ export default function AIAssistant() {
         </div>
       </form>
 
-      {sendError && (
+      {!task && sendError && (
         <div className="agent-outcome agent-outcome-warning">
           <p>{describeError(sendError)}</p>
           {sendBlocked && (

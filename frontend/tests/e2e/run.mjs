@@ -173,6 +173,11 @@ async function checkPrimaryConfirmation(button, description) {
   // A trial click waits for React to finish enabling the control without
   // performing its mutation, so the measured colors are the actionable one.
   await button.click({ trial: true })
+  // Buttons animate color/background for 150ms. Measuring immediately after
+  // a newly selected replacement can catch that animation between disabled
+  // and enabled colors, which is neither the actionable nor the resting
+  // contrast state this check is intended to verify.
+  await sleep(200)
   const result = await button.evaluate((element) => {
       const style = getComputedStyle(element)
       const luminance = (color) => {
@@ -411,6 +416,7 @@ async function main() {
     // ----------------------------------------------- Phase 9 increment 3: AI Assistant
     await journeyAgentInfoAndApprovedTrap(page)
     await journeyAgentHelpPanel(page)
+    await journeyAgentChatShellBehavior(page)
     await journeyAgentAmbiguousClarification(page)
     await journeyAgentNoCandidates(page)
     await journeyAgentCalloutApproveVerify(page)
@@ -1185,7 +1191,7 @@ async function journeyAgentHelpPanel(page) {
   await startNewAgentTask(page)
 
   await sendChat(page, 'How many hours has Taylor Brooks worked this week?')
-  await page.getByText(/worked this week/i).waitFor({ timeout: 15000 })
+  await page.getByText(/everything on their record remains approved/i).waitFor({ timeout: 15000 })
 
   await page.getByRole('button', { name: 'Show assistant help' }).click()
   const helpDialog = page.getByRole('dialog', { name: 'Assistant help' })
@@ -1204,6 +1210,87 @@ async function journeyAgentHelpPanel(page) {
   check(
     !(await helpDialog.isVisible()) && await chatTextarea(page).inputValue() === prompt,
     'choosing a help example closes the modal and fills, but does not send, the composer',
+  )
+}
+
+/** The immersive shell must contain its scrolling history, keep the composer
+ * fixed below it, surface asynchronous transcript additions, and retain the
+ * standard chat Enter/Shift+Enter convention. These are geometry and input
+ * checks against a real browser, not CSS assumptions. */
+async function journeyAgentChatShellBehavior(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  // Slow one real request enough to observe the transient working notice.
+  await page.route('**/api/agent/tasks', async (route) => {
+    await sleep(350)
+    await route.fallback()
+  })
+  await chatTextarea(page).fill("Jordan Rivera called out for tonight's Capella shift. Find a replacement.")
+  await chatTextarea(page).press('Enter')
+  const busyNotice = page.getByRole('status')
+  await busyNotice.waitFor()
+  const [busyBox, composerDuringBusy] = await Promise.all([
+    busyNotice.boundingBox(),
+    page.locator('.agent-composer').boundingBox(),
+  ])
+  check(
+    busyBox !== null && composerDuringBusy !== null && busyBox.y + busyBox.height <= composerDuringBusy.y,
+    'the working indicator appears in view above the pinned composer without manual scrolling',
+  )
+  await page.unroute('**/api/agent/tasks')
+  const proposalCard = page.locator('.agent-proposal-card')
+  await proposalCard.waitFor({ timeout: 15000 })
+  const [proposalBox, composerAfterProposal, transcriptAfterProposal] = await Promise.all([
+    proposalCard.boundingBox(),
+    page.locator('.agent-composer').boundingBox(),
+    page.locator('.agent-transcript').boundingBox(),
+  ])
+  check(
+    proposalBox !== null && composerAfterProposal !== null && transcriptAfterProposal !== null &&
+      proposalBox.y < composerAfterProposal.y && proposalBox.y + proposalBox.height > transcriptAfterProposal.y,
+    'a newly created proposal card is in view above the pinned composer',
+  )
+
+  await startNewAgentTask(page)
+  const composer = chatTextarea(page)
+  await composer.fill('How many hours has Taylor Brooks worked this week?')
+  await composer.press('Shift+Enter')
+  check(
+    (await composer.inputValue()).includes('\n') && (await page.locator('.agent-message-supervisor').count()) === 0,
+    'Shift+Enter inserts a composer newline without sending the message',
+  )
+  await composer.press('Enter')
+  await page.getByText(/everything on their record remains approved/i).waitFor({ timeout: 15000 })
+  check(true, 'Enter sends the composer message')
+
+  // Build a real long transcript, then scroll its own region. The page must
+  // not grow or move the composer with that history.
+  for (let index = 0; index < 8; index += 1) {
+    const assistantCount = await page.locator('.agent-message-assistant').count()
+    await sendChat(page, `How many hours has Taylor Brooks worked this week? (${index + 1})`)
+    await page.waitForFunction((count) => document.querySelectorAll('.agent-message-assistant').length > count, assistantCount)
+  }
+  const shellMetrics = await page.locator('.ai-assistant-page').evaluate((shell) => {
+    const transcript = shell.querySelector('.agent-transcript')
+    return {
+      shellHeight: shell.getBoundingClientRect().height,
+      viewportHeight: window.innerHeight,
+      pageScrollHeight: document.documentElement.scrollHeight,
+      transcriptOverflows: transcript.scrollHeight > transcript.clientHeight,
+    }
+  })
+  const composerBeforeScroll = await page.locator('.agent-composer').boundingBox()
+  await page.locator('.agent-transcript').evaluate((element) => {
+    element.scrollTop = 0
+    element.dispatchEvent(new Event('scroll'))
+  })
+  const composerAfterScroll = await page.locator('.agent-composer').boundingBox()
+  check(
+    shellMetrics.shellHeight === shellMetrics.viewportHeight && shellMetrics.pageScrollHeight <= shellMetrics.viewportHeight &&
+      shellMetrics.transcriptOverflows && composerBeforeScroll !== null && composerAfterScroll !== null &&
+      Math.abs(composerBeforeScroll.y - composerAfterScroll.y) < 1,
+    'long conversation history scrolls only inside the transcript while the composer remains pinned',
   )
 }
 
