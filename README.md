@@ -7,8 +7,11 @@ The application demonstrates how structured workforce data, constraint-based sch
 The planned AI product is a scheduling agent: ask it to find a replacement
 for a call-out, have it investigate eligible workers and propose a change,
 then approve the change and receive a verified result. Reliable backend rules
-validate every assignment. This workflow is required future work; the agent
-is not implemented yet.
+validate every assignment. The backend foundation for this (provider
+configuration, a deterministic tool registry, a bounded tool-calling loop,
+and task/proposal persistence) is implemented; the agent can investigate and
+create a pending proposal, but approval, execution, verification and the
+chat UI are still required future work.
 
 ## Project Status
 
@@ -81,10 +84,11 @@ ShiftOps AI is in early active development. It currently runs locally only and i
 - Synthetic data for the five residence halls: 30 student workers with class schedules, shift preferences and approved leave records, plus the 99 required weekly shifts derived from the halls' operating hours. The derivation is checked by a script that confirms the 489 weekly student-coverage hours with no gaps and no double coverage.
 - **Deterministic shift-eligibility logic**, with a Coverage screen in the interface: given a stored shift and worker, it decides whether that worker is eligible using only current stored records, and if not, exactly why. It checks the worker is active; that a CONFIRMED AND ACCEPTED (non-provisional) semester timetable covers every calendar date the shift touches (missing, unconfirmed, provisional/unaccepted or expired information does not establish availability - a schedule migrated with assumed dates is not coverage until a supervisor accepts them by confirming, and a deliberately confirmed, non-provisional "no classes" semester counts as coverage); that no recurring class, approved leave period or existing assignment overlaps the shift; and that adding the shift would not exceed the worker's weekly hour limit for the week its start falls in. Every applicable reason is returned, not just the first, and a preferred/low/neutral preference is reported as a fact, never as a reason a shift is unavailable. A read-only `GET /api/shifts/{shift_id}/coverage` answers "who can cover this shift", returning every worker's result plus the eligible subset, with an optional worker excluded from that subset (for replacing whoever is calling out); `GET /api/shifts` lists every stored shift for the screen's picker.
 - **The Coverage screen itself**, in the sidebar: pick a stored shift through a progressive selector - hall, then a readable weekday/date, then the matching shift's time - rather than scanning or typing a raw id. Times are friendly and 12-hour, a cross-midnight shift shows both of its dates, the stable id stays secondary, and the number of matching shifts is shown once a hall and date are chosen. Choosing a shift shows its eligible and ineligible workers in two separate tables. Ineligible rows show every reason the backend returned, in its own words; eligible rows show preference, assigned hours this week, projected hours if assigned, and the weekly limit, so a low-preference worker who clears every hard rule reads as plainly eligible. An "Exclude worker" picker (for a replacement or call-out) re-requests coverage naming a worker to leave out of the eligible list - it changes no stored record and makes no assignment, and an eligible-but-excluded worker is called out with a note rather than silently disappearing. If the excluded worker no longer exists, the screen offers "Clear exclusion and retry" rather than only a plain Retry that would resend the same refused request. The same hall/day/shift picker is used by Employee Details' general "Set a shift preference" action.
+- **Phase 9 increment 1 - AI scheduling agent backend foundation** (no chat UI yet). Provider configuration (`backend/ai_config.py`) reads `OPENAI_API_KEY` and an optional `OPENAI_MODEL` from the environment only, failing clearly before anything is written if the key is missing rather than attempting a request or leaving an orphaned task behind; no key is required to run the test suite. A deterministic tool registry (`backend/agent_tools.py`) wraps existing eligibility/reporting functions - resolving a worker or shift with explicit ambiguity handling, reading shift coverage, ranking eligible replacement candidates (preferred before neutral before low, then lower projected weekly hours, then employee code), inspecting an uncovered shift, and reading employee-hours facts - and exposes exactly one write, creating a PENDING proposal. That write computes its stored explanation entirely from those same deterministic facts (never from the model) and requires the proposed worker to be the authoritative top-ranked eligible candidate; at most one proposal is allowed per task, enforced in code and by a database constraint. There is no tool that can create leave, remove an assignment, edit a worker, or approve/execute anything. A provider-independent bounded tool-calling loop (`backend/agent_service.py`, `backend/agent_model.py`) validates every tool call, stops after a fixed maximum number of steps, and derives its result kind (`answer`/`clarification_required`/`blocked`/`proposal`) from what the tools actually returned rather than the model's own wording. New tables (`agent_tasks`, `agent_messages`, `agent_proposals`) persist the task, its factual transcript, and any proposal it produced. Three endpoints - `POST /api/agent/tasks`, `POST /api/agent/tasks/{id}/messages`, `GET /api/agent/tasks/{id}` - are the entire API surface for now.
 
 **Not yet implemented:**
 
-- The AI scheduling agent: multi-step investigation, replacement proposals, supervisor-approved execution, audit history and result verification
+- The AI scheduling agent's remaining work: the chat UI, supervisor approval/execution of a proposal, result verification, and an audit trail linking agent actions to Phase 7's assignment history
 - Cloud deployment
 - Active status affects only future eligibility, never past records. Deactivating a worker records that status and hides them from the default list view, and the eligibility logic above excludes inactive workers from eligible candidates for new assignments; it does not touch anything already recorded. Phase 7's schedule generator, proposal approval, and replacement workflow are implemented (see above), and a worker's historical assignments and coverage figures remain visible even after that worker later becomes inactive.
 
@@ -101,6 +105,8 @@ pip install -r requirements.txt
 python seed.py                       # once, on an empty database: loads the demo data
 uvicorn main:app --reload --port 8000
 ```
+
+The AI scheduling agent (Phase 9) additionally needs `OPENAI_API_KEY` set - copy `backend/.env.example` to `backend/.env` (gitignored) and fill in your own key. Optional: `OPENAI_MODEL` (defaults to `gpt-4o-mini`). Nothing else in the application, and no test, requires this key.
 
 **Frontend** (from `frontend/`):
 

@@ -257,6 +257,95 @@ SCHEMA_STATEMENTS = [
         migrated_at TEXT NOT NULL
     )
     """,
+    # Phase 9 increment 1: one row per supervisor-directed AI scheduling
+    # task. Deliberately a SEPARATE table from `schedule_proposals` (Phase
+    # 7) - a Phase 7 proposal is a whole-week, optimizer-generated batch of
+    # assignments; an agent task is one conversational investigation that
+    # may, at most, produce ONE single-shift `agent_proposals` row (see
+    # below). Reusing `schedule_proposals` for that would force an
+    # optimizer-shaped table to represent something it was never designed
+    # for. `request_text` is the supervisor's own words that started the
+    # task - a fact worth keeping, never fabricated. `step_count` is a
+    # plain counter of bounded-loop iterations consumed so far, for
+    # observability; it is not a limit by itself (the loop enforces its own
+    # `max_steps` argument at call time, see `agent_service.py`).
+    """
+    CREATE TABLE IF NOT EXISTS agent_tasks (
+        id INTEGER PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'open'
+            CHECK (status IN ('open', 'awaiting_approval', 'blocked', 'closed')),
+        request_text TEXT NOT NULL,
+        step_count INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    # The visible transcript only - never hidden chain-of-thought, and never
+    # a fabricated narration of "why" the model chose something. `role`
+    # distinguishes the supervisor's own words, the model's visible reply
+    # text, an outgoing tool call the model requested (name + the exact
+    # arguments used), and the tool's own factual result - the same
+    # deterministic backend facts `agent_tools.py` returns, never a second,
+    # looser summary of them. `sequence` is assigned by the caller (see
+    # `agent_service.py`) so a transcript reads back in the exact order it
+    # happened, independent of `id` reuse concerns.
+    """
+    CREATE TABLE IF NOT EXISTS agent_messages (
+        id INTEGER PRIMARY KEY,
+        task_id INTEGER NOT NULL REFERENCES agent_tasks(id),
+        created_at TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        role TEXT NOT NULL
+            CHECK (role IN ('supervisor', 'assistant', 'tool_call', 'tool_result')),
+        tool_name TEXT,
+        content TEXT NOT NULL,
+        UNIQUE (task_id, sequence)
+    )
+    """,
+    # The exact proposed scheduling action an agent task produced, if any -
+    # AT MOST ONE PER TASK, enforced here with `UNIQUE(task_id)` (Codex
+    # review: this was previously only an intended rule, enforced nowhere -
+    # `agent_tools.propose_replacement` also checks it explicitly, inside
+    # the same write-locked transaction as the insert, so the domain-level
+    # check and this constraint agree; the constraint is the backstop for
+    # any future code path that might bypass the domain check). `action_type`
+    # names only what is actually implemented (`replace_assignment`); a
+    # future increment adding another action type adds it to this CHECK
+    # list the same way `assignment_audit.action` already grew its own
+    # list, rather than this table speculatively allowing values nothing
+    # can yet produce. `outgoing_employee_id` is NULL for filling a
+    # currently-uncovered position (there is no outgoing worker to
+    # replace). `rationale` is a short, factual sentence computed entirely
+    # from deterministic backend data - preference, hours, ranking position
+    # - by `agent_tools.propose_replacement` itself; the model never
+    # supplies or influences this text (Codex review: an earlier version
+    # accepted and stored a model-authored rationale, which could assert
+    # anything). `execution_outcome`/`verification_outcome` and their
+    # timestamps exist now so this table needs no further migration when a
+    # later increment adds the actual execute-and-verify step; this
+    # increment leaves them NULL for every row it writes, because nothing
+    # here is ever approved or executed by this increment (see
+    # `agent_service.py`).
+    """
+    CREATE TABLE IF NOT EXISTS agent_proposals (
+        id INTEGER PRIMARY KEY,
+        task_id INTEGER NOT NULL REFERENCES agent_tasks(id),
+        created_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending', 'approved', 'rejected')),
+        decided_at TEXT,
+        action_type TEXT NOT NULL CHECK (action_type IN ('replace_assignment')),
+        shift_id INTEGER NOT NULL REFERENCES shifts(id),
+        outgoing_employee_id INTEGER REFERENCES employees(id),
+        incoming_employee_id INTEGER NOT NULL REFERENCES employees(id),
+        rationale TEXT NOT NULL,
+        executed_at TEXT,
+        execution_outcome TEXT,
+        verified_at TEXT,
+        verification_outcome TEXT,
+        UNIQUE (task_id)
+    )
+    """,
 ]
 
 # The fictional demo semester. It must contain the sample reporting week of

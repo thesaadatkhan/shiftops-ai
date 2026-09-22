@@ -570,6 +570,26 @@ The backend revalidates and applies an approved replacement atomically; the
 agent then reads back the assignment and coverage to confirm the outcome.
 Investigating and proposing a worker for an uncovered shift is also required.
 
+**Increment 1 status (backend foundation only - implemented):** provider
+configuration (`backend/ai_config.py`), the persistent task/message/proposal
+schema (`agent_tasks`/`agent_messages`/`agent_proposals`), a deterministic
+tool registry (`backend/agent_tools.py`) wrapping existing eligibility/
+reporting functions, a provider-independent bounded tool-calling loop
+(`backend/agent_service.py`, `backend/agent_model.py`), and the minimal
+`/api/agent/tasks` API. This increment can investigate a call-out or an
+uncovered shift and create an exact PENDING proposal; it cannot approve or
+execute one - there is no tool or route for that yet. The chat UI, proposal
+approval/execution, and result verification are later increments, not yet
+built.
+
+The model never supplies or influences a proposal's stored explanation:
+`propose_replacement` computes it entirely from the same deterministic
+ranked-candidate result the read-only tools already expose, and requires
+the proposed worker to be that result's top-ranked eligible candidate for
+the ordinary replacement workflow - an eligible-but-lower-ranked or
+fabricated candidate is refused. At most one proposal is allowed per task,
+enforced both in application code and by a database constraint.
+
 A call-out statement by itself does not remove an assignment or create leave.
 Ambiguous names/dates require clarification. If no eligible worker exists,
 report the blocker without relaxing constraints or changing records.

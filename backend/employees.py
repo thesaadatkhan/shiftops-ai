@@ -580,11 +580,13 @@ def delete_employee(connection, employee_code, retired_at=None):
         ).fetchone()["n"]
 
         # A worker can also be scheduling history without a live assignment:
-        # named in a schedule proposal (Phase 7 increment 3), or named as the
-        # before/after worker in an assignment-change audit record. Both
-        # tables have foreign keys to employees, so deleting past this point
-        # without checking them would otherwise reach an unhandled SQLite
-        # foreign-key error instead of the controlled refusal below.
+        # named in a schedule proposal (Phase 7 increment 3), as the
+        # before/after worker in an assignment-change audit record, or as
+        # the outgoing/incoming worker in a Phase 9 agent proposal. All
+        # three tables have foreign keys to employees, so deleting past
+        # this point without checking them would otherwise reach an
+        # unhandled SQLite foreign-key error instead of the controlled
+        # refusal below.
         proposal_history = connection.execute(
             "SELECT COUNT(*) AS n FROM proposal_assignments WHERE employee_id = ?",
             (employee_id,),
@@ -594,8 +596,13 @@ def delete_employee(connection, employee_code, retired_at=None):
             " WHERE employee_id_before = ? OR employee_id_after = ?",
             (employee_id, employee_id),
         ).fetchone()["n"]
+        agent_proposal_history = connection.execute(
+            "SELECT COUNT(*) AS n FROM agent_proposals"
+            " WHERE outgoing_employee_id = ? OR incoming_employee_id = ?",
+            (employee_id, employee_id),
+        ).fetchone()["n"]
 
-        if assignments or proposal_history or audit_history:
+        if assignments or proposal_history or audit_history or agent_proposal_history:
             reasons = []
             if assignments:
                 reasons.append(f"{assignments} assignment(s)")
@@ -603,6 +610,8 @@ def delete_employee(connection, employee_code, retired_at=None):
                 reasons.append(f"{proposal_history} schedule proposal reference(s)")
             if audit_history:
                 reasons.append(f"{audit_history} scheduling audit record(s)")
+            if agent_proposal_history:
+                reasons.append(f"{agent_proposal_history} AI agent proposal reference(s)")
             raise DeletionBlocked(
                 f"{existing['full_name']} ({existing['employee_code']}) has "
                 f"{', '.join(reasons)} on record and cannot be deleted. "

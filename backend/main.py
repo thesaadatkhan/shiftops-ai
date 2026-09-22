@@ -72,6 +72,9 @@ from proposals import (
     reject_proposal,
     replace_assignment,
 )
+import agent_service
+from agent_service import AgentTaskNotFound, AgentValidationError
+from ai_config import AIConfigurationError
 from analytics import week_analytics
 from scheduling import get_week_schedule, prepare_week
 from synthetic_data import WEEK_START
@@ -1117,3 +1120,92 @@ def remove_employee(employee_code: str):
     return run_employee_action(
         lambda connection: delete_employee(connection, employee_code)
     )
+
+
+# --------------------------------------------------------- AI scheduling agent
+#
+# Phase 9 increment 1: investigation and proposal-creation only. There is no
+# route here that approves or executes a proposal - that is deliberately a
+# later, separate supervisor action this increment does not implement.
+
+
+def _agent_model_adapter():
+    """The model adapter used by every agent route below. Returns `None` by
+    default, which tells `agent_service` to construct the real
+    `OpenAIModelAdapter` (and therefore requires `OPENAI_API_KEY`).
+
+    Tests replace this function itself (`main._agent_model_adapter =
+    lambda: ScriptedModelAdapter(...)`) before making a request, so real
+    HTTP-contract tests never need a real API key - the indirection exists
+    for exactly that, and for no other reason.
+    """
+    return None
+
+
+def _agent_message_payload(payload):
+    if not isinstance(payload, dict) or not isinstance(payload.get("message"), str):
+        raise HTTPException(
+            status_code=400,
+            detail="Expected a JSON object with a string 'message' field.",
+        )
+    return payload["message"]
+
+
+@app.post("/api/agent/tasks", status_code=201)
+def create_agent_task(payload: Annotated[Any, Body()] = None):
+    """Start a new AI scheduling agent task with an opening message.
+
+    Runs the bounded tool-calling loop forward once and returns the task's
+    full current state (`task`) alongside a `result` naming what kind of
+    reply this is - `answer`, `clarification_required`, `blocked`, or
+    `proposal` - derived from what the tools actually returned, never from
+    the model's own wording. A missing/invalid `OPENAI_API_KEY` or a
+    provider-side failure is a 503 with a string `detail` (D033), not a
+    500 - a known, expected "not configured" condition.
+    """
+    message = _agent_message_payload(payload)
+    connection = get_connection()
+    try:
+        return agent_service.create_task(
+            connection, message, model_adapter=_agent_model_adapter()
+        )
+    except AgentValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except AIConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    finally:
+        connection.close()
+
+
+@app.post("/api/agent/tasks/{task_id}/messages")
+def send_agent_message(task_id: int, payload: Annotated[Any, Body()] = None):
+    """Send another message to an existing agent task and run the bounded
+    loop forward again from its current stored state. Same response shape
+    and error handling as creating a task."""
+    message = _agent_message_payload(payload)
+    connection = get_connection()
+    try:
+        return agent_service.send_message(
+            connection, task_id, message, model_adapter=_agent_model_adapter()
+        )
+    except AgentTaskNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except AgentValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except AIConfigurationError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    finally:
+        connection.close()
+
+
+@app.get("/api/agent/tasks/{task_id}")
+def get_agent_task(task_id: int):
+    """Read-only: one agent task's current status, full transcript, and any
+    proposal(s) it has produced."""
+    connection = get_connection()
+    try:
+        return agent_service.get_task(connection, task_id)
+    except AgentTaskNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    finally:
+        connection.close()

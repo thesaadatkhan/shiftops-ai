@@ -24,6 +24,11 @@ Checks:
 10. A worker referenced only by an assignment-audit record is refused the
     same way; a worker with no assignment, proposal, or audit history at
     all remains deletable.
+11. A worker referenced as the OUTGOING worker in a Phase 9 agent proposal
+    (`agent_proposals.outgoing_employee_id`) is refused the same way, and
+    the agent proposal itself is left untouched.
+12. A worker referenced as the INCOMING worker in a Phase 9 agent proposal
+    (`agent_proposals.incoming_employee_id`) is refused the same way.
 
 Run with:  python verify_employee_deletion.py
 Exits non-zero if any check fails.
@@ -591,6 +596,60 @@ def main():
     result = delete_employee(connection, "SW-003", retired_at=RETIRED_AT)
     check(find_by_code(connection, "SW-003") is None, "a worker with no assignment, proposal or audit history remains deletable")
     check(result["full_name"] == "Carol Chen", "the deletion result names the correct worker")
+    connection.close()
+
+    # 11. A worker referenced as the OUTGOING worker in a Phase 9 agent
+    #     proposal (no live assignment - the replacement already happened,
+    #     conceptually) cannot be deleted either.
+    connection = fixture()
+    outgoing_agent = add_worker(connection, "SW-001", "Alice Adams")
+    incoming_agent = add_worker(connection, "SW-002", "Bob Brown")
+    give_records(connection, outgoing_agent["id"])
+    shift_id = add_shift(connection, "Capella", "2026-10-09 17:00", "2026-10-09 22:00")
+    connection.execute(
+        "INSERT INTO agent_tasks (created_at, updated_at, status, request_text)"
+        " VALUES ('2026-10-01 00:00', '2026-10-01 00:00', 'awaiting_approval', 'test task')"
+    )
+    task_id = connection.execute("SELECT id FROM agent_tasks").fetchone()["id"]
+    connection.execute(
+        "INSERT INTO agent_proposals"
+        " (task_id, created_at, status, action_type, shift_id,"
+        "  outgoing_employee_id, incoming_employee_id, rationale)"
+        " VALUES (?, '2026-10-01 00:00', 'pending', 'replace_assignment', ?, ?, ?, 'test')",
+        (task_id, shift_id, outgoing_agent["id"], incoming_agent["id"]),
+    )
+    connection.commit()
+    before = counts(connection)
+
+    try:
+        delete_employee(connection, "SW-001", retired_at=RETIRED_AT)
+        check(False, "deletion should be refused when an agent proposal names this worker as outgoing")
+    except DeletionBlocked as error:
+        message = str(error)
+        check("AI agent proposal reference" in message, f"the refusal names the agent proposal reference ({message})")
+        check("history must be preserved" in message.lower(), "the refusal explains that history is preserved")
+
+    check(counts(connection) == before, "nothing was removed after the outgoing-agent-proposal refusal")
+    check(find_by_code(connection, "SW-001") is not None, "the outgoing worker still exists after the refusal")
+    check(
+        connection.execute("SELECT COUNT(*) AS n FROM agent_proposals").fetchone()["n"] == 1,
+        "the agent proposal itself is untouched",
+    )
+
+    # 12. The INCOMING worker named by that same agent proposal is refused
+    #     deletion too.
+    try:
+        delete_employee(connection, "SW-002", retired_at=RETIRED_AT)
+        check(False, "deletion should be refused when an agent proposal names this worker as incoming")
+    except DeletionBlocked as error:
+        message = str(error)
+        check("AI agent proposal reference" in message, f"the refusal names the agent proposal reference ({message})")
+
+    check(find_by_code(connection, "SW-002") is not None, "the incoming worker still exists after the refusal")
+    check(
+        connection.execute("SELECT COUNT(*) AS n FROM agent_proposals").fetchone()["n"] == 1,
+        "the agent proposal is still untouched after both refusals",
+    )
     connection.close()
 
     if failures:
