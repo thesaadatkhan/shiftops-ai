@@ -635,6 +635,32 @@
   list-style: none;
 }
 
+/* One compact tab treatment shared with proposal filters: it is a view
+   switcher, not a second Schedule workflow. */
+.schedule-tabs {
+  display: flex;
+  gap: var(--space-1);
+  width: fit-content;
+  margin-bottom: var(--space-5);
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+}
+
+.schedule-tabs button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+}
+
+.schedule-tabs button.is-selected {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* Phase 8: Dashboard and Workforce Planning. Cards and a plain progress bar
    only - deliberately no chart library, per the interview-friendly,
    readable-over-elaborate goal. */

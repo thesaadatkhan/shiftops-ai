@@ -140,6 +140,9 @@ export default function Schedule({ weekStart }) {
   const [decisionError, setDecisionError] = useState(null)
   const [decisionConflicts, setDecisionConflicts] = useState(null)
   const [reviewFilter, setReviewFilter] = useState('changes')
+  // These tabs only decide which already-loaded part of this one workflow is
+  // visible. They deliberately do not own a second schedule/proposal state.
+  const [activeTab, setActiveTab] = useState('shifts')
 
   const [generateNotice, setGenerateNotice] = useState(null)
   // True only while a Generate request's outcome is genuinely unresolved -
@@ -661,7 +664,12 @@ export default function Schedule({ weekStart }) {
 
   return (
     <div className="schedule-view">
-      {isUnprepared ? (
+      <div className="schedule-tabs" role="tablist" aria-label="Schedule views">
+        <button type="button" role="tab" aria-selected={activeTab === 'shifts'} className={activeTab === 'shifts' ? 'is-selected' : ''} onClick={() => setActiveTab('shifts')}>Shifts</button>
+        <button type="button" role="tab" aria-selected={activeTab === 'proposals'} className={activeTab === 'proposals' ? 'is-selected' : ''} onClick={() => setActiveTab('proposals')}>Proposals</button>
+      </div>
+
+      {isUnprepared && activeTab === 'shifts' ? (
         <div className="schedule-unprepared">
           <p>No shifts are prepared for the week of {friendlyDate(data.week_start)}.</p>
           <button type="button" className="btn-primary" disabled={preparing} onClick={handlePrepare}>
@@ -669,8 +677,11 @@ export default function Schedule({ weekStart }) {
           </button>
           {prepareError && <p role="alert">{describeError(prepareError)}</p>}
         </div>
+      ) : isUnprepared ? (
+        <p className="table-note">Prepare the week from the Shifts tab before generating or reviewing schedule proposals.</p>
       ) : (
         <>
+          {activeTab === 'proposals' && <>
           <div className="schedule-actions">
             <button
               type="button"
@@ -844,8 +855,9 @@ export default function Schedule({ weekStart }) {
               )}
             </div>
           )}
+          </>}
 
-          {Array.from(groupByDayThenHall(data.shifts).entries()).map(([date, byHall]) => (
+          {activeTab === 'shifts' && Array.from(groupByDayThenHall(data.shifts).entries()).map(([date, byHall]) => (
             <section key={date} className="schedule-day">
               <h3>{friendlyDate(date)}</h3>
               {orderedHalls(byHall).map((hall) => (

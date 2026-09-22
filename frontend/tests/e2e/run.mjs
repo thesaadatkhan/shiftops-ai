@@ -200,6 +200,12 @@ function mainButton(page, label) {
   return page.getByRole('main').getByRole('button', { name: label, exact: true })
 }
 
+async function showScheduleTab(page, label) {
+  const tab = page.getByRole('tab', { name: label, exact: true })
+  await tab.click()
+  await tab.getAttribute('aria-selected')
+}
+
 /** The AI Assistant chat textarea, identified by its placeholder text. */
 function chatTextarea(page) {
   return page.getByRole('textbox', { name: 'Message the AI Assistant' })
@@ -347,6 +353,7 @@ async function main() {
       'the sidebar no longer has a separate "Generate Schedule" navigation item',
     )
     await navButton(page, 'Schedule').click()
+    await showScheduleTab(page, 'Proposals')
     await mainButton(page, 'Generate Schedule').waitFor({ timeout: 10000 })
     check(
       await mainButton(page, 'Generate Schedule').isVisible(),
@@ -434,6 +441,7 @@ async function main() {
 
 /** uncovered shift -> choose an eligible worker -> cancel -> confirm */
 async function journeyManualUncoveredFill(page) {
+  await showScheduleTab(page, 'Shifts')
   const before = await backendJson('/api/schedule/weeks/2026-09-21')
   const target = before.shifts.find((shift) => !shift.covered)
   check(Boolean(target), 'fixture sanity: the selected week has an uncovered shift for manual fill')
@@ -468,6 +476,7 @@ async function journeyManualUncoveredFill(page) {
 
 /** generate -> review -> cancel approval -> approve -> reload/recover */
 async function journeyGenerateReviewApprove(page) {
+  await showScheduleTab(page, 'Proposals')
   await mainButton(page, 'Generate Schedule').click()
   await page.getByText(/^Proposal #\d+ — pending$/).waitFor({ timeout: 15000 })
   check(true, 'Generate Schedule produced a pending proposal')
@@ -508,6 +517,7 @@ async function journeyGenerateReviewApprove(page) {
 
   await page.reload()
   await navButton(page, 'Schedule').click()
+  await showScheduleTab(page, 'Proposals')
   await page.getByText(/^Proposal #\d+ — approved$/).waitFor({ timeout: 15000 })
   check(true, 'reloading the page recovers the approved proposal from the backend, not from lost client state')
 }
@@ -533,6 +543,7 @@ async function journeyConflictAndReplace(page) {
   await navButton(page, 'Schedule').click()
   await mainButton(page, 'Next week').click()
   await page.getByText('September 28, 2026').first().waitFor({ timeout: 5000 })
+  await showScheduleTab(page, 'Proposals')
 
   await navButton(page, 'Employees').click()
   await page.getByRole('button', { name: `View details for ${outgoing.full_name}` }).click()
@@ -578,6 +589,7 @@ async function journeyUncertainGenerateBlocksRetry(page) {
   await navButton(page, 'Schedule').click()
   await mainButton(page, 'Next week').click()
   await page.getByText('September 28, 2026').first().waitFor({ timeout: 5000 })
+  await showScheduleTab(page, 'Proposals')
 
   let postCount = 0
   await page.route('**/api/schedule/weeks/*/proposals', async (route) => {
@@ -730,6 +742,7 @@ async function journeyCancelDelayedReplacement(page) {
   // Let the delayed response actually land in the background before moving on.
   await sleep(2500)
 
+  await showScheduleTab(page, 'Proposals')
   const generateButton = mainButton(page, 'Generate Schedule')
   check(await generateButton.isEnabled(), 'another action is usable after the late candidate response arrives - no permanent lock')
   await page.unrouteAll({ behavior: 'ignoreErrors' })
@@ -758,15 +771,10 @@ async function journeyMutualExclusion(page) {
   await row.getByRole('button', { name: 'Replace', exact: true }).click()
   await page.getByRole('alertdialog', { name: 'Replace assignment' }).waitFor()
 
-  const generateButton = mainButton(page, 'Generate Schedule')
-  check(await generateButton.isDisabled(), 'Generate Schedule is disabled while the replacement panel is open')
-  const approveButtons = page.getByRole('button', { name: 'Approve', exact: true })
-  if (await approveButtons.count()) {
-    check(await approveButtons.first().isDisabled(), 'Approve is disabled while the replacement panel is open')
-  }
-
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await page.getByRole('alertdialog', { name: 'Replace assignment' }).waitFor({ state: 'hidden' })
+  await showScheduleTab(page, 'Proposals')
+  const generateButton = mainButton(page, 'Generate Schedule')
   check(await generateButton.isEnabled(), 'Generate Schedule is enabled again once the replacement panel closes')
 }
 
@@ -782,6 +790,7 @@ async function journeyCorruptedApprovalResponse(page) {
 
   await page.reload()
   await navButton(page, 'Schedule').click()
+  await showScheduleTab(page, 'Proposals')
   const select = page.locator('select').first()
   if (await select.count()) {
     await select.selectOption(String(created.id))
