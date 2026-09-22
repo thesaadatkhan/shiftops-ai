@@ -94,6 +94,32 @@
   }
 }
 
+/* The assistant uses the available application height as one chat surface.
+   Its readable conversation column is owned by AIAssistant rather than this
+   page wrapper, so the shell can reach the viewport edges without turning
+   messages into a hard-to-read full-width line. */
+.main-content.ai-assistant-page {
+  display: flex;
+  flex-direction: column;
+  width: auto;
+  min-width: 0;
+  min-height: 100svh;
+  max-width: none;
+  padding: 0;
+}
+
+.ai-assistant-page .page-header {
+  width: min(100% - (var(--space-8) * 2), 820px);
+  margin: 0 auto;
+  padding: var(--space-5) 0 var(--space-4);
+}
+
+@media (max-width: 700px) {
+  .ai-assistant-page .page-header {
+    width: min(100% - (var(--space-5) * 2), 820px);
+  }
+}
+
 /* One consistent title/description block, reused by every section (see
    App.jsx) so switching screens never jumps between different heading
    spacing or typographic weight. */
@@ -909,10 +935,12 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
    second set of panel/list primitives. */
 .agent-assistant {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
-  gap: var(--space-4);
-  margin-top: var(--space-4);
-  width: min(100%, 820px);
+  gap: 0;
+  min-width: 0;
+  margin: 0;
+  width: 100%;
   min-height: 0;
 }
 
@@ -922,26 +950,35 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
   gap: 12px;
   justify-content: space-between;
   flex-wrap: wrap;
+  width: min(100% - (var(--space-8) * 2), 820px);
+  margin: 0 auto;
+  padding: var(--space-3) 0;
 }
 
 .agent-start {
-  padding: var(--space-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: linear-gradient(145deg, var(--surface), var(--surface-accent));
-  box-shadow: var(--shadow-sm);
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  padding: var(--space-8);
+  min-height: 0;
 }
 
-.agent-start h3,
+.agent-guide {
+  width: min(100%, 680px);
+}
+
+.agent-guide h3,
 .agent-confirm-panel h5 {
   margin: 0;
   color: var(--text-h);
-  font-size: 15px;
+  font-size: var(--font-lg);
 }
 
-.agent-start p {
-  margin-top: 4px;
+.agent-guide p {
+  max-width: 66ch;
+  margin-top: var(--space-2);
   font-size: 14px;
+  line-height: 150%;
 }
 
 .agent-starters {
@@ -954,6 +991,13 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
 .agent-starters button {
   text-align: left;
   background: var(--surface);
+}
+
+.agent-help-button {
+  width: 38px;
+  padding: 0;
+  border-radius: var(--radius-pill);
+  font-weight: 700;
 }
 
 .status-badge {
@@ -995,15 +1039,17 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: 10px;
-  max-height: 480px;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--shadow-xs);
+  padding: var(--space-4) var(--space-8);
+}
+
+.agent-transcript-content {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(100%, 820px);
+  margin: 0 auto;
 }
 
 .agent-message {
@@ -1041,6 +1087,8 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
 }
 
 .agent-proposal-card {
+  width: min(100%, 680px);
+  box-sizing: border-box;
   padding: var(--space-5);
   border: 1px solid var(--accent-border);
   border-radius: var(--radius-lg);
@@ -1089,11 +1137,13 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
   flex: 0 0 auto;
   flex-direction: column;
   gap: 8px;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  width: min(100% - (var(--space-8) * 2), 820px);
+  margin: 0 auto;
+  padding: var(--space-3) 0 var(--space-5);
+  border: none;
+  border-radius: 0;
   background: color-mix(in srgb, var(--surface) 95%, transparent);
-  box-shadow: var(--shadow-md);
+  box-shadow: none;
 }
 
 .agent-composer textarea {
@@ -1110,6 +1160,47 @@ button.schedule-grid-shift[aria-expanded='true'] { border-color: var(--accent-bo
   display: flex;
   justify-content: flex-end;
   margin: 0;
+}
+
+.agent-help-panel {
+  padding: var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+
+.agent-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.agent-help-header h3 {
+  margin: 0;
+  color: var(--text-h);
+  font-size: var(--font-lg);
+}
+
+.agent-guide-compact {
+  width: 100%;
+  margin-top: var(--space-3);
+}
+
+@media (max-width: 700px) {
+  .agent-toolbar,
+  .agent-composer {
+    width: min(100% - (var(--space-5) * 2), 820px);
+  }
+
+  .agent-transcript {
+    padding: var(--space-4) var(--space-5);
+  }
+
+  .agent-start {
+    padding: var(--space-5);
+  }
 }
 
 /* Panel-specific rules appear throughout this file because they also style

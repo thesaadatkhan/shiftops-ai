@@ -93,7 +93,7 @@ function App() {
         </nav>
       </aside>
 
-      <main className="main-content">
+      <main className={activeSection === 'ai-assistant' ? 'main-content ai-assistant-page' : 'main-content'}>
         <div className="page-header">
           <h2>{content.title}</h2>
           <p>{content.description}</p>

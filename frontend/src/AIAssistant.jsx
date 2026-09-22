@@ -50,6 +50,33 @@ function TranscriptMessage({ message }) {
   )
 }
 
+const GUIDE_PROMPTS = [
+  "Someone called out for tonight's shift. Find a replacement.",
+  'Who is eligible for an uncovered shift this week?',
+  'How many hours has Taylor Brooks worked this week?',
+  'Can you check whether Morgan Reyes is scheduled this week?',
+  'Find a replacement for Jordan Rivera on tonight\'s Capella shift.',
+]
+
+function AssistantGuide({ onChoosePrompt, compact = false }) {
+  return (
+    <div className={compact ? 'agent-guide agent-guide-compact' : 'agent-guide'}>
+      {!compact && <h3 id="agent-start-title">What can I help with?</h3>}
+      <p>
+        This assistant handles one shift or worker at a time. It always proposes a change for you to approve — it never
+        assigns or edits anything on its own. For week-wide or hall-wide views, use Coverage or Schedule.
+      </p>
+      <div className="agent-starters">
+        {GUIDE_PROMPTS.map((prompt) => (
+          <button key={prompt} type="button" onClick={() => onChoosePrompt(prompt)}>
+            {prompt}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function taskStatusLabel(status) {
   switch (status) {
     case 'open':
@@ -291,6 +318,7 @@ export default function AIAssistant() {
   const [decisionBlocked, setDecisionBlocked] = useState(false)
   const [readbackByProposal, setReadbackByProposal] = useState({})
   const [reconciling, setReconciling] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
   const transcriptRef = useRef(null)
   // A new message should be visible immediately when the supervisor is
   // following the conversation. Once they deliberately scroll up, preserve
@@ -456,6 +484,7 @@ export default function AIAssistant() {
     setDecisionError(null)
     setDecisionConflicts(null)
     setDecisionBlocked(false)
+    setHelpOpen(false)
   }
 
   async function handleSend(event) {
@@ -582,6 +611,11 @@ export default function AIAssistant() {
 
   const busyMessage = decisionStatus !== 'idle' || sending
 
+  function chooseGuidePrompt(prompt) {
+    setInput(prompt)
+    setHelpOpen(false)
+  }
+
   return (
     <div className="agent-assistant">
       <div className="agent-toolbar">
@@ -593,72 +627,66 @@ export default function AIAssistant() {
             Task: {taskStatusLabel(task.status)}
           </span>
         )}
+        {task && (
+          <button type="button" className="agent-help-button" aria-label="Show assistant help" onClick={() => setHelpOpen(true)}>
+            ?
+          </button>
+        )}
       </div>
 
       {!task && phase !== 'loading' && (
         <section className="agent-start" aria-labelledby="agent-start-title">
-          <h3 id="agent-start-title">What would you like to investigate?</h3>
-          <p>Start with a scheduling question or a specific coverage problem.</p>
-          <div className="agent-starters">
-            <button type="button" onClick={() => setInput("Someone called out for tonight's shift. Find a replacement.")}>
-              Find a call-out replacement
-            </button>
-            <button type="button" onClick={() => setInput('Who is eligible for an uncovered shift this week?')}>
-              Check an uncovered shift
-            </button>
-            <button type="button" onClick={() => setInput('How many hours has an employee worked this week?')}>
-              Check employee hours
-            </button>
-          </div>
+          <AssistantGuide onChoosePrompt={chooseGuidePrompt} />
         </section>
       )}
 
-      {loadError && <p className="backend-status backend-status-error">{loadError}</p>}
-
-      {phase === 'loading' && <p className="backend-status backend-status-loading">Loading your active task…</p>}
-
       {task && (
         <div className="agent-transcript" ref={transcriptRef} onScroll={trackTranscriptScroll} aria-live="polite">
-          {visibleMessages.map((message) => (
-            <TranscriptMessage key={message.id} message={message} />
-          ))}
-          {visibleMessages.length === 0 && <p className="table-note">No conversation messages yet.</p>}
+          <div className="agent-transcript-content">
+            {visibleMessages.map((message) => (
+              <TranscriptMessage key={message.id} message={message} />
+            ))}
+            {visibleMessages.length === 0 && <p className="table-note">No conversation messages yet.</p>}
+
+            {lastResult && lastResult.kind === 'clarification_required' && (
+              <p className="backend-status backend-status-loading">The assistant needs clarification before continuing - see its message above.</p>
+            )}
+            {lastResult && lastResult.kind === 'blocked' && lastResult.blocked_reason && (
+              <p className="backend-status backend-status-error">Blocked: {lastResult.blocked_reason.replace(/_/g, ' ')}.</p>
+            )}
+
+            {proposal && (
+              <ProposalCard
+                proposal={proposal}
+                readback={readbackByProposal[proposal.id]}
+                confirming={confirming}
+                decisionStatus={decisionStatus}
+                decisionError={decisionError}
+                decisionConflicts={decisionConflicts}
+                decisionBlocked={decisionBlocked}
+                anyBusy={anyBusy}
+                reconciling={reconciling}
+                onOpenApprove={openApprove}
+                onOpenReject={openReject}
+                onCancelConfirm={cancelConfirm}
+                onConfirmApprove={confirmApprove}
+                onConfirmReject={confirmReject}
+                onReloadTask={reloadTask}
+                onReconcileMissingVerification={() => reconcileMissingVerification(proposal)}
+              />
+            )}
+
+            {busyMessage && (
+              <p className="backend-status backend-status-loading" role="status">
+                {decisionStatus === 'idle' ? 'The assistant is working on your request…' : 'Updating the proposal…'}
+              </p>
+            )}
+          </div>
         </div>
       )}
 
-      {lastResult && lastResult.kind === 'clarification_required' && (
-        <p className="backend-status backend-status-loading">The assistant needs clarification before continuing - see its message above.</p>
-      )}
-      {lastResult && lastResult.kind === 'blocked' && lastResult.blocked_reason && (
-        <p className="backend-status backend-status-error">Blocked: {lastResult.blocked_reason.replace(/_/g, ' ')}.</p>
-      )}
-
-      {proposal && (
-        <ProposalCard
-          proposal={proposal}
-          readback={readbackByProposal[proposal.id]}
-          confirming={confirming}
-          decisionStatus={decisionStatus}
-          decisionError={decisionError}
-          decisionConflicts={decisionConflicts}
-          decisionBlocked={decisionBlocked}
-          anyBusy={anyBusy}
-          reconciling={reconciling}
-          onOpenApprove={openApprove}
-          onOpenReject={openReject}
-          onCancelConfirm={cancelConfirm}
-          onConfirmApprove={confirmApprove}
-          onConfirmReject={confirmReject}
-          onReloadTask={reloadTask}
-          onReconcileMissingVerification={() => reconcileMissingVerification(proposal)}
-        />
-      )}
-
-      {busyMessage && (
-        <p className="backend-status backend-status-loading" role="status">
-          {decisionStatus === 'idle' ? 'The assistant is working on your request…' : 'Updating the proposal…'}
-        </p>
-      )}
+      {!task && loadError && <p className="backend-status backend-status-error">{loadError}</p>}
+      {!task && phase === 'loading' && <p className="backend-status backend-status-loading">Loading your active task…</p>}
 
       <form className="agent-composer" onSubmit={handleSend}>
         <textarea
@@ -684,6 +712,18 @@ export default function AIAssistant() {
               {reconciling ? 'Reloading…' : 'Reload / Reconcile'}
             </button>
           )}
+        </div>
+      )}
+
+      {helpOpen && (
+        <div className="schedule-modal-backdrop">
+          <section className="agent-help-panel schedule-modal" role="dialog" aria-modal="true" aria-label="Assistant help">
+            <div className="agent-help-header">
+              <h3>What you can ask</h3>
+              <button type="button" aria-label="Close assistant help" onClick={() => setHelpOpen(false)}>Close</button>
+            </div>
+            <AssistantGuide compact onChoosePrompt={chooseGuidePrompt} />
+          </section>
         </div>
       )}
     </div>

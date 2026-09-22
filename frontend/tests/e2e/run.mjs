@@ -410,6 +410,7 @@ async function main() {
 
     // ----------------------------------------------- Phase 9 increment 3: AI Assistant
     await journeyAgentInfoAndApprovedTrap(page)
+    await journeyAgentHelpPanel(page)
     await journeyAgentAmbiguousClarification(page)
     await journeyAgentNoCandidates(page)
     await journeyAgentCalloutApproveVerify(page)
@@ -1140,8 +1141,8 @@ async function journeyAgentInfoAndApprovedTrap(page) {
   await startNewAgentTask(page)
 
   check(
-    await page.getByRole('button', { name: 'Find a call-out replacement' }).isVisible(),
-    'the empty AI Assistant offers starting prompts',
+    await page.getByRole('button', { name: "Someone called out for tonight's shift. Find a replacement." }).isVisible(),
+    'the empty AI Assistant offers complete, clickable starting prompts',
   )
 
   let approveRequests = 0
@@ -1173,6 +1174,37 @@ async function journeyAgentInfoAndApprovedTrap(page) {
   await sleep(300)
   page.off('request', listener)
   check(approveRequests === 0, 'the model\'s own text saying "approved" never triggers a real approval request')
+}
+
+/** Once a task is underway, the large empty-state guide is replaced by the
+ * compact help dialog, using the same shared modal/backdrop structure as
+ * Schedule's assignment dialogs. Choosing an example still only fills the
+ * composer; it never sends or changes anything by itself. */
+async function journeyAgentHelpPanel(page) {
+  await navButton(page, 'AI Assistant').click()
+  await startNewAgentTask(page)
+
+  await sendChat(page, 'How many hours has Taylor Brooks worked this week?')
+  await page.getByText(/worked this week/i).waitFor({ timeout: 15000 })
+
+  await page.getByRole('button', { name: 'Show assistant help' }).click()
+  const helpDialog = page.getByRole('dialog', { name: 'Assistant help' })
+  await helpDialog.waitFor()
+  check(
+    await page.locator('.schedule-modal-backdrop').isVisible() && await helpDialog.isVisible(),
+    'the active AI Assistant opens its guide in the shared modal backdrop',
+  )
+  check(
+    await helpDialog.getByText(/handles one shift or worker at a time/i).isVisible(),
+    'the help panel repeats the assistant scope and approval boundary',
+  )
+
+  const prompt = 'Can you check whether Morgan Reyes is scheduled this week?'
+  await helpDialog.getByRole('button', { name: prompt }).click()
+  check(
+    !(await helpDialog.isVisible()) && await chatTextarea(page).inputValue() === prompt,
+    'choosing a help example closes the modal and fills, but does not send, the composer',
+  )
 }
 
 /** ambiguity followed by supervisor clarification */
