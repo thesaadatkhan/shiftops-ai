@@ -166,6 +166,34 @@ function check(condition, description) {
   }
 }
 
+/** Confirmation actions must use the shared solid-primary treatment. That
+ * treatment resolves --accent and --accent-contrast together for both color
+ * schemes, avoiding a locally overridden label color with poor contrast. */
+async function checkPrimaryConfirmation(button, description) {
+  // Selecting a worker queues a React state update. Measure the rendered,
+  // enabled confirmation control rather than its deliberately muted disabled
+  // predecessor from the same modal.
+  for (let attempt = 0; attempt < 20 && await button.isDisabled(); attempt += 1) {
+    await sleep(50)
+  }
+  const result = await button.evaluate((element) => {
+      const style = getComputedStyle(element)
+      const luminance = (color) => {
+        const channels = color.match(/\d+(?:\.\d+)?/g)?.slice(0, 3).map(Number)
+        if (!channels || channels.length !== 3) return 0
+        return channels.map((channel) => {
+          const value = channel / 255
+          return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+        }).reduce((total, value, index) => total + value * [0.2126, 0.7152, 0.0722][index], 0)
+      }
+      const foreground = luminance(style.color)
+      const background = luminance(style.backgroundColor)
+      const contrast = (Math.max(foreground, background) + 0.05) / (Math.min(foreground, background) + 0.05)
+      return { className: element.className, foreground: style.color, background: style.backgroundColor, contrast, ok: element.classList.contains('btn-primary') && contrast >= 4.5 }
+    })
+  check(result.ok, result.ok ? description : `${description} (computed ${result.foreground} on ${result.background}: ${result.contrast.toFixed(2)}:1)`)
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -472,6 +500,10 @@ async function journeyManualUncoveredFill(page) {
   await page.getByRole('button', { name: 'Assign worker', exact: true }).first().click()
   await dialog.waitFor()
   await dialog.locator('select').selectOption(incoming.employee_code)
+  await checkPrimaryConfirmation(
+    dialog.getByRole('button', { name: 'Confirm assignment', exact: true }),
+    'the assignment-modal confirmation uses the shared accessible primary-button contrast',
+  )
   await dialog.getByRole('button', { name: 'Confirm assignment', exact: true }).click()
   await dialog.waitFor({ state: 'hidden', timeout: 10000 })
   const after = await backendJson('/api/schedule/weeks/2026-09-21')
@@ -559,6 +591,10 @@ async function journeyGenerateReviewApprove(page) {
   check(stillPending === 1, 'cancelling the confirmation leaves the proposal pending, nothing created')
 
   await page.getByRole('button', { name: 'Approve', exact: true }).click()
+  await checkPrimaryConfirmation(
+    page.getByRole('button', { name: 'Confirm approval', exact: true }),
+    'the Schedule approval confirmation uses the shared accessible primary-button contrast',
+  )
   await page.getByRole('button', { name: 'Confirm approval', exact: true }).click()
   await page.getByText(/^Proposal #\d+ — approved$/).waitFor({ timeout: 15000 })
   check(true, 'confirming approval creates the assignments and the proposal reports approved')
@@ -614,6 +650,10 @@ async function journeyConflictAndReplace(page) {
   await conflictRow.getByRole('button', { name: 'Replace', exact: true }).click()
   await page.getByRole('alertdialog', { name: 'Replace assignment' }).waitFor()
   await page.locator('select').last().selectOption(expectedCandidateCode)
+  await checkPrimaryConfirmation(
+    page.getByRole('alertdialog', { name: 'Replace assignment' }).getByRole('button', { name: 'Confirm replacement', exact: true }),
+    'the replacement-modal confirmation uses the shared accessible primary-button contrast',
+  )
   await page.getByRole('button', { name: 'Confirm replacement', exact: true }).click()
   await page.getByRole('alertdialog', { name: 'Replace assignment' }).waitFor({ state: 'hidden', timeout: 10000 })
 
@@ -1182,6 +1222,10 @@ async function journeyAgentCalloutApproveVerify(page) {
   await page.getByRole('button', { name: 'Approve', exact: true }).click()
   await page.getByRole('alertdialog', { name: 'Confirm approval' }).waitFor()
   check(true, 'clicking Approve opens an explicit confirmation panel, not an immediate write')
+  await checkPrimaryConfirmation(
+    page.getByRole('alertdialog', { name: 'Confirm approval' }).getByRole('button', { name: 'Confirm approval', exact: true }),
+    'the AI Assistant approval confirmation uses the shared accessible primary-button contrast',
+  )
   await page.getByRole('button', { name: 'Confirm approval', exact: true }).click()
   await page.getByText('Approved, applied, and verified.').waitFor({ timeout: 15000 })
   check(true, 'confirming approval applies the assignment and reports it verified')

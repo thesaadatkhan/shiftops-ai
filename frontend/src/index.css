@@ -27,8 +27,10 @@
   --border: #e3dfe8;
   --border-strong: #d5cede;
   --code-bg: var(--surface-muted);
-  --accent: #aa3bff;
-  --accent-hover: #9228e6;
+  /* Paired with white --accent-contrast: this deeper purple clears 4.5:1
+     for primary-button labels, including the Schedule confirmation modals. */
+  --accent: #9333ea;
+  --accent-hover: #7e22ce;
   --accent-bg: rgba(170, 59, 255, 0.09);
   --accent-border: rgba(170, 59, 255, 0.38);
   --social-bg: rgba(98, 89, 110, 0.07);

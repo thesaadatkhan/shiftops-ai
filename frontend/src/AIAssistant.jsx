@@ -166,7 +166,7 @@ function ProposalCard({
           <h5>Confirm this assignment change</h5>
           {approvalQuestion(proposal, shiftDate, timeLabel)}
           <div className="schedule-actions">
-            <button type="button" disabled={decisionStatus !== 'idle'} onClick={onConfirmApprove}>
+            <button type="button" className="btn-primary" disabled={decisionStatus !== 'idle'} onClick={onConfirmApprove}>
               {decisionStatus === 'approving' ? 'Approving…' : 'Confirm approval'}
             </button>
             <button type="button" disabled={decisionStatus !== 'idle'} onClick={onCancelConfirm}>
