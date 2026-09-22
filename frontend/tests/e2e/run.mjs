@@ -170,12 +170,9 @@ function check(condition, description) {
  * treatment resolves --accent and --accent-contrast together for both color
  * schemes, avoiding a locally overridden label color with poor contrast. */
 async function checkPrimaryConfirmation(button, description) {
-  // Selecting a worker queues a React state update. Measure the rendered,
-  // enabled confirmation control rather than its deliberately muted disabled
-  // predecessor from the same modal.
-  for (let attempt = 0; attempt < 20 && await button.isDisabled(); attempt += 1) {
-    await sleep(50)
-  }
+  // A trial click waits for React to finish enabling the control without
+  // performing its mutation, so the measured colors are the actionable one.
+  await button.click({ trial: true })
   const result = await button.evaluate((element) => {
       const style = getComputedStyle(element)
       const luminance = (color) => {
@@ -563,6 +560,15 @@ async function journeyGenerateReviewApprove(page) {
 
   const proposalPanel = page.getByRole('region', { name: 'Schedule proposal' })
   await proposalPanel.getByLabel('Expected coverage summary').waitFor()
+  const proposalGrid = proposalPanel.getByRole('table', { name: 'Weekly proposal review grid' })
+  await proposalGrid.waitFor()
+  check(
+    (await proposalGrid.getByRole('row').count()) > 1 &&
+      (await proposalGrid.locator('.proposal-grid-block').count()) > 0 &&
+      (await proposalGrid.getByText(/uncovered/, { exact: false }).count()) > 0,
+    'the proposal review defaults to a hall-by-day grid with proposed changes and uncovered cells',
+  )
+  await proposalPanel.getByRole('button', { name: 'Switch to list view', exact: true }).click()
   check(
     await proposalPanel.getByText('Required', { exact: true }).isVisible() &&
       await proposalPanel.getByText('Expected coverage', { exact: true }).isVisible(),
@@ -581,6 +587,7 @@ async function journeyGenerateReviewApprove(page) {
   await proposalPanel.locator('.proposal-technical-details').first().locator('summary').click()
   check(await proposalPanel.getByText(/Shift #\d+\. Current:/).first().isVisible(), 'worker names are primary and technical IDs are available as secondary details')
 
+  await proposalPanel.getByRole('button', { name: 'Switch to grid view', exact: true }).click()
   await page.getByRole('button', { name: 'Approve', exact: true }).click()
   await page.getByRole('alertdialog', { name: 'Confirm approval' }).waitFor()
   check(true, 'clicking Approve opens the confirmation panel, not an immediate write')

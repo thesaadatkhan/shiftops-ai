@@ -688,6 +688,12 @@
 .schedule-shift-grid { min-width: 860px; }
 .schedule-shift-grid .weekly-schedule-header,
 .schedule-shift-grid .weekly-schedule-row { grid-template-columns: minmax(130px, 1.1fr) repeat(7, minmax(100px, 1fr)); }
+.proposal-review-grid .weekly-schedule-day { align-items: stretch; }
+.proposal-grid-block { padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-muted); font-size: var(--font-xs); }
+.proposal-grid-block + .proposal-grid-block { margin-top: var(--space-2); }
+.proposal-grid-block strong, .proposal-grid-block small { display: block; }
+.proposal-grid-block small { margin-top: 2px; color: var(--text); line-height: 1.35; }
+.proposal-grid-block .proposal-uncovered { margin-top: var(--space-2); }
 .schedule-grid-day { position: relative; }
 .schedule-grid-block { position: relative; }
 

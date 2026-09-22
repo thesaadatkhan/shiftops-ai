@@ -139,6 +139,27 @@ function ScheduleShiftGrid({ shifts, onAssign, onReplace, actionDisabled }) {
 
 function ProposalReview({ review, filter, onFilterChange }) {
   const groups = groupProposalReviewShifts(review.shifts, filter)
+  const [view, setView] = useState('grid')
+  const dates = [...new Set(review.shifts.map((shift) => splitDateTime(shift.start_datetime).date))].sort()
+  const halls = orderedHalls(new Map(review.shifts.map((shift) => [shift.hall, true])))
+
+  function proposalCell(shift) {
+    const current = shift.existing_assignments.map((worker) => worker.full_name).join(', ') || 'Nobody assigned'
+    const proposed = shift.proposed_assignments.map((worker) => worker.full_name).join(', ')
+    return (
+      <div key={shift.id} className="proposal-grid-block">
+        <strong>{shiftTimeLabel(shift)}</strong>
+        {proposed ? <small>{current} → {proposed}</small> : <small>{shift.uncovered_positions > 0 ? `${shift.uncovered_positions} uncovered` : 'Unchanged'}</small>}
+        {shift.uncovered_positions > 0 && (
+          <details className="proposal-uncovered">
+            <summary>Why uncovered</summary>
+            <p>{(shift.uncovered_reasons || []).map((reason) => reason.detail).join('; ') || 'No explanation was recorded.'}</p>
+          </details>
+        )}
+      </div>
+    )
+  }
+
   return (
     <>
       <div className="proposal-summary" aria-label="Expected coverage summary">
@@ -154,7 +175,24 @@ function ProposalReview({ review, filter, onFilterChange }) {
           <button key={value} type="button" className={filter === value ? 'is-selected' : ''} aria-pressed={filter === value} onClick={() => onFilterChange(value)}>{label}</button>
         ))}
       </div>
-      <div className="proposal-review-list" aria-live="polite">
+      <div className="schedule-view-controls">
+        <button type="button" className="schedule-view-toggle" onClick={() => setView((current) => current === 'grid' ? 'list' : 'grid')}>
+          {view === 'grid' ? 'Switch to list view' : 'Switch to grid view'}
+        </button>
+      </div>
+      {view === 'grid' ? (
+        <div className="schedule-grid-wrapper">
+          <div className="weekly-schedule-grid schedule-shift-grid proposal-review-grid" role="table" aria-label="Weekly proposal review grid">
+            <div className="weekly-schedule-header" role="row"><div role="columnheader">Hall</div>{dates.map((date) => <div key={date} role="columnheader">{weekdayLabel(date)}</div>)}</div>
+            {halls.map((hall) => <div key={hall} className="weekly-schedule-row" role="row">
+              <div className="weekly-schedule-worker" role="rowheader"><strong>{hall}</strong></div>
+              {dates.map((date) => <div key={date} className="weekly-schedule-day proposal-grid-day" role="cell">
+                {review.shifts.filter((shift) => shift.hall === hall && splitDateTime(shift.start_datetime).date === date && (filter === 'all' || filter === 'changes' && (shift.proposed_assignments.length > 0 || shift.uncovered_positions > 0) || filter === 'uncovered' && shift.uncovered_positions > 0)).map(proposalCell)}
+              </div>)}
+            </div>)}
+          </div>
+        </div>
+      ) : <div className="proposal-review-list" aria-live="polite">
         {groups.length === 0 ? <p className="table-note">No shifts match this filter.</p> : groups.map(({ date, halls }) => (
           <section key={date} className="proposal-review-date">
             <h4>{friendlyDate(date)}</h4>
@@ -183,7 +221,7 @@ function ProposalReview({ review, filter, onFilterChange }) {
             ))}
           </section>
         ))}
-      </div>
+      </div>}
     </>
   )
 }
