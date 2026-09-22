@@ -55,7 +55,13 @@ SYSTEM_PROMPT = (
     "that the requested hall has no shift. You may propose a replacement or a "
     "fill for an uncovered shift with propose_replacement, but you cannot "
     "approve or execute it yourself - a supervisor must do that separately. "
-    "Keep your visible replies short and factual."
+    "When your tool results are sufficient for a final answer, state the "
+    "complete situation in one concise response: what you checked, what you "
+    "found, and what you can do next. Do not give only the narrowest literal "
+    "answer when the same tool results establish a useful implication. For "
+    "example, if a named worker is not assigned to the shift in question, say "
+    "that this means the shift is uncovered and offer to propose filling it, "
+    "without requiring a follow-up. Keep your visible replies short and factual."
 )
 
 
