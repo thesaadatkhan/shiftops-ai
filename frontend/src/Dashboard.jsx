@@ -88,6 +88,7 @@ function ProgressBar({ percentage }) {
 
 export default function Dashboard({ weekStart }) {
   const [state, setState] = useState({ status: 'loading', data: null, error: null })
+  const [activeView, setActiveView] = useState('grid')
   // Guards against a slow response for a PREVIOUS week landing after the
   // supervisor has already moved to a different one - the same pattern
   // EmployeeDetails.jsx's requestToken and Schedule.jsx's
@@ -144,13 +145,14 @@ export default function Dashboard({ weekStart }) {
         Reporting week: {friendlyDate(coverage.week_start)} – {friendlyDate(coverage.week_end)}
       </p>
 
-      {coverage.shift_count === 0 ? (
-        <p className="table-note">
-          No shifts are prepared for this week yet. Prepare the week from the Schedule tab to see
-          real coverage metrics here - this dashboard never prepares a week on its own.
-        </p>
-      ) : (
-        <section className="dashboard-section">
+      <div className="dashboard-summary-grid">
+        {coverage.shift_count === 0 ? (
+          <section className="dashboard-section"><h3>Coverage</h3><p className="table-note">
+            No shifts are prepared for this week yet. Prepare the week from the Schedule tab to see
+            real coverage metrics here - this dashboard never prepares a week on its own.
+          </p></section>
+        ) : (
+          <section className="dashboard-section">
           <h3>Coverage</h3>
           <ProgressBar percentage={coverage.coverage_percentage} />
           <p className="table-note">
@@ -169,12 +171,9 @@ export default function Dashboard({ weekStart }) {
               note={coverage.excess_assignments > 0 ? 'More workers assigned than a shift requires.' : null}
             />
           </div>
-        </section>
-      )}
-
-      <WeeklyScheduleGrid employees={employees} shifts={schedule.shifts} weekStart={weekStart} />
-
-      <section className="dashboard-section">
+          </section>
+        )}
+        <section className="dashboard-section">
         <h3>Workforce</h3>
         <div className="metric-cards">
           <MetricCard label="Total workers" value={workforce.total_workers} />
@@ -201,7 +200,16 @@ export default function Dashboard({ weekStart }) {
           />
         </div>
 
-        <h4>Worker utilization</h4>
+        </section>
+      </div>
+
+      <div className="schedule-tabs dashboard-tabs" role="tablist" aria-label="Dashboard detail view">
+        <button type="button" role="tab" aria-selected={activeView === 'grid'} className={activeView === 'grid' ? 'is-selected' : ''} onClick={() => setActiveView('grid')}>Weekly grid</button>
+        <button type="button" role="tab" aria-selected={activeView === 'utilization'} className={activeView === 'utilization' ? 'is-selected' : ''} onClick={() => setActiveView('utilization')}>Worker utilization</button>
+      </div>
+      {activeView === 'grid' ? <WeeklyScheduleGrid employees={employees} shifts={schedule.shifts} weekStart={weekStart} /> : (
+      <section className="dashboard-section" role="tabpanel" aria-label="Worker utilization">
+        <h3>Worker utilization</h3>
         <div className="table-wrapper">
           <table className="data-table">
             <thead>
@@ -226,13 +234,13 @@ export default function Dashboard({ weekStart }) {
                   <td>{worker.weekly_hour_limit}</td>
                   <td>{worker.assigned_hours}</td>
                   <td>{worker.remaining_capacity_hours}</td>
-                  <td>{worker.utilization_percentage}%</td>
+                  <td><div className="utilization-cell"><ProgressBar percentage={worker.utilization_percentage} /><span>{worker.utilization_percentage}%</span></div></td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </section>
+      </section>)}
     </div>
   )
 }

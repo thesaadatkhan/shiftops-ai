@@ -998,11 +998,23 @@ async function journeyDashboardAndWorkforcePlanning(page) {
   await metricValue('Filled positions').waitFor({ timeout: 10000 })
   const assignmentGrid = page.getByRole('table', { name: 'Weekly employee assignment grid' })
   await assignmentGrid.waitFor({ timeout: 10000 })
+  const dashboardTabs = page.getByRole('tablist', { name: 'Dashboard detail view' })
+  check(
+    await dashboardTabs.getByRole('tab', { name: 'Weekly grid', exact: true }).getAttribute('aria-selected') === 'true',
+    'Dashboard defaults to the Weekly grid tab',
+  )
   check(
     (await assignmentGrid.getByRole('row').count()) > 1 &&
       (await assignmentGrid.getByRole('columnheader').count()) === 8 &&
       (await assignmentGrid.locator('.schedule-grid-shift').count()) > 0,
     'Dashboard pivots stored assignments into one employee row and seven day columns without another backend endpoint',
+  )
+  await dashboardTabs.getByRole('tab', { name: 'Worker utilization', exact: true }).click()
+  const utilization = page.getByRole('tabpanel', { name: 'Worker utilization' })
+  await utilization.waitFor()
+  check(
+    (await utilization.getByRole('progressbar').count()) > 0,
+    'Worker utilization is a tabbed detail view and renders percentage progress bars',
   )
   const weekBFilled = await metricValue('Filled positions').innerText()
 
