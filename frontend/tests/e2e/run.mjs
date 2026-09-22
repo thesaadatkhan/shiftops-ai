@@ -530,7 +530,7 @@ async function journeyConflictAndReplace(page) {
   if (!expectedCandidateCode) return
 
   await navButton(page, 'Schedule').click()
-  await mainButton(page, 'Next week →').click()
+  await mainButton(page, 'Next week').click()
   await page.getByText('September 28, 2026').first().waitFor({ timeout: 5000 })
 
   await navButton(page, 'Employees').click()
@@ -566,7 +566,7 @@ async function journeyConflictAndReplace(page) {
   )
 
   // Back to WEEK_A for the journeys that follow.
-  await mainButton(page, '← Previous week').click()
+  await mainButton(page, 'Previous week').click()
   await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
 }
 
@@ -575,7 +575,7 @@ async function journeyConflictAndReplace(page) {
  * re-enables Generate. Runs on WEEK_B, which has no proposal yet. */
 async function journeyUncertainGenerateBlocksRetry(page) {
   await navButton(page, 'Schedule').click()
-  await mainButton(page, 'Next week →').click()
+  await mainButton(page, 'Next week').click()
   await page.getByText('September 28, 2026').first().waitFor({ timeout: 5000 })
 
   let postCount = 0
@@ -616,7 +616,7 @@ async function journeyUncertainGenerateBlocksRetry(page) {
   )
   check(postCount === 1, 'exactly one Generate request was sent despite the uncertain outcome')
 
-  await mainButton(page, '← Previous week').click()
+  await mainButton(page, 'Previous week').click()
   await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
 }
 
@@ -635,7 +635,7 @@ async function journeyUncertainReplaceBlocksRetry(page) {
   if (!incomingCode) return
 
   await navButton(page, 'Schedule').click()
-  await mainButton(page, 'Next week →').click()
+  await mainButton(page, 'Next week').click()
   await page.getByText('September 28, 2026').first().waitFor({ timeout: 5000 })
 
   const row = page.locator('.schedule-hall li', { hasText: worker.employee_code }).first()
@@ -686,7 +686,7 @@ async function journeyUncertainReplaceBlocksRetry(page) {
     'the reconciled replacement actually took effect on the backend',
   )
 
-  await mainButton(page, '← Previous week').click()
+  await mainButton(page, 'Previous week').click()
   await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
 }
 
@@ -826,7 +826,7 @@ async function journeyWeekChangeDuringDelayedRefresh(page) {
   // Change the shared week WHILE the delayed post-edit reload for week A is
   // still in flight - this is the exact race the request-identity token
   // guards against.
-  await page.getByRole('button', { name: 'Next week →', exact: true }).click()
+  await page.getByRole('button', { name: 'Next week', exact: true }).click()
   await page.getByText('2026-09-28').first().waitFor({ timeout: 5000 })
 
   await sleep(3000) // let the delayed week-A response actually land
@@ -877,7 +877,7 @@ async function journeyDashboardAndWorkforcePlanning(page) {
   await metricValue('Filled positions').waitFor({ timeout: 10000 })
   const weekBFilled = await metricValue('Filled positions').innerText()
 
-  await mainButton(page, '← Previous week').click()
+  await mainButton(page, 'Previous week').click()
   await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
   const weekAFilled = await waitForValueChange(metricValue('Filled positions'), weekBFilled, 10000)
 
@@ -916,8 +916,8 @@ async function journeyDashboardAndWorkforcePlanning(page) {
 
   // ----------------------------------------- browsing never prepares a week
   await navButton(page, 'Dashboard').click()
-  await mainButton(page, 'Next week →').click() // back to WEEK_B
-  await mainButton(page, 'Next week →').click() // WEEK_C, 2026-10-05 - never prepared by any fixture or journey
+  await mainButton(page, 'Next week').click() // back to WEEK_B
+  await mainButton(page, 'Next week').click() // WEEK_C, 2026-10-05 - never prepared by any fixture or journey
   await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
   await page.getByText(/No shifts are prepared for this week yet/).waitFor({ timeout: 10000 })
   check(true, 'an unprepared week is shown honestly on the dashboard - zero stored shifts, not an error')
@@ -926,8 +926,8 @@ async function journeyDashboardAndWorkforcePlanning(page) {
   check(weekC.shifts.length === 0, 'browsing the dashboard for a never-prepared week never prepares it')
 
   // Back to WEEK_A, in case anything runs after this journey.
-  await mainButton(page, '← Previous week').click()
-  await mainButton(page, '← Previous week').click()
+  await mainButton(page, 'Previous week').click()
+  await mainButton(page, 'Previous week').click()
   await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
 }
 

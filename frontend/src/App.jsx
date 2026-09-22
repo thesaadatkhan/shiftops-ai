@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import './App.css'
+import AppIcon from './AppIcon.jsx'
 import AIAssistant from './AIAssistant.jsx'
 import Coverage from './Coverage.jsx'
 import Dashboard from './Dashboard.jsx'
@@ -10,12 +11,12 @@ import WorkforcePlanning from './WorkforcePlanning.jsx'
 import { DEFAULT_WEEK_START } from './weeks.js'
 
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'employees', label: 'Employees' },
-  { id: 'schedule', label: 'Schedule' },
-  { id: 'coverage', label: 'Coverage' },
-  { id: 'workforce-planning', label: 'Workforce Planning' },
-  { id: 'ai-assistant', label: 'AI Assistant' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+  { id: 'employees', label: 'Employees', icon: 'employees' },
+  { id: 'schedule', label: 'Schedule', icon: 'schedule' },
+  { id: 'coverage', label: 'Coverage', icon: 'coverage' },
+  { id: 'workforce-planning', label: 'Workforce Planning', icon: 'planning' },
+  { id: 'ai-assistant', label: 'AI Assistant', icon: 'assistant' },
 ]
 
 const SECTION_CONTENT = {
@@ -67,7 +68,10 @@ function App() {
   return (
     <>
       <aside className="sidebar">
-        <h1 className="app-title">ShiftOps AI</h1>
+        <h1 className="app-title">
+          <span className="app-mark"><AppIcon name="logo" /></span>
+          ShiftOps AI
+        </h1>
         <nav>
           <ul>
             {NAV_ITEMS.map((item) => (
@@ -80,6 +84,7 @@ function App() {
                   aria-current={item.id === activeSection ? 'page' : undefined}
                   onClick={() => setActiveSection(item.id)}
                 >
+                  <AppIcon name={item.icon} />
                   {item.label}
                 </button>
               </li>
