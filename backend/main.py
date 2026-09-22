@@ -667,10 +667,11 @@ def draft_schedule_week(week_start: str):
     for every hard rule (see `optimizer.py`). `week_start` must be a real,
     strictly-formatted 'YYYY-MM-DD' Monday, or this is a 400 with a string
     `detail` (D033). A week with no prepared shifts is a 409 - this never
-    prepares one on its own. Every optimization tier must solve to a proven
-    OPTIMAL status; anything else (a timeout, `FEASIBLE`, `INFEASIBLE`,
-    `UNKNOWN`) is a 503 rather than an unproven draft presented as an
-    optimized one. See `optimizer.generate_draft` for the full response
+    prepares one on its own. Coverage and preference must solve to proven
+    OPTIMAL status. The lower-priority workload-balancing tier may return a
+    valid FEASIBLE incumbent at its time limit, reported explicitly in the
+    response; `INFEASIBLE`, `UNKNOWN`, or failure in either higher-priority
+    tier remains a 503. See `optimizer.generate_draft` for the full response
     shape. Nothing here is bound, approved or persisted; that is Phase 7
     increment 3's scope.
     """
@@ -706,10 +707,11 @@ def create_schedule_proposal(week_start: str):
     """Compute a draft and persist it as a new pending proposal.
 
     `week_start` must be a real, strictly-formatted 'YYYY-MM-DD' Monday
-    (400), the week must already be prepared (409 otherwise), and every
-    optimization tier must solve to a proven OPTIMAL status (503 otherwise)
-    - the same contract `POST .../draft` has, since this calls the same
-    `optimizer.generate_draft` before persisting anything.
+    (400), the week must already be prepared (409 otherwise), and the
+    coverage and preference tiers must solve to proven OPTIMAL status (503
+    otherwise). A time-limited but valid final workload-balancing solution is
+    retained and disclosed - the same contract `POST .../draft` has, since
+    this calls the same `optimizer.generate_draft` before persisting anything.
     """
     connection = get_connection()
     try:

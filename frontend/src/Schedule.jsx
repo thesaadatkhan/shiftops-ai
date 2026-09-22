@@ -176,6 +176,12 @@ function ProposalReview({ review, filter, onFilterChange }) {
         <div><span>Uncovered</span><strong>{review.summary.uncovered_positions}</strong></div>
         <div className="proposal-coverage"><span>Expected coverage</span><strong>{review.summary.total_filled_positions} / {review.summary.required_positions}</strong></div>
       </div>
+      {review.summary.workload_balance_status === 'feasible' && (
+        <p className="table-note">
+          Coverage and shift preferences are proven optimal. Workload balancing uses the best valid
+          distribution found within the time limit.
+        </p>
+      )}
       {review.summary.excess_assignments > 0 && <p className="table-note">{review.summary.excess_assignments} existing overstaffed position{review.summary.excess_assignments === 1 ? '' : 's'} remain visible in the full review.</p>}
       <div className="proposal-filter" role="group" aria-label="Proposal shift filter">
         {[['changes', 'Changes'], ['uncovered', 'Uncovered'], ['all', 'All shifts']].map(([value, label]) => (

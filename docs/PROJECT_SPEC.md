@@ -515,6 +515,14 @@ Use constraint-based optimization to assign eligible workers to required shifts.
 
 The scheduling engine should respect all hard constraints and identify cases where complete coverage cannot be achieved. Within those constraints, prioritize coverage and favor preferred shifts over low-preference shifts. A low preference alone must not make a shift uncovered or a worker ineligible.
 
+The implementation proves maximum coverage first and maximum preference
+second, fixing each result as a hard constraint before continuing. Workload
+balancing is the third and lowest-priority objective. If its 30-second proof
+window expires with a valid feasible incumbent, the draft is retained because
+the higher priorities and every hard constraint are already proven; the review
+must disclose that workload balance is best-effort. An infeasible/unknown
+result, or any unproven higher-priority tier, still produces no draft.
+
 ### Workforce Planning (Implemented, Phase 8)
 
 Provides capacity analysis and a workforce-size scenario calculator, backed

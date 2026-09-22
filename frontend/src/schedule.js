@@ -172,6 +172,12 @@ function isValidReviewSummary(summary) {
   if (!fields.every((field) => typeof summary[field] === 'number')) {
     return false
   }
+  if (
+    summary.workload_balance_status !== undefined &&
+    !['not_needed', 'optimal', 'feasible'].includes(summary.workload_balance_status)
+  ) {
+    return false
+  }
   return (
     summary.total_filled_positions === summary.existing_filled_positions + summary.proposed_filled_positions &&
     summary.uncovered_positions === Math.max(0, summary.required_positions - summary.total_filled_positions)

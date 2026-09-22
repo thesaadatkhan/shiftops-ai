@@ -45,12 +45,14 @@ priority rather than guarantee it:**
    already-optimal-preference solutions; it can never trade either away for
    a flatter spread).
 
-**Every tier must solve to a proven `OPTIMAL` status.** If any tier returns
-anything else - `FEASIBLE` (a time or search limit was hit before optimality
-was proven), `INFEASIBLE`, `UNKNOWN`, or any other non-optimal outcome -
-`DraftNotOptimal` is raised rather than returning a draft built from an
-unproven or partial solution. A caller must never be handed something that
-looks like an optimized draft but is not proven to be one.
+The coverage and preference tiers must solve to a proven `OPTIMAL` status.
+The final workload-balancing tier may return `FEASIBLE` when its time limit
+expires: by then maximum coverage and maximum preference are already fixed as
+hard constraints, and every assignment still satisfies every hard eligibility
+rule. In that case the response explicitly reports that workload balance is
+best-effort rather than discarding an otherwise valid, coverage-optimal draft.
+`INFEASIBLE`, `UNKNOWN`, or any failure before the final tier still raises
+`DraftNotOptimal`.
 
 **Deterministic by construction.** Employees are read in `employee_code`
 order and shifts in `(start_datetime, hall, id)` order when the CP-SAT model
@@ -83,25 +85,29 @@ class DraftNotOptimal(RuntimeError):
     an unproven or partial solution."""
 
 
-def _solve_tier(model, solver, sense, expression):
-    """Solve one objective tier and require a proven OPTIMAL status.
+def _solve_tier(model, solver, sense, expression, allow_feasible=False):
+    """Solve one objective tier and return its value and solver status.
 
     Adding the objective and solving are combined here so every call site
-    looks the same, and so a non-OPTIMAL result is caught at the moment it
-    happens rather than discovered later while trying to read a value.
+    looks the same. Coverage and preference require proven optimality. The
+    final, lower-priority workload-balancing tier can explicitly accept a
+    valid FEASIBLE incumbent after its time limit because the two higher
+    priorities are already fixed as hard equalities by then.
     """
     if sense == "max":
         model.Maximize(expression)
     else:
         model.Minimize(expression)
     status = solver.Solve(model)
-    if status != cp_model.OPTIMAL:
+    if status != cp_model.OPTIMAL and not (
+        allow_feasible and status == cp_model.FEASIBLE
+    ):
         raise DraftNotOptimal(
             "The optimizer could not prove an optimal solution for this "
             f"week (solver status: {solver.StatusName(status)}). No draft "
             "was produced rather than returning an unproven or partial one."
         )
-    return solver.Value(expression)
+    return solver.Value(expression), status
 
 
 def _parse(datetime_text):
@@ -353,6 +359,7 @@ def generate_draft(connection, week_start_text):
         model.Add(existing_hours.get(employee["id"], 0) + sum(load_terms) <= max_load)
 
     proposed_pairs = set()
+    workload_balance_status = "not_needed"
     if any_candidate:
         solver = cp_model.CpSolver()
         # Single-threaded with a fixed seed for every one of the three
@@ -366,7 +373,7 @@ def generate_draft(connection, week_start_text):
         # tier 2 ever runs, so tier 2 can only choose AMONG the
         # already-maximal-coverage solutions, never trade coverage away.
         filled_expression = sum(x.values())
-        filled_optimum = _solve_tier(model, solver, "max", filled_expression)
+        filled_optimum, _ = _solve_tier(model, solver, "max", filled_expression)
         model.Add(filled_expression == filled_optimum)
 
         # Tier 2: maximize total preference, then fix it the same way before
@@ -375,12 +382,17 @@ def generate_draft(connection, week_start_text):
             PREFERENCE_WEIGHT[eligible_by_shift[shift_id][employee_id]["preference"]] * var
             for (employee_id, shift_id), var in x.items()
         )
-        preference_optimum = _solve_tier(model, solver, "max", preference_expression)
+        preference_optimum, _ = _solve_tier(model, solver, "max", preference_expression)
         model.Add(preference_expression == preference_optimum)
 
         # Tier 3: minimize the highest projected load, among only the
         # solutions that already achieve both fixed optima above.
-        _solve_tier(model, solver, "min", max_load)
+        _, workload_status = _solve_tier(
+            model, solver, "min", max_load, allow_feasible=True
+        )
+        workload_balance_status = (
+            "optimal" if workload_status == cp_model.OPTIMAL else "feasible"
+        )
 
         for key, var in x.items():
             if solver.Value(var) == 1:
@@ -479,5 +491,6 @@ def generate_draft(connection, week_start_text):
             "total_filled_positions": total_filled,
             "uncovered_positions": max(0, total_required - total_filled),
             "excess_assignments": total_excess,
+            "workload_balance_status": workload_balance_status,
         },
     }

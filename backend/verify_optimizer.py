@@ -30,8 +30,8 @@ Checks:
 15. Neutral beats low when coverage is equal (no preferred option present).
 16. The workload tier chooses the lower maximum projected weekly workload
     when coverage and preference are already tied.
-17. A non-optimal solver status is handled explicitly - `DraftNotOptimal` is
-    raised and no ordinary draft is returned.
+17. A non-optimal coverage/preference solver status is handled explicitly -
+    `DraftNotOptimal` is raised and no ordinary draft is returned.
 18. Existing assignments above `required_staff` produce truthful, never
     negative, per-shift and summary counts, with the excess reported
     explicitly rather than silently lost.
@@ -40,6 +40,9 @@ Checks:
     is eligible.
 20. Multiple existing assignments on one shift come back in a stable,
     deterministic order (by employee_code, then id), not insertion order.
+21. A valid FEASIBLE result is accepted only when the caller explicitly marks
+    the final workload-balancing tier as best-effort; the same status remains
+    an error for coverage and preference.
 
 Run with:  python verify_optimizer.py
 Exits non-zero if any check fails.
@@ -52,7 +55,7 @@ from unittest.mock import patch
 from ortools.sat.python import cp_model
 
 from database import create_schema, get_connection
-from optimizer import DraftNotOptimal, WeekNotPrepared, generate_draft
+from optimizer import DraftNotOptimal, WeekNotPrepared, _solve_tier, generate_draft
 from weeks import InvalidWeekStart
 
 DATETIME_FORMAT = "%Y-%m-%d %H:%M"
@@ -343,6 +346,35 @@ def check_non_optimal_status_raises_controlled_error():
     connection.close()
 
 
+def check_feasible_status_is_limited_to_workload_tier():
+    class FeasibleSolver:
+        def Solve(self, model):
+            return cp_model.FEASIBLE
+
+        def Value(self, expression):
+            return 1
+
+        def StatusName(self, status):
+            return "FEASIBLE"
+
+    model = cp_model.CpModel()
+    value = model.NewBoolVar("value")
+
+    try:
+        _solve_tier(model, FeasibleSolver(), "max", value)
+        check(False, "FEASIBLE is never accepted for coverage or preference")
+    except DraftNotOptimal:
+        check(True, "FEASIBLE remains a controlled error for coverage and preference")
+
+    result, status = _solve_tier(
+        model, FeasibleSolver(), "min", value, allow_feasible=True
+    )
+    check(
+        result == 1 and status == cp_model.FEASIBLE,
+        "the final workload tier can retain its valid FEASIBLE incumbent",
+    )
+
+
 def check_overstaffed_shift_accounting():
     connection = fixture_database()
     w1 = confirmed_worker(connection, "SW-001")
@@ -631,6 +663,7 @@ def main_entry():
     check_neutral_beats_low_when_coverage_equal()
     check_workload_tier_minimizes_max_when_tied()
     check_non_optimal_status_raises_controlled_error()
+    check_feasible_status_is_limited_to_workload_tier()
     check_overstaffed_shift_accounting()
     check_existing_assignments_stable_order()
     check_insufficient_eligible_workers_reason()
