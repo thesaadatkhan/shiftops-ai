@@ -376,8 +376,8 @@ def main():
         "seeding creates one semester schedule per demo worker",
     )
     check(
-        fresh.execute("SELECT COUNT(*) AS n FROM class_blocks").fetchone()["n"] == 148,
-        f"seeding creates the 148 demo class blocks ({fresh.execute('SELECT COUNT(*) AS n FROM class_blocks').fetchone()['n']})",
+        fresh.execute("SELECT COUNT(*) AS n FROM class_blocks").fetchone()["n"] == 147,
+        f"seeding creates the 147 demo class blocks ({fresh.execute('SELECT COUNT(*) AS n FROM class_blocks').fetchone()['n']})",
     )
     check(
         fresh.execute("SELECT COUNT(*) AS n FROM courses").fetchone()["n"] == 0,

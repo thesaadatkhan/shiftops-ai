@@ -106,9 +106,14 @@ def add_block(connection, schedule_id, day, start, end):
     connection.commit()
 
 
+def reporting_payload():
+    """Run behavior fixtures against their explicit historical test week."""
+    return main.list_employees(week_start="2026-10-05")
+
+
 def listed(code):
     """One worker's row from the real endpoint."""
-    payload = main.list_employees()
+    payload = reporting_payload()
     for employee in payload["employees"]:
         if employee["employee_code"] == code:
             return employee
@@ -118,8 +123,8 @@ def listed(code):
 def main_checks():
     week = main.list_employees()
     check(
-        (week["week_start"], week["week_end"]) == ("2026-10-05", "2026-10-11"),
-        f"the reporting week is Mon 5 - Sun 11 October 2026 "
+        (week["week_start"], week["week_end"]) == ("2026-09-21", "2026-09-27"),
+        f"the default reporting week is Mon 21 - Sun 27 September 2026 "
         f"({week['week_start']}..{week['week_end']})",
     )
 
@@ -235,7 +240,7 @@ def main_checks():
     add_schedule(connection, expired, "2026-01-12", "2026-05-01", "2026-01-12 00:00")
     connection.close()
 
-    states = {row["employee_code"]: row["timetable_status"] for row in main.list_employees()["employees"]}
+    states = {row["employee_code"]: row["timetable_status"] for row in reporting_payload()["employees"]}
     check(states["SW-001"] == "missing", f"no schedule at all reads missing ({states['SW-001']})")
     check(states["SW-002"] == "unconfirmed",
           f"a schedule nobody confirmed reads unconfirmed ({states['SW-002']})")
@@ -247,7 +252,7 @@ def main_checks():
           f"a confirmed schedule for another period reads outside_period ({states['SW-006']})")
 
     # 7. Confirmed-with-no-classes must stay distinguishable from missing.
-    rows = {row["employee_code"]: row for row in main.list_employees()["employees"]}
+    rows = {row["employee_code"]: row for row in reporting_payload()["employees"]}
     check(
         rows["SW-005"]["class_block_count"] == 0 and rows["SW-001"]["class_block_count"] == 0,
         "both the confirmed-no-classes and the missing worker have zero blocks",

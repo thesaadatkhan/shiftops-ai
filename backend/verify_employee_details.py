@@ -6,7 +6,7 @@ redirects that path to a throwaway file *before* importing `main`, and
 refuses to run if `main` has already been imported. The project's own
 `backend/shiftops.db` is never created, opened or migrated here.
 
-These checks call `main.get_employee_details()` - the real endpoint function -
+These checks call `get_details()` - the real endpoint function -
 and read the payload it returns, rather than re-implementing its SQL. A test
 that duplicates the query it is checking agrees with the code by construction
 and proves nothing.
@@ -106,6 +106,15 @@ def fresh_database():
     connection = database.get_connection()
     database.create_schema(connection)
     return connection
+
+
+def get_details(code, week_start="2026-10-05"):
+    """Run the established behavior fixtures against their explicit week."""
+    return main.get_employee_details(code, week_start)
+
+
+def list_employees():
+    return main.list_employees(week_start="2026-10-05")
 
 
 def snapshot(connection):
@@ -213,7 +222,7 @@ def check_identity_and_ownership():
     add_leave(connection, theirs, "2026-11-01 08:00", "2026-11-01 14:00")
     connection.close()
 
-    payload = main.get_employee_details("SW-001")
+    payload = get_details("SW-001")
 
     check(
         payload["employee"]["employee_code"] == "SW-001"
@@ -236,7 +245,7 @@ def check_identity_and_ownership():
         "only this worker's approved leave appears",
     )
 
-    other = main.get_employee_details("SW-002")
+    other = get_details("SW-002")
     check(
         block_times(other["semesters"][0]) == [(4, "18:00", "19:00")]
         and [row["hall"] for row in other["shift_preferences"]] == ["Helix"]
@@ -267,7 +276,7 @@ def check_unknown_worker():
     connection.close()
 
     try:
-        main.get_employee_details("SW-999")
+        get_details("SW-999")
         check(False, "an unknown employee code raises (it did not)")
     except HTTPException as error:
         check(
@@ -282,7 +291,7 @@ def check_unknown_worker():
     # A code differing only in case is a different code here, exactly as it is
     # for every other route that addresses a worker by code.
     try:
-        main.get_employee_details("sw-001")
+        get_details("sw-001")
         check(False, "a case-mismatched code raises (it did not)")
     except HTTPException as error:
         check(
@@ -303,7 +312,7 @@ def check_inactive_worker():
     add_block(connection, schedule, 2, "13:00", "14:15")
     connection.close()
 
-    payload = main.get_employee_details("SW-007")
+    payload = get_details("SW-007")
     check(
         payload["employee"]["is_active"] is False,
         "an inactive worker is reported as inactive",
@@ -339,7 +348,7 @@ def check_multiple_semesters():
     add_block(connection, future, 0, "10:00", "11:15")
     connection.close()
 
-    payload = main.get_employee_details("SW-010")
+    payload = get_details("SW-010")
     semesters = payload["semesters"]
 
     check(len(semesters) == 3, f"every stored semester is returned ({len(semesters)})")
@@ -381,7 +390,7 @@ def check_only_expired_semester():
     add_block(connection, schedule, 1, "08:00", "09:15")
     connection.close()
 
-    payload = main.get_employee_details("SW-011")
+    payload = get_details("SW-011")
     check(
         payload["employee"]["timetable_status"] == "outside_period",
         "a confirmed semester elsewhere does not make the week ready "
@@ -407,7 +416,7 @@ def check_only_expired_semester():
 def coverage_of(connection, code, start, end, confirmed=None):
     employee_id = add_worker(connection, code, f"Boundary {code}")
     add_schedule(connection, employee_id, start, end, confirmed)
-    return main.get_employee_details(code)["semesters"][0]["reporting_week_coverage"]
+    return get_details(code)["semesters"][0]["reporting_week_coverage"]
 
 
 def check_semester_week_coverage():
@@ -440,7 +449,7 @@ def check_semester_week_coverage():
     add_schedule(connection, split, "2026-10-08", "2026-12-11", "2026-10-08 00:00")
     connection.close()
 
-    payload = main.get_employee_details("SW-071")
+    payload = get_details("SW-071")
     states = [s["reporting_week_coverage"] for s in payload["semesters"]]
     check(
         states == ["partial", "partial"],
@@ -487,14 +496,14 @@ def check_three_empty_states():
     )
     connection.close()
 
-    missing = main.get_employee_details("SW-020")
+    missing = get_details("SW-020")
     check(
         missing["semesters"] == []
         and missing["employee"]["timetable_status"] == "missing",
         "no schedule at all reads as missing, with no semesters listed",
     )
 
-    empty = main.get_employee_details("SW-021")
+    empty = get_details("SW-021")
     check(
         len(empty["semesters"]) == 1
         and empty["semesters"][0]["class_blocks"] == []
@@ -504,7 +513,7 @@ def check_three_empty_states():
         "confirmation",
     )
 
-    confirmed = main.get_employee_details("SW-022")
+    confirmed = get_details("SW-022")
     check(
         len(confirmed["semesters"]) == 1
         and confirmed["semesters"][0]["class_blocks"] == []
@@ -539,7 +548,7 @@ def check_times_and_ordering():
     add_block(connection, schedule, 3, "16:00", "17:15")
     connection.close()
 
-    semester = main.get_employee_details("SW-030")["semesters"][0]
+    semester = get_details("SW-030")["semesters"][0]
 
     check(
         block_times(semester)
@@ -564,7 +573,7 @@ def check_times_and_ordering():
     )
 
     # Repeating the read returns exactly the same thing.
-    again = main.get_employee_details("SW-030")["semesters"][0]
+    again = get_details("SW-030")["semesters"][0]
     check(again == semester, "repeating the read returns an identical payload")
 
 
@@ -588,7 +597,7 @@ def check_preferences_and_leave():
     add_leave(connection, employee_id, "2026-12-24 00:00", "2026-12-26 23:00")
     connection.close()
 
-    payload = main.get_employee_details("SW-040")
+    payload = get_details("SW-040")
     preferences = payload["shift_preferences"]
 
     check(
@@ -625,7 +634,7 @@ def check_preferences_and_leave():
         "approved leave keeps its actual start and end datetimes, in order",
     )
 
-    bare = main.get_employee_details("SW-041")
+    bare = get_details("SW-041")
     check(
         bare["shift_preferences"] == [] and bare["approved_leave"] == [],
         "a worker with none of either gets empty lists, not invented rows",
@@ -673,7 +682,7 @@ def check_migrated_provenance():
     add_block(connection, typed_schedule, 2, "10:00", "11:15")
     connection.close()
 
-    legacy = main.get_employee_details("SW-900")["semesters"][0]
+    legacy = get_details("SW-900")["semesters"][0]
     check(
         legacy["dates_provisional"] is True,
         "a migrated schedule's dates are reported as provisional",
@@ -692,7 +701,7 @@ def check_migrated_provenance():
         "a migrated legacy timetable stays unconfirmed",
     )
 
-    demo = main.get_employee_details("SW-001")["semesters"][0]
+    demo = get_details("SW-001")["semesters"][0]
     check(
         demo["dates_provisional"] is True,
         "a migrated demo timetable is provisional too",
@@ -707,7 +716,7 @@ def check_migrated_provenance():
         f"{len(demo_meetings)})",
     )
 
-    entered = main.get_employee_details("SW-901")["semesters"][0]
+    entered = get_details("SW-901")["semesters"][0]
     check(
         entered["dates_provisional"] is False,
         "a schedule with no stored provenance is not called provisional",
@@ -730,7 +739,7 @@ def check_migrated_provenance():
 
     # The legacy course rows still exist, and neither they nor the internal
     # note text are exposed as a second timetable.
-    payload = main.get_employee_details("SW-001")
+    payload = get_details("SW-001")
     serialized = json.dumps(payload)
     check(
         "courses" not in payload and "class_meetings" not in payload,
@@ -792,7 +801,7 @@ def check_assigned_hours_scoping():
     assign(connection, other, "Helix", "2026-10-06 17:00", "2026-10-06 22:30")
     connection.close()
 
-    payload = main.get_employee_details("SW-080")
+    payload = get_details("SW-080")
     check(
         payload["employee"]["assigned_hours"] == 10,
         "the target's own hours are 5 + 5, cross-midnight charged to the "
@@ -809,7 +818,7 @@ def check_assigned_hours_scoping():
 
     # The same broken row still makes the OTHER worker's own page fail.
     try:
-        main.get_employee_details("SW-081")
+        get_details("SW-081")
         check(False, "the owner of the invalid shift still gets an error (it did not)")
     except HTTPException as error:
         check(
@@ -824,7 +833,7 @@ def check_assigned_hours_scoping():
     # And the workforce list, which reports on everyone, still validates
     # everything - that behaviour must not be weakened.
     try:
-        main.list_employees()
+        list_employees()
         check(False, "the list endpoint still validates every assignment (it did not)")
     except HTTPException as error:
         check(
@@ -836,7 +845,7 @@ def check_assigned_hours_scoping():
     connection = fresh_database()
     add_worker(connection, "SW-082", "Never Assigned")
     connection.close()
-    bare = main.get_employee_details("SW-082")
+    bare = get_details("SW-082")
     check(
         bare["employee"]["assigned_hours"] == 0
         and bare["employee"]["remaining_capacity_hours"] == 20,
@@ -849,7 +858,7 @@ def check_assigned_hours_scoping():
     later = add_worker(connection, "SW-083", "Next Week Only")
     assign(connection, later, "Vega", "2026-10-12 17:00", "2026-10-12 22:00")
     connection.close()
-    outside = main.get_employee_details("SW-083")
+    outside = get_details("SW-083")
     check(
         outside["employee"]["assigned_hours"] == 0,
         "an assignment in another week is not charged to this one "
@@ -870,8 +879,8 @@ def check_selected_week_applies_to_details():
     schedule = add_schedule(connection, employee_id, "2026-08-24", "2026-12-11", "2026-01-01 00:00")
     add_block(connection, schedule, 0, "09:00", "10:00")  # every Monday
 
-    # Sample week (2026-10-05): one assignment.
-    assign(connection, employee_id, "Andromeda", "2026-10-05 08:00", "2026-10-05 13:00")
+    # Canonical default week (2026-09-21): one assignment.
+    assign(connection, employee_id, "Andromeda", "2026-09-21 08:00", "2026-09-21 13:00")
     # A genuinely different week (2026-11-02): two assignments, so the total
     # hours are actually different, not coincidentally the same number.
     assign(connection, employee_id, "Vega", "2026-11-02 08:00", "2026-11-02 13:00")
@@ -879,9 +888,9 @@ def check_selected_week_applies_to_details():
     connection.close()
 
     default_payload = main.get_employee_details("SW-090")
-    other_payload = main.get_employee_details("SW-090", "2026-11-02")
+    other_payload = get_details("SW-090", "2026-11-02")
 
-    check(default_payload["week_start"] == "2026-10-05", "omitting week_start keeps the fixed sample week default")
+    check(default_payload["week_start"] == "2026-09-21", "omitting week_start keeps the canonical demo week default")
     check(other_payload["week_start"] == "2026-11-02", "supplying week_start changes the reported week")
     check(
         default_payload["employee"]["assigned_hours"] == 5,
@@ -910,7 +919,7 @@ def check_selected_week_applies_to_details():
     )
 
     try:
-        main.get_employee_details("SW-090", "not-a-date")
+        get_details("SW-090", "not-a-date")
         check(False, "a malformed week_start on the details route is rejected")
     except HTTPException as error:
         check(error.status_code == 400, f"a malformed week_start on the details route is 400 ({error.status_code})")
@@ -939,10 +948,10 @@ def check_scheduling_ready_distinguishes_provisional():
     connection.commit()
     connection.close()
 
-    provisional = main.get_employee_details("SW-091")["employee"]
-    accepted = main.get_employee_details("SW-092")["employee"]
-    unconfirmed = main.get_employee_details("SW-093")["employee"]
-    missing = main.get_employee_details("SW-094")["employee"]
+    provisional = get_details("SW-091")["employee"]
+    accepted = get_details("SW-092")["employee"]
+    unconfirmed = get_details("SW-093")["employee"]
+    missing = get_details("SW-094")["employee"]
 
     check(
         provisional["timetable_status"] == "confirmed",
@@ -964,7 +973,7 @@ def check_scheduling_ready_distinguishes_provisional():
     # The list endpoint must agree exactly - one readiness definition, reused.
     listed = {
         row["employee_code"]: row
-        for row in main.list_employees()["employees"]
+        for row in list_employees()["employees"]
         if row["employee_code"] in ("SW-091", "SW-092", "SW-093", "SW-094")
     }
     for code, detail in (
@@ -996,9 +1005,9 @@ def check_read_is_read_only():
     connection.close()
 
     for _ in range(3):
-        main.get_employee_details("SW-050")
+        get_details("SW-050")
     try:
-        main.get_employee_details("SW-404")
+        get_details("SW-404")
     except HTTPException:
         pass
 

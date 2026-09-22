@@ -7,7 +7,7 @@
 // timezone conversion anywhere else in this project either (D025's single
 // local simulation clock).
 
-export const DEFAULT_WEEK_START = '2026-10-05'
+export const DEFAULT_WEEK_START = '2026-09-21'
 
 function toParts(isoDate) {
   const [year, month, day] = isoDate.split('-').map(Number)

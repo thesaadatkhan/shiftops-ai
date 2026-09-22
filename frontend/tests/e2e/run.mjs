@@ -243,8 +243,12 @@ async function backendJson(pathAndQuery) {
 
 function spawnPython(args) {
   const venvPython = path.join(BACKEND_ROOT, '.venv', 'Scripts', 'python.exe')
-  const pythonExe = existsSync(venvPython) ? venvPython : 'python'
-  return spawn(pythonExe, args, { cwd: BACKEND_ROOT, stdio: ['ignore', 'pipe', 'pipe'] })
+  const pythonExe = process.env.SHIFTOPS_PYTHON || (existsSync(venvPython) ? venvPython : 'python')
+  return spawn(pythonExe, args, {
+    cwd: BACKEND_ROOT,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env, PYTHONPATH: process.env.SHIFTOPS_PYTHONPATH || process.env.PYTHONPATH },
+  })
 }
 
 async function main() {
@@ -353,6 +357,7 @@ async function main() {
       console.log('[debug] body text:', (await page.locator('body').innerText()).slice(0, 800))
     }
 
+    await journeyManualUncoveredFill(page)
     await journeyGenerateReviewApprove(page)
     await journeyConflictAndReplace(page)
     await journeyUncertainGenerateBlocksRetry(page)
@@ -426,6 +431,40 @@ async function main() {
 
 // ------------------------------------------------------------- journeys
 
+/** uncovered shift -> choose an eligible worker -> cancel -> confirm */
+async function journeyManualUncoveredFill(page) {
+  const before = await backendJson('/api/schedule/weeks/2026-09-21')
+  const target = before.shifts.find((shift) => !shift.covered)
+  check(Boolean(target), 'fixture sanity: the selected week has an uncovered shift for manual fill')
+  if (!target) return
+  const coverage = await backendJson(`/api/shifts/${target.id}/coverage`)
+  const incoming = coverage.eligible_candidates[0]
+  check(Boolean(incoming), 'fixture sanity: the uncovered shift has an eligible manual-fill candidate')
+  if (!incoming) return
+
+  await page.getByRole('button', { name: 'Assign worker', exact: true }).first().click()
+  const dialog = page.getByRole('alertdialog', { name: 'Assign worker' })
+  await dialog.waitFor()
+  await dialog.locator('select').selectOption(incoming.employee_code)
+  const stillBefore = await backendJson('/api/schedule/weeks/2026-09-21')
+  const stillTarget = stillBefore.shifts.find((shift) => shift.id === target.id)
+  check(stillTarget.assigned_count === 0, 'choosing a worker does not assign them before confirmation')
+  await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await dialog.waitFor({ state: 'hidden' })
+
+  await page.getByRole('button', { name: 'Assign worker', exact: true }).first().click()
+  await dialog.waitFor()
+  await dialog.locator('select').selectOption(incoming.employee_code)
+  await dialog.getByRole('button', { name: 'Confirm assignment', exact: true }).click()
+  await dialog.waitFor({ state: 'hidden', timeout: 10000 })
+  const after = await backendJson('/api/schedule/weeks/2026-09-21')
+  const filled = after.shifts.find((shift) => shift.id === target.id)
+  check(
+    filled.assigned_employees.some((worker) => worker.employee_code === incoming.employee_code),
+    'explicit confirmation persists the selected manual assignment',
+  )
+}
+
 /** generate -> review -> cancel approval -> approve -> reload/recover */
 async function journeyGenerateReviewApprove(page) {
   await mainButton(page, 'Generate Schedule').click()
@@ -454,13 +493,13 @@ async function journeyGenerateReviewApprove(page) {
 
 /** later class/leave edit -> visible assignment conflict -> replacement -> verified resolution */
 async function journeyConflictAndReplace(page) {
-  // Deliberately on WEEK_B (2026-10-12), not the week Journey A generated
+  // Deliberately on WEEK_B (2026-09-28), not the week Journey A generated
   // and approved a full schedule on: maximizing coverage there naturally
   // pushes every seeded worker toward their weekly hour cap, leaving no
   // genuine replacement candidate anywhere. WEEK_B carries exactly one
   // hand-seeded assignment (SW-201, see e2e_fixtures.py) with every other
   // worker completely free - a real candidate is guaranteed by construction.
-  const weekB = await backendJson('/api/schedule/weeks/2026-10-12')
+  const weekB = await backendJson('/api/schedule/weeks/2026-09-28')
   const assignedShift = weekB.shifts.find((shift) => shift.assigned_employees.length > 0)
   check(Boolean(assignedShift), 'fixture sanity: WEEK_B has the one hand-seeded assignment')
   if (!assignedShift) return
@@ -472,7 +511,7 @@ async function journeyConflictAndReplace(page) {
 
   await navButton(page, 'Schedule').click()
   await mainButton(page, 'Next week →').click()
-  await page.getByText('October 12, 2026').first().waitFor({ timeout: 5000 })
+  await page.getByText('September 28, 2026').first().waitFor({ timeout: 5000 })
 
   await navButton(page, 'Employees').click()
   await page.getByRole('button', { name: `View details for ${outgoing.full_name}` }).click()
@@ -497,7 +536,7 @@ async function journeyConflictAndReplace(page) {
   await page.getByRole('button', { name: 'Confirm replacement', exact: true }).click()
   await page.getByRole('alertdialog', { name: 'Replace assignment' }).waitFor({ state: 'hidden', timeout: 10000 })
 
-  const afterReplace = await backendJson('/api/schedule/weeks/2026-10-12')
+  const afterReplace = await backendJson('/api/schedule/weeks/2026-09-28')
   const afterShift = afterReplace.shifts.find((shift) => shift.id === assignedShift.id)
   const stillHasOutgoing = afterShift.assigned_employees.some((worker) => worker.employee_code === outgoing.employee_code)
   check(!stillHasOutgoing, 'the replaced worker no longer holds the shift after confirmation')
@@ -508,7 +547,7 @@ async function journeyConflictAndReplace(page) {
 
   // Back to WEEK_A for the journeys that follow.
   await mainButton(page, '← Previous week').click()
-  await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
+  await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
 }
 
 /** uncertain Generate response whose reconciling reload ALSO fails -> Generate
@@ -517,7 +556,7 @@ async function journeyConflictAndReplace(page) {
 async function journeyUncertainGenerateBlocksRetry(page) {
   await navButton(page, 'Schedule').click()
   await mainButton(page, 'Next week →').click()
-  await page.getByText('October 12, 2026').first().waitFor({ timeout: 5000 })
+  await page.getByText('September 28, 2026').first().waitFor({ timeout: 5000 })
 
   let postCount = 0
   await page.route('**/api/schedule/weeks/*/proposals', async (route) => {
@@ -558,14 +597,14 @@ async function journeyUncertainGenerateBlocksRetry(page) {
   check(postCount === 1, 'exactly one Generate request was sent despite the uncertain outcome')
 
   await mainButton(page, '← Previous week').click()
-  await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
+  await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
 }
 
 /** uncertain replacement response whose reconciling reload ALSO fails -> Confirm
  * replacement stays disabled (never a blind second mutation) -> Reload
  * detects the replacement actually committed and closes the stale form. */
 async function journeyUncertainReplaceBlocksRetry(page) {
-  const week = await backendJson('/api/schedule/weeks/2026-10-12')
+  const week = await backendJson('/api/schedule/weeks/2026-09-28')
   const target = week.shifts.find((shift) => shift.assigned_employees.length > 0)
   check(Boolean(target), 'fixture sanity: WEEK_B still has an assignment for the uncertain-replace journey')
   if (!target) return
@@ -577,7 +616,7 @@ async function journeyUncertainReplaceBlocksRetry(page) {
 
   await navButton(page, 'Schedule').click()
   await mainButton(page, 'Next week →').click()
-  await page.getByText('October 12, 2026').first().waitFor({ timeout: 5000 })
+  await page.getByText('September 28, 2026').first().waitFor({ timeout: 5000 })
 
   const row = page.locator('.schedule-hall li', { hasText: worker.employee_code }).first()
   await row.getByRole('button', { name: 'Replace', exact: true }).click()
@@ -619,7 +658,7 @@ async function journeyUncertainReplaceBlocksRetry(page) {
   check(true, 'the reconciling Reload closes the stale form once it detects the replacement already committed')
   check(replaceRequests === 1, 'exactly one replace request was sent despite the uncertain outcome')
 
-  const afterReplace = await backendJson('/api/schedule/weeks/2026-10-12')
+  const afterReplace = await backendJson('/api/schedule/weeks/2026-09-28')
   const afterShift = afterReplace.shifts.find((shift) => shift.id === target.id)
   check(
     afterShift.assigned_employees.some((w) => w.employee_code === incomingCode) &&
@@ -628,12 +667,12 @@ async function journeyUncertainReplaceBlocksRetry(page) {
   )
 
   await mainButton(page, '← Previous week').click()
-  await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
+  await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
 }
 
 /** cancel delayed replacement loading -> late response -> another action succeeds */
 async function journeyCancelDelayedReplacement(page) {
-  const week = await backendJson('/api/schedule/weeks/2026-10-05')
+  const week = await backendJson('/api/schedule/weeks/2026-09-21')
   const target = week.shifts.find((shift) => shift.assigned_employees.length > 0)
   check(Boolean(target), 'fixture sanity: a replaceable assignment exists for the cancellation journey')
   if (!target) return
@@ -668,7 +707,7 @@ async function journeyCancelDelayedReplacement(page) {
 
 /** approval/replacement mutual exclusion */
 async function journeyMutualExclusion(page) {
-  const week = await backendJson('/api/schedule/weeks/2026-10-05')
+  const week = await backendJson('/api/schedule/weeks/2026-09-21')
   const target = week.shifts.find((shift) => shift.assigned_employees.length > 0)
   check(Boolean(target), 'fixture sanity: a replaceable assignment exists for the mutual-exclusion journey')
   if (!target) return
@@ -677,7 +716,7 @@ async function journeyMutualExclusion(page) {
   const proposal = await page.evaluate(async ({ backendOrigin, weekStart }) => {
     const response = await fetch(`${backendOrigin}/api/schedule/weeks/${weekStart}/proposals`, { method: 'POST' })
     return response.status
-  }, { backendOrigin: BACKEND_ORIGIN, weekStart: '2026-10-05' })
+  }, { backendOrigin: BACKEND_ORIGIN, weekStart: '2026-09-21' })
   check(proposal === 201 || proposal === 503 || proposal === 409, `a proposal exists or was just created for the mutual-exclusion journey (${proposal})`)
   await page.reload()
   await navButton(page, 'Schedule').click()
@@ -704,7 +743,7 @@ async function journeyCorruptedApprovalResponse(page) {
     const response = await fetch(`${backendOrigin}/api/schedule/weeks/${weekStart}/proposals`, { method: 'POST' })
     if (!response.ok) return null
     return response.json()
-  }, { backendOrigin: BACKEND_ORIGIN, weekStart: '2026-10-05' })
+  }, { backendOrigin: BACKEND_ORIGIN, weekStart: '2026-09-21' })
   check(Boolean(created), 'fixture sanity: a fresh proposal was created for the corrupted-response journey')
   if (!created) return
 
@@ -746,8 +785,8 @@ async function journeyWeekChangeDuringDelayedRefresh(page) {
   await navButton(page, 'Employees').click()
   await page.getByRole('button', { name: 'View details for Journey Charlie' }).click()
   await page.getByRole('button', { name: 'Add approved leave', exact: true }).click()
-  await page.locator('#leave-start').fill('2026-10-06T09:00')
-  await page.locator('#leave-end').fill('2026-10-06T10:00')
+  await page.locator('#leave-start').fill('2026-09-22T09:00')
+  await page.locator('#leave-end').fill('2026-09-22T10:00')
 
   let delayedOnce = false
   await page.route('**/api/employees/SW-203*', async (route) => {
@@ -768,13 +807,13 @@ async function journeyWeekChangeDuringDelayedRefresh(page) {
   // still in flight - this is the exact race the request-identity token
   // guards against.
   await page.getByRole('button', { name: 'Next week →', exact: true }).click()
-  await page.getByText('2026-10-12').first().waitFor({ timeout: 5000 })
+  await page.getByText('2026-09-28').first().waitFor({ timeout: 5000 })
 
   await sleep(3000) // let the delayed week-A response actually land
 
   const heading = await page.getByText(/^Timetable, /).first().textContent()
   check(
-    heading.includes('2026-10-12') || heading.includes('2026-10-18'),
+    heading.includes('2026-09-28') || heading.includes('2026-10-04'),
     `the details view shows week B's dates, not overwritten by the late week-A response (saw: "${heading}")`,
   )
 
@@ -788,7 +827,7 @@ async function journeyWeekChangeDuringDelayedRefresh(page) {
  * Planning's scenario calculator reacts to explicit supervisor inputs and
  * shows the required aggregate-lower-bound feasibility warning; browsing to
  * a never-prepared week never prepares it. Entering this journey, the
- * shared reporting week is WEEK_B (2026-10-12), left behind by the previous
+ * shared reporting week is WEEK_B (2026-09-28), left behind by the previous
  * journey. */
 async function journeyDashboardAndWorkforcePlanning(page) {
   function metricValue(label) {
@@ -819,7 +858,7 @@ async function journeyDashboardAndWorkforcePlanning(page) {
   const weekBFilled = await metricValue('Filled positions').innerText()
 
   await mainButton(page, '← Previous week').click()
-  await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
+  await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
   const weekAFilled = await waitForValueChange(metricValue('Filled positions'), weekBFilled, 10000)
 
   check(
@@ -858,18 +897,18 @@ async function journeyDashboardAndWorkforcePlanning(page) {
   // ----------------------------------------- browsing never prepares a week
   await navButton(page, 'Dashboard').click()
   await mainButton(page, 'Next week →').click() // back to WEEK_B
-  await mainButton(page, 'Next week →').click() // WEEK_C, 2026-10-19 - never prepared by any fixture or journey
-  await page.getByText('October 19, 2026').first().waitFor({ timeout: 5000 })
+  await mainButton(page, 'Next week →').click() // WEEK_C, 2026-10-05 - never prepared by any fixture or journey
+  await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
   await page.getByText(/No shifts are prepared for this week yet/).waitFor({ timeout: 10000 })
   check(true, 'an unprepared week is shown honestly on the dashboard - zero stored shifts, not an error')
 
-  const weekC = await backendJson('/api/schedule/weeks/2026-10-19')
+  const weekC = await backendJson('/api/schedule/weeks/2026-10-05')
   check(weekC.shifts.length === 0, 'browsing the dashboard for a never-prepared week never prepares it')
 
   // Back to WEEK_A, in case anything runs after this journey.
   await mainButton(page, '← Previous week').click()
   await mainButton(page, '← Previous week').click()
-  await page.getByText('October 5, 2026').first().waitFor({ timeout: 5000 })
+  await page.getByText('September 21, 2026').first().waitFor({ timeout: 5000 })
 }
 
 // --------------------------------------------------------- AI Assistant (Phase 9)

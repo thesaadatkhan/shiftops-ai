@@ -45,7 +45,7 @@ from synthetic_data import (
 TIME_FORMAT = "%Y-%m-%d %H:%M"
 
 # Written out by hand from revision 3's preference patterns applied to the
-# sample week (Mon 2026-10-05 to Sun 2026-10-11), independently of the
+# first canonical week (Mon 2026-09-21 to Sun 2026-09-27), independently of the
 # generator constants these checks are testing. Patterns whose shift does not
 # exist in the generated set contribute nothing, which is why Priya and Devon
 # have no preferred rows at all:
@@ -62,36 +62,36 @@ TIME_FORMAT = "%Y-%m-%d %H:%M"
 #          Helix Mon-Fri 22:00-02:00 low          -> 5 shifts exist
 EXPECTED_REPRESENTATIVE_PREFERENCES = {
     "SW-001": {
-        ("Vega", "2026-10-05 17:00", "2026-10-05 22:00"): "preferred",
-        ("Vega", "2026-10-06 17:00", "2026-10-06 22:00"): "preferred",
-        ("Vega", "2026-10-07 17:00", "2026-10-07 22:00"): "preferred",
-        ("Vega", "2026-10-08 17:00", "2026-10-08 22:00"): "preferred",
-        ("Vega", "2026-10-09 17:00", "2026-10-09 22:00"): "preferred",
+        ("Vega", "2026-09-21 17:00", "2026-09-21 22:00"): "preferred",
+        ("Vega", "2026-09-22 17:00", "2026-09-22 22:00"): "preferred",
+        ("Vega", "2026-09-23 17:00", "2026-09-23 22:00"): "preferred",
+        ("Vega", "2026-09-24 17:00", "2026-09-24 22:00"): "preferred",
+        ("Vega", "2026-09-25 17:00", "2026-09-25 22:00"): "preferred",
     },
     "SW-002": {
-        ("Capella", "2026-10-05 22:00", "2026-10-06 03:00"): "preferred",
-        ("Capella", "2026-10-06 22:00", "2026-10-07 03:00"): "preferred",
-        ("Capella", "2026-10-07 22:00", "2026-10-08 03:00"): "preferred",
-        ("Capella", "2026-10-08 22:00", "2026-10-09 03:00"): "preferred",
-        ("Capella", "2026-10-08 03:00", "2026-10-08 08:00"): "low",
-        ("Sirius", "2026-10-05 17:00", "2026-10-05 22:00"): "low",
-        ("Sirius", "2026-10-06 17:00", "2026-10-06 22:00"): "low",
-        ("Sirius", "2026-10-07 17:00", "2026-10-07 22:00"): "low",
-        ("Sirius", "2026-10-08 17:00", "2026-10-08 22:00"): "low",
-        ("Sirius", "2026-10-09 17:00", "2026-10-09 22:00"): "low",
+        ("Capella", "2026-09-21 22:00", "2026-09-22 03:00"): "preferred",
+        ("Capella", "2026-09-22 22:00", "2026-09-23 03:00"): "preferred",
+        ("Capella", "2026-09-23 22:00", "2026-09-24 03:00"): "preferred",
+        ("Capella", "2026-09-24 22:00", "2026-09-25 03:00"): "preferred",
+        ("Capella", "2026-09-24 03:00", "2026-09-24 08:00"): "low",
+        ("Sirius", "2026-09-21 17:00", "2026-09-21 22:00"): "low",
+        ("Sirius", "2026-09-22 17:00", "2026-09-22 22:00"): "low",
+        ("Sirius", "2026-09-23 17:00", "2026-09-23 22:00"): "low",
+        ("Sirius", "2026-09-24 17:00", "2026-09-24 22:00"): "low",
+        ("Sirius", "2026-09-25 17:00", "2026-09-25 22:00"): "low",
     },
     "SW-003": {
-        ("Andromeda", "2026-10-06 03:00", "2026-10-06 08:00"): "low",
-        ("Andromeda", "2026-10-07 03:00", "2026-10-07 08:00"): "low",
-        ("Andromeda", "2026-10-08 03:00", "2026-10-08 08:00"): "low",
-        ("Andromeda", "2026-10-09 03:00", "2026-10-09 08:00"): "low",
+        ("Andromeda", "2026-09-22 03:00", "2026-09-22 08:00"): "low",
+        ("Andromeda", "2026-09-23 03:00", "2026-09-23 08:00"): "low",
+        ("Andromeda", "2026-09-24 03:00", "2026-09-24 08:00"): "low",
+        ("Andromeda", "2026-09-25 03:00", "2026-09-25 08:00"): "low",
     },
     "SW-004": {
-        ("Helix", "2026-10-05 22:00", "2026-10-06 02:00"): "low",
-        ("Helix", "2026-10-06 22:00", "2026-10-07 02:00"): "low",
-        ("Helix", "2026-10-07 22:00", "2026-10-08 02:00"): "low",
-        ("Helix", "2026-10-08 22:00", "2026-10-09 02:00"): "low",
-        ("Helix", "2026-10-09 22:00", "2026-10-10 02:00"): "low",
+        ("Helix", "2026-09-21 22:00", "2026-09-22 02:00"): "low",
+        ("Helix", "2026-09-22 22:00", "2026-09-23 02:00"): "low",
+        ("Helix", "2026-09-23 22:00", "2026-09-24 02:00"): "low",
+        ("Helix", "2026-09-24 22:00", "2026-09-25 02:00"): "low",
+        ("Helix", "2026-09-25 22:00", "2026-09-26 02:00"): "low",
     },
 }
 
@@ -104,6 +104,8 @@ def stored_preferences(connection, employee_code):
         JOIN shifts s ON s.id = p.shift_id
         JOIN employees e ON e.id = p.employee_id
         WHERE e.employee_code = ?
+          AND s.start_datetime >= '2026-09-21 00:00'
+          AND s.start_datetime < '2026-09-28 00:00'
         """,
         (employee_code,),
     ).fetchall()
@@ -128,7 +130,7 @@ def main():
         devon = stored_preferences(connection, "SW-004")
 
         # 1. An 11:00 AM-5:00 PM shift is not an 8:00 AM-2:00 PM shift.
-        near_miss = ("Andromeda", "2026-10-10 11:00", "2026-10-10 17:00")
+        near_miss = ("Andromeda", "2026-09-26 11:00", "2026-09-26 17:00")
         if near_miss in priya:
             failures.append(
                 "Priya's 8 AM-2 PM preference wrongly selected the 11 AM-5 PM shift"
@@ -137,7 +139,7 @@ def main():
             print("PASS  Priya 8 AM-2 PM does not select Andromeda Sat 11:00-17:00")
 
         # 2. An 11:00 PM-5:00 AM shift is not a 10:00 PM-3:00 AM shift.
-        overnight_near_miss = ("Capella", "2026-10-09 23:00", "2026-10-10 05:00")
+        overnight_near_miss = ("Capella", "2026-09-25 23:00", "2026-09-26 05:00")
         if overnight_near_miss in jordan:
             failures.append(
                 "Jordan's 10 PM-3 AM preference wrongly selected the 11 PM-5 AM shift"
@@ -147,10 +149,10 @@ def main():
 
         # 3. Overnight shifts that do match are stored, with next-day end dates.
         expected_overnight = {
-            ("Capella", "2026-10-05 22:00", "2026-10-06 03:00"): "preferred",
-            ("Capella", "2026-10-06 22:00", "2026-10-07 03:00"): "preferred",
-            ("Capella", "2026-10-07 22:00", "2026-10-08 03:00"): "preferred",
-            ("Capella", "2026-10-08 22:00", "2026-10-09 03:00"): "preferred",
+            ("Capella", "2026-09-21 22:00", "2026-09-22 03:00"): "preferred",
+            ("Capella", "2026-09-22 22:00", "2026-09-23 03:00"): "preferred",
+            ("Capella", "2026-09-23 22:00", "2026-09-24 03:00"): "preferred",
+            ("Capella", "2026-09-24 22:00", "2026-09-25 03:00"): "preferred",
         }
         for key, level in expected_overnight.items():
             if jordan.get(key) != level:
@@ -160,7 +162,7 @@ def main():
                 f"PASS  Jordan's 4 matching 22:00->03:00 overnight shifts stored as preferred"
             )
 
-        devon_overnight = ("Helix", "2026-10-09 22:00", "2026-10-10 02:00")
+        devon_overnight = ("Helix", "2026-09-25 22:00", "2026-09-26 02:00")
         if devon.get(devon_overnight) != "low":
             failures.append("Devon missing low-preference Helix Fri 22:00-02:00")
         else:
@@ -169,7 +171,7 @@ def main():
         # 4. Patterns absent from the generated shift set produce no rows, and
         #    unmatched shifts stay neutral.
         sirius_saturday = [
-            key for key in maria if key[0] == "Sirius" and key[1].startswith("2026-10-10")
+            key for key in maria if key[0] == "Sirius" and key[1].startswith("2026-09-26")
         ]
         if sirius_saturday:
             failures.append(
@@ -183,7 +185,7 @@ def main():
             for shift in shifts
         }
         neutral = all_keys - set(priya)
-        sample_neutral = ("Andromeda", "2026-10-10 11:00", "2026-10-10 17:00")
+        sample_neutral = ("Andromeda", "2026-09-26 11:00", "2026-09-26 17:00")
         if sample_neutral not in neutral:
             failures.append("Expected Andromeda Sat 11:00-17:00 to be neutral for Priya")
         else:

@@ -189,7 +189,7 @@ def run():
             return error.code, dict(error.headers), error.read()
 
     try:
-        status, headers, body = get("/api/employees/SW-001")
+        status, headers, body = get("/api/employees/SW-001?week_start=2026-10-05")
         check(status == 200, f"GET /api/employees/SW-001 over HTTP is 200 ({status})")
         check(
             headers.get("content-type", "").startswith("application/json"),
@@ -238,7 +238,7 @@ def run():
         )
 
         # The owner of the invalid shift still gets the controlled error.
-        status, _, body = get("/api/employees/SW-002")
+        status, _, body = get("/api/employees/SW-002?week_start=2026-10-05")
         check(
             status == 500,
             f"the owner of the invalid shift still gets a real HTTP 500 ({status})",
@@ -256,7 +256,7 @@ def run():
         )
 
         _, headers, _ = get(
-            "/api/employees/SW-001", headers={"Origin": "http://localhost:5173"}
+            "/api/employees/SW-001?week_start=2026-10-05", headers={"Origin": "http://localhost:5173"}
         )
         check(
             headers.get("access-control-allow-origin") == "http://localhost:5173",
@@ -264,7 +264,7 @@ def run():
         )
 
         _, headers, _ = get(
-            "/api/employees/SW-001", headers={"Origin": "http://evil.example"}
+            "/api/employees/SW-001?week_start=2026-10-05", headers={"Origin": "http://evil.example"}
         )
         check(
             "access-control-allow-origin" not in {key.lower() for key in headers},
@@ -274,7 +274,7 @@ def run():
         # The list route reports on every worker, so it still validates every
         # assignment and still fails on the invalid one. That behaviour was
         # deliberately not weakened when the details route was narrowed.
-        status, _, body = get("/api/employees")
+        status, _, body = get("/api/employees?week_start=2026-10-05")
         check(
             status == 500,
             f"the list route still validates the whole workforce ({status})",

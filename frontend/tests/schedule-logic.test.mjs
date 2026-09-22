@@ -23,6 +23,7 @@ import {
   NetworkOutcomeUnknownError,
   isOutcomeUncertain,
   approveProposal,
+  createAssignment,
   createProposal,
   fetchProposalsForWeek,
   fetchWeekSchedule,
@@ -221,6 +222,18 @@ check(rejected.status === 'pending', 'rejectProposal returns the validated body 
 mockFetchOnce(200, { shift_id: 1, outgoing_employee_code: 'SW-001', incoming_employee_code: 'SW-002', occurred_at: 'x' })
 const replaced = await replaceAssignment(1, 'SW-001', 'SW-002')
 check(replaced.incoming_employee_code === 'SW-002', 'replaceAssignment returns the backend body (no shape contract of its own)')
+
+mockFetchOnce(201, { shift_id: 1, incoming_employee_code: 'SW-002', occurred_at: '2026-09-20 12:00' })
+const assigned = await createAssignment(1, 'SW-002')
+check(assigned.incoming_employee_code === 'SW-002', 'createAssignment accepts an exact matching mutation response')
+
+mockFetchOnce(201, { shift_id: 999, incoming_employee_code: 'SW-002', occurred_at: '2026-09-20 12:00' })
+try {
+  await createAssignment(1, 'SW-002')
+  check(false, 'createAssignment should reject a response for another shift')
+} catch (error) {
+  check(error instanceof ResponseValidationError, 'createAssignment rejects a mismatched success response as outcome-uncertain')
+}
 
 check(describeError(null) === null, 'describeError(null) is null - no error to describe')
 mockFetchThrows('offline')

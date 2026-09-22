@@ -66,6 +66,7 @@ from proposals import (
     ProposalValidationError,
     ReplacementInvalid,
     approve_proposal,
+    create_assignment,
     create_proposal,
     get_proposal,
     list_proposals_for_week,
@@ -115,7 +116,7 @@ def list_employees(week_start: str | None = None):
     """Workforce summary for one reporting week.
 
     No `week_start` keeps today's exact default behavior: the fixed sample
-    week (2026-10-05). Supplying one reports assigned hours and semester-
+    week (2026-09-21). Supplying one reports assigned hours and semester-
     aware class summaries for a different Monday week instead; it must be a
     real, strictly-formatted Monday, or this is the usual 400/string-detail
     shape (D033). Selecting or reading a week never writes anything -
@@ -851,6 +852,49 @@ def replace_schedule_assignment(payload: Annotated[Any, Body()] = None):
     connection = get_connection()
     try:
         return replace_assignment(connection, shift_id, outgoing_code, incoming_code)
+    except AssignmentNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ReplacementInvalid as error:
+        raise HTTPException(status_code=409, detail=error.detail) from error
+    finally:
+        connection.close()
+
+
+@app.post("/api/schedule/assignments", status_code=201)
+def create_schedule_assignment(payload: Annotated[Any, Body()] = None):
+    """Explicitly assign one eligible worker to an uncovered position.
+
+    Body: ``{"shift_id": int, "employee_code": str}``. The operation uses
+    the same locked creation primitive as approved AI proposals, so a covered
+    shift, duplicate assignment or any current hard-eligibility conflict is
+    a controlled 409 and writes nothing.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Expected a JSON object with shift_id and employee_code.",
+        )
+    if set(payload) != {"shift_id", "employee_code"}:
+        raise HTTPException(
+            status_code=400,
+            detail="Expected exactly shift_id and employee_code.",
+        )
+    shift_id = payload.get("shift_id")
+    employee_code = payload.get("employee_code")
+    if (
+        not isinstance(shift_id, int)
+        or isinstance(shift_id, bool)
+        or not isinstance(employee_code, str)
+        or not employee_code.strip()
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="shift_id must be an integer and employee_code must be a non-empty string.",
+        )
+
+    connection = get_connection()
+    try:
+        return create_assignment(connection, shift_id, employee_code.strip())
     except AssignmentNotFound as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except ReplacementInvalid as error:

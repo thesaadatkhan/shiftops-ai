@@ -482,6 +482,13 @@ def main():
     ).fetchone()["n"]
     check(blocks_before > 0, f"the seeded worker has class blocks ({blocks_before})")
 
+    # Canonical Phase 9A demo workers have valid background assignments.
+    # Remove this worker's fixture assignments explicitly so this section
+    # continues to exercise the allowed deletion summary path; assignment-
+    # blocked deletion is covered separately above.
+    connection.execute("DELETE FROM assignments WHERE employee_id = ?", (seeded["id"],))
+    connection.commit()
+
     removed = delete_employee(connection, "SW-002")["removed"]
     check(
         removed["class_blocks"] == blocks_before,
@@ -507,7 +514,7 @@ def main():
         "another seeded worker keeps their blocks",
     )
     check(
-        connection.execute("SELECT COUNT(*) AS n FROM shifts").fetchone()["n"] == 99,
+        connection.execute("SELECT COUNT(*) AS n FROM shifts").fetchone()["n"] == 198,
         "shared shifts survive",
     )
     check(

@@ -17,7 +17,7 @@ repair, reset or fill-in-the-gaps mode. These checks pin that down:
    workers.
 7. An existing schema with no rows is still eligible.
 
-The fixed demo figures (30 workers, 99 shifts) are asserted here, on isolated
+The fixed demo figures (30 workers, 198 shifts) are asserted here, on isolated
 fixtures. They are not requirements on anyone's working database, which is
 expected to diverge as soon as workers are managed through the application.
 
@@ -33,7 +33,10 @@ import seed as seed_module
 from database import create_schema, get_connection
 from employees import create_employee
 from seed import DatabaseNotEmpty, initialize_demo_data, table_counts
-from synthetic_data import generate_required_shifts, generate_workers
+from seed import CANONICAL_UNCOVERED_SHIFTS
+from synthetic_data import DEMO_WEEK_STARTS, generate_required_shifts, generate_workers
+from eligibility import shift_coverage
+from optimizer import generate_draft
 
 failures = []
 
@@ -64,7 +67,11 @@ def expect_refusal(connection, description):
 
 
 def main():
-    shifts = generate_required_shifts()
+    shifts = [
+        shift
+        for week_start in DEMO_WEEK_STARTS
+        for shift in generate_required_shifts(week_start)
+    ]
     workers = generate_workers(shifts)
     expected_courses = sum(len(worker["courses"]) for worker in workers)
     expected_meetings = sum(
@@ -82,7 +89,7 @@ def main():
 
     counts = initialize_demo_data(connection)
     check(counts["employees"] == 30, f"initialization creates 30 employees ({counts['employees']})")
-    check(counts["shifts"] == 99, f"initialization creates 99 shifts ({counts['shifts']})")
+    check(counts["shifts"] == 198, f"initialization creates 198 shifts ({counts['shifts']})")
     check(
         counts["semester_schedules"] == 30,
         f"initialization creates one semester schedule per worker ({counts['semester_schedules']})",
@@ -94,7 +101,41 @@ def main():
         f"({counts['class_blocks']} blocks vs {expected_meetings} generated meetings)",
     )
     check(counts["shift_preferences"] > 0, f"shift preferences are written ({counts['shift_preferences']})")
-    check(counts["assignments"] == 0, "no assignments are created")
+    check(counts["approved_leave"] == 30, "every worker has one approved-leave period")
+    check(counts["assignments"] > 0, f"valid background assignments are created ({counts['assignments']})")
+    check(
+        connection.execute(
+            "SELECT COUNT(*) AS n FROM employees WHERE id NOT IN"
+            " (SELECT DISTINCT employee_id FROM assignments)"
+        ).fetchone()["n"] == 0,
+        "every worker has at least one assignment across the two demo weeks",
+    )
+    for hall, start_datetime in CANONICAL_UNCOVERED_SHIFTS:
+        shift_id = connection.execute(
+            "SELECT id FROM shifts WHERE hall = ? AND start_datetime = ?",
+            (hall, start_datetime),
+        ).fetchone()["id"]
+        coverage = shift_coverage(connection, shift_id)
+        assigned_count = connection.execute(
+            "SELECT COUNT(*) AS n FROM assignments WHERE shift_id = ?", (shift_id,)
+        ).fetchone()["n"]
+        required_staff = connection.execute(
+            "SELECT required_staff FROM shifts WHERE id = ?", (shift_id,)
+        ).fetchone()["required_staff"]
+        check(
+            assigned_count < required_staff,
+            f"the deliberate scenario remains uncovered: {hall} {start_datetime}",
+        )
+        check(
+            len(coverage["eligible_candidates"]) >= 5,
+            f"the scenario has at least five eligible candidates: {hall} {start_datetime}",
+        )
+    for week_start in DEMO_WEEK_STARTS:
+        draft = generate_draft(connection, week_start.strftime("%Y-%m-%d"))
+        check(
+            draft["status"] == "complete",
+            f"remaining positions are fully schedulable for {week_start:%Y-%m-%d}",
+        )
 
     # 2. A second run refuses.
     error = expect_refusal(connection, "a second initialization refuses")

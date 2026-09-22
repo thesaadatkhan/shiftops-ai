@@ -21,6 +21,7 @@ Neither application startup nor any employee-management action calls this
 module. It is a command you run on purpose.
 """
 
+import random
 import sys
 
 from database import (
@@ -31,7 +32,37 @@ from database import (
     get_connection,
 )
 from employees import allocation_progress, reserve_up_to, sequence_number
-from synthetic_data import expand_preferences, generate_required_shifts, generate_workers
+from eligibility import evaluate_shift_eligibility, shift_coverage
+from optimizer import generate_draft
+from synthetic_data import (
+    DEMO_WEEK_STARTS,
+    expand_preferences,
+    generate_required_shifts,
+    generate_workers,
+)
+
+ASSIGNMENT_SEED = 20260924
+
+# Deliberate demo scenarios. These stay uncovered in the initial database so
+# Coverage, manual fill, schedule generation and the AI can all demonstrate
+# meaningful work. They are facts of the canonical fixture, not RNG output.
+CANONICAL_UNCOVERED_SHIFTS = (
+    ("Vega", "2026-09-21 17:00"),
+    ("Capella", "2026-09-22 22:00"),
+    ("Helix", "2026-09-24 17:00"),
+    ("Sirius", "2026-09-26 08:00"),
+    ("Andromeda", "2026-09-28 17:00"),
+    ("Vega", "2026-10-01 22:00"),
+)
+
+# These two assignments are always present and serve as stable call-out /
+# replacement demonstrations. The worker is selected by the deterministic
+# optimizer, but the scenario shift itself is hand-selected and never left to
+# the filler RNG.
+CANONICAL_ASSIGNED_SHIFTS = (
+    ("Capella", "2026-09-25 23:00"),
+    ("Andromeda", "2026-10-03 11:00"),
+)
 
 # Every table demo initialization writes to.
 WORKFORCE_TABLES = (
@@ -192,6 +223,110 @@ def insert_worker(connection, worker, shifts, shift_ids):
         )
 
 
+def _shift_key(shift):
+    return shift["hall"], shift["start_datetime"]
+
+
+def insert_canonical_assignments(connection):
+    """Insert a deterministic feasible subset of two complete optimizer plans.
+
+    The optimizer first proves that each empty canonical week can be covered.
+    A fixed-seed subset becomes background assignments; named scenario shifts
+    are forced covered or uncovered. Because every stored row is a subset of
+    a proven feasible solution, the omitted assignments remain feasible.
+    Each row is nevertheless checked again through the real eligibility
+    function immediately before insertion.
+    """
+    rng = random.Random(ASSIGNMENT_SEED)
+    planned = []
+    for week_start in DEMO_WEEK_STARTS:
+        week_text = week_start.strftime("%Y-%m-%d")
+        draft = generate_draft(connection, week_text)
+        if draft["status"] != "complete":
+            raise RuntimeError(f"Canonical week {week_text} is not fully schedulable.")
+        for shift in draft["shifts"]:
+            for worker in shift["proposed_assignments"]:
+                planned.append((shift, worker))
+
+    uncovered = set(CANONICAL_UNCOVERED_SHIFTS)
+    forced = set(CANONICAL_ASSIGNED_SHIFTS)
+    selected = []
+    for shift, worker in planned:
+        key = _shift_key(shift)
+        if key in uncovered:
+            continue
+        if key in forced or rng.random() < 0.55:
+            selected.append((shift, worker))
+
+    # Every synthetic worker should have at least one existing assignment
+    # somewhere in the two-week demo. Pull from the already-proven full plan,
+    # while preserving the deliberate uncovered scenarios.
+    selected_codes = {worker["employee_code"] for _, worker in selected}
+    for shift, worker in planned:
+        if worker["employee_code"] in selected_codes or _shift_key(shift) in uncovered:
+            continue
+        selected.append((shift, worker))
+        selected_codes.add(worker["employee_code"])
+
+    for shift_payload, worker_payload in sorted(
+        selected, key=lambda item: (item[0]["start_datetime"], item[0]["hall"])
+    ):
+        shift = connection.execute(
+            "SELECT id, hall, start_datetime, end_datetime, required_staff"
+            " FROM shifts WHERE id = ?",
+            (shift_payload["id"],),
+        ).fetchone()
+        employee = connection.execute(
+            "SELECT id, employee_code, full_name, is_active, weekly_hour_limit"
+            " FROM employees WHERE employee_code = ?",
+            (worker_payload["employee_code"],),
+        ).fetchone()
+        eligibility = evaluate_shift_eligibility(connection, shift, employee)
+        if not eligibility["eligible"]:
+            raise RuntimeError(
+                f"Canonical assignment {employee['employee_code']} -> {shift['id']} "
+                f"failed eligibility: {eligibility['reason_codes']}"
+            )
+        connection.execute(
+            "INSERT INTO assignments (employee_id, shift_id) VALUES (?, ?)",
+            (employee["id"], shift["id"]),
+        )
+
+    missing_workers = connection.execute(
+        "SELECT employee_code FROM employees WHERE id NOT IN"
+        " (SELECT DISTINCT employee_id FROM assignments) ORDER BY employee_code"
+    ).fetchall()
+    if missing_workers:
+        raise RuntimeError(
+            "Canonical assignment plan left workers unassigned: "
+            + ", ".join(row["employee_code"] for row in missing_workers)
+        )
+
+    # Acceptance gate for the Jack-Ma failure mode: several deliberately
+    # uncovered shifts across both weeks must each have a useful candidate
+    # pool, not one exceptional ready worker.
+    for hall, start_datetime in CANONICAL_UNCOVERED_SHIFTS:
+        row = connection.execute(
+            "SELECT id FROM shifts WHERE hall = ? AND start_datetime = ?",
+            (hall, start_datetime),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError(f"Missing canonical scenario shift {hall} {start_datetime}.")
+        coverage = shift_coverage(connection, row["id"])
+        if len(coverage["eligible_candidates"]) < 5:
+            raise RuntimeError(
+                f"Canonical scenario {hall} {start_datetime} has only "
+                f"{len(coverage['eligible_candidates'])} eligible workers; expected at least 5."
+            )
+
+    # The remaining positions must still be fully coverable after background
+    # assignments are stored.
+    for week_start in DEMO_WEEK_STARTS:
+        week_text = week_start.strftime("%Y-%m-%d")
+        if generate_draft(connection, week_text)["status"] != "complete":
+            raise RuntimeError(f"Canonical week {week_text} became infeasible after seeding.")
+
+
 def initialize_demo_data(connection):
     """Write the whole demo dataset, or nothing at all.
 
@@ -203,7 +338,11 @@ def initialize_demo_data(connection):
 
     Raises DatabaseNotEmpty if any workforce table already holds rows.
     """
-    shifts = generate_required_shifts()
+    shifts = [
+        shift
+        for week_start in DEMO_WEEK_STARTS
+        for shift in generate_required_shifts(week_start)
+    ]
     workers = generate_workers(shifts)
 
     # Explicit transaction control: sqlite3's implicit handling would commit
@@ -229,6 +368,8 @@ def initialize_demo_data(connection):
             shift_ids = insert_shifts(connection, shifts)
             for worker in workers:
                 insert_worker(connection, worker, shifts, shift_ids)
+
+            insert_canonical_assignments(connection)
 
             # Reserve the numbers the demo codes occupy, in this same
             # transaction. Without it the first worker added afterwards would

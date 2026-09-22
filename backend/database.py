@@ -355,8 +355,8 @@ SCHEMA_STATEMENTS = [
     """,
 ]
 
-# The fictional demo semester. It must contain the sample reporting week of
-# Monday 2026-10-05 to Sunday 2026-10-11, and it does. Inclusive dates, in
+# The fictional demo semester. It contains both canonical reporting weeks,
+# Monday 2026-09-21 through Sunday 2026-10-04. Inclusive dates, in
 # the project's single local clock (D025). Fictional, like everything else in
 # this simulation.
 DEMO_SEMESTER_START = "2026-08-24"

@@ -1,5 +1,5 @@
 """Realistic end-to-end verification at the project's actual demo scale
-(Codex whole-project review finding 7): the pristine 30-worker/99-shift
+(Codex whole-project review finding 7): the pristine 30-worker/198-shift
 synthetic dataset, generated -> approved -> reloaded -> replaced, with
 measured optimizer latency recorded rather than assumed.
 
@@ -13,7 +13,8 @@ real `backend/shiftops.db`.
 
 Checks:
 
-1. The fixture is genuinely the documented scale: 30 employees, 99 shifts.
+1. The fixture is genuinely the documented scale: 30 employees, 198 shifts
+   across two weeks, with deterministic valid background assignments.
 2. `create_proposal()` solves all three CP-SAT tiers to a proven OPTIMAL
    status at this scale (raising `DraftNotOptimal` otherwise) and its
    wall-clock latency is measured and printed - not assumed. A partial
@@ -58,10 +59,13 @@ def main():
     employee_count = connection.execute("SELECT COUNT(*) AS n FROM employees").fetchone()["n"]
     shift_count = connection.execute("SELECT COUNT(*) AS n FROM shifts").fetchone()["n"]
     check(employee_count == 30, f"the pristine demo fixture has 30 employees ({employee_count})")
-    check(shift_count == 99, f"the pristine demo fixture has 99 shifts ({shift_count})")
+    check(shift_count == 198, f"the pristine demo fixture has 198 shifts ({shift_count})")
+    initial_assignments = connection.execute(
+        "SELECT COUNT(*) AS n FROM assignments"
+    ).fetchone()["n"]
     check(
-        connection.execute("SELECT COUNT(*) AS n FROM assignments").fetchone()["n"] == 0,
-        "the pristine fixture starts with zero assignments - nothing pre-solved",
+        initial_assignments > 0,
+        f"the pristine fixture includes deterministic background assignments ({initial_assignments})",
     )
 
     started = time.perf_counter()
@@ -75,7 +79,7 @@ def main():
         return 1
 
     print(
-        f"MEASURED  full-scale (30 workers / 99 shifts) proposal generation took {elapsed:.2f}s "
+        f"MEASURED  full-scale (30 workers / 99 shifts in selected week) proposal generation took {elapsed:.2f}s "
         "wall-clock (three sequential CP-SAT tiers, 30s cap each)."
     )
     check(elapsed < 90, f"full-scale generation completes well within the 3x30s worst case ({elapsed:.2f}s)")
@@ -130,9 +134,14 @@ def main():
 
     reloaded = get_week_schedule(connection, week_start_text)
     reloaded_filled = sum(shift["assigned_count"] for shift in reloaded["shifts"])
+    stored_week_count = connection.execute(
+        "SELECT COUNT(*) AS n FROM assignments a JOIN shifts s ON s.id = a.shift_id"
+        " WHERE s.start_datetime >= '2026-09-21 00:00'"
+        " AND s.start_datetime < '2026-09-28 00:00'"
+    ).fetchone()["n"]
     check(
-        reloaded_filled == len(stored_pairs),
-        f"the reloaded weekly schedule's total assigned count matches stored assignments ({reloaded_filled} vs {len(stored_pairs)})",
+        reloaded_filled == stored_week_count,
+        f"the reloaded weekly schedule's total assigned count matches that week's stored assignments ({reloaded_filled} vs {stored_week_count})",
     )
     check(
         all(worker["conflicts"] is None for shift in reloaded["shifts"] for worker in shift["assigned_employees"]),
@@ -188,7 +197,7 @@ def main():
             print(f"  - {failure}")
         return 1
 
-    print(f"\nAll {_total['n']} checks passed (pristine in-memory 30-worker/99-shift fixture only).")
+    print(f"\nAll {_total['n']} checks passed (pristine in-memory two-week fixture only).")
     return 0
 
 

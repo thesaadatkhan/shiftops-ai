@@ -123,7 +123,7 @@ def add_worker(connection, code, name="Worker", seed_key=None):
 
 
 def semesters_of(code):
-    return main.get_employee_details(code)["semesters"]
+    return main.get_employee_details(code, "2026-10-05")["semesters"]
 
 
 def expect_status(status, action, description):
@@ -174,7 +174,7 @@ def check_schedule_lifecycle():
         "with no classes in it yet",
     )
     check(
-        main.get_employee_details("SW-001")["employee"]["timetable_status"]
+        main.get_employee_details("SW-001", "2026-10-05")["employee"]["timetable_status"]
         == "unconfirmed",
         "the worker's readiness for the displayed week reads unconfirmed",
     )
@@ -199,7 +199,7 @@ def check_schedule_lifecycle():
     )
     check(semesters_of("SW-001") == [], "and it is gone from the details view")
     check(
-        main.get_employee_details("SW-001")["employee"]["timetable_status"] == "missing",
+        main.get_employee_details("SW-001", "2026-10-05")["employee"]["timetable_status"] == "missing",
         "readiness falls back to missing once the last semester is deleted",
     )
 
@@ -982,7 +982,7 @@ def check_confirmation():
         semester_row("SW-001", schedule_id)["confirmed_at"] is not None,
         "the stored semester is now confirmed",
     )
-    status = main.get_employee_details("SW-001")["employee"]["timetable_status"]
+    status = main.get_employee_details("SW-001", "2026-10-05")["employee"]["timetable_status"]
     check(
         status in ("confirmed", "partial"),
         f"the worker's readiness reflects the confirmation ({status})",
@@ -1437,7 +1437,7 @@ def check_provisional_provenance():
     # The raw migration notes never leave the backend.
     import json
 
-    serialized = json.dumps(main.get_employee_details("SW-001"))
+    serialized = json.dumps(main.get_employee_details("SW-001", "2026-10-05"))
     check(
         "source_note" not in serialized and database.MIGRATION_NOTE_PREFIX not in serialized,
         "and no migration note text appears in the response",
@@ -1679,14 +1679,14 @@ def check_isolation_and_summaries():
         "the shared shifts are unchanged",
     )
     check(
-        main.get_employee_details("SW-002")["semesters"][0]["confirmed_at"]
+        main.get_employee_details("SW-002", "2026-10-05")["semesters"][0]["confirmed_at"]
         == "2026-08-24 00:00",
         "and their confirmation still stands",
     )
 
     # The list summary follows the edits: the semester now covers the whole
     # reporting week and holds one Tuesday class.
-    listing = {row["employee_code"]: row for row in main.list_employees()["employees"]}
+    listing = {row["employee_code"]: row for row in main.list_employees("2026-10-05")["employees"]}
     check(
         listing["SW-001"]["class_block_count"] == 1,
         f"the list counts the new class ({listing['SW-001']['class_block_count']})",

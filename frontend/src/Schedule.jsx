@@ -15,6 +15,7 @@ import { coverageUrl } from './coverage.js'
 import {
   ApiError,
   approveProposal,
+  createAssignment,
   createProposal,
   describeError,
   fetchProposalsForWeek,
@@ -118,6 +119,14 @@ export default function Schedule({ weekStart }) {
   // target or after the panel has already closed.
   const replaceRequestToken = useRef(0)
 
+  const [fillTarget, setFillTarget] = useState(null)
+  const [fillCandidates, setFillCandidates] = useState({ status: 'idle', options: [] })
+  const [fillChoice, setFillChoice] = useState('')
+  const [fillStatus, setFillStatus] = useState('idle')
+  const [fillError, setFillError] = useState(null)
+  const [fillBlocked, setFillBlocked] = useState(false)
+  const fillRequestToken = useRef(0)
+
   const proposal = proposalsState.list.find((item) => item.id === selectedProposalId) || null
 
   // Deliberately does not flip back to a "loading" status on a refetch (the
@@ -193,7 +202,13 @@ export default function Schedule({ weekStart }) {
   // those was already busy.
   const approvalOrGenerationBusy = preparing || generating || confirmingApproval || decisionStatus !== 'idle'
   const replacePanelOpen = replaceTarget !== null
-  const anyActionInFlight = approvalOrGenerationBusy || replacePanelOpen || replaceStatus === 'loading'
+  const fillPanelOpen = fillTarget !== null
+  const anyActionInFlight =
+    approvalOrGenerationBusy ||
+    replacePanelOpen ||
+    fillPanelOpen ||
+    replaceStatus === 'loading' ||
+    fillStatus === 'loading'
 
   async function handlePrepare() {
     if (anyActionInFlight) {
@@ -494,6 +509,80 @@ export default function Schedule({ weekStart }) {
     }
   }
 
+  async function openFill(shift) {
+    if (anyActionInFlight || shift.covered) return
+    const token = ++fillRequestToken.current
+    setFillTarget(shift)
+    setFillChoice('')
+    setFillError(null)
+    setFillBlocked(false)
+    setFillCandidates({ status: 'loading', options: [] })
+    try {
+      const response = await fetch(coverageUrl(shift.id))
+      if (!response.ok) throw new Error(`Backend responded with status ${response.status}`)
+      const data = await response.json()
+      if (token !== fillRequestToken.current) return
+      const assignedCodes = new Set(shift.assigned_employees.map((worker) => worker.employee_code))
+      const options = (Array.isArray(data.eligible_candidates) ? data.eligible_candidates : []).filter(
+        (candidate) => !assignedCodes.has(candidate.employee_code),
+      )
+      setFillCandidates({ status: 'success', options })
+    } catch (error) {
+      if (token === fillRequestToken.current) {
+        setFillCandidates({ status: 'error', options: [] })
+        setFillError(error)
+      }
+    }
+  }
+
+  function closeFill() {
+    fillRequestToken.current += 1
+    setFillTarget(null)
+    setFillChoice('')
+    setFillCandidates({ status: 'idle', options: [] })
+    setFillError(null)
+    setFillBlocked(false)
+  }
+
+  async function reconcileFill(target, incomingCode, error) {
+    const week = await loadWeek()
+    if (week === null) {
+      setFillError(error)
+      setFillBlocked(true)
+      return
+    }
+    const shift = week.shifts.find((item) => item.id === target.id)
+    const alreadyAssigned =
+      shift && shift.assigned_employees.some((worker) => worker.employee_code === incomingCode)
+    if (alreadyAssigned) {
+      closeFill()
+      return
+    }
+    setFillError(error)
+    setFillBlocked(false)
+  }
+
+  async function confirmFill() {
+    if (
+      !fillTarget || !fillChoice || fillStatus === 'loading' ||
+      approvalOrGenerationBusy || replacePanelOpen || fillBlocked
+    ) return
+    setFillStatus('loading')
+    setFillError(null)
+    const target = fillTarget
+    const incomingCode = fillChoice
+    try {
+      await createAssignment(target.id, incomingCode)
+      closeFill()
+      await loadWeek()
+    } catch (error) {
+      if (isOutcomeUncertain(error)) await reconcileFill(target, incomingCode, error)
+      else setFillError(error)
+    } finally {
+      setFillStatus('idle')
+    }
+  }
+
   if (weekState.status === 'loading') {
     return <p>Loading the schedule for this week…</p>
   }
@@ -756,6 +845,17 @@ export default function Schedule({ weekStart }) {
                             {shift.covered
                               ? 'Covered'
                               : `Uncovered (${shift.required_staff - shift.assigned_count} open)`}
+                            {!shift.covered && (
+                              <div>
+                                <button
+                                  type="button"
+                                  disabled={anyActionInFlight}
+                                  onClick={() => openFill(shift)}
+                                >
+                                  Assign worker
+                                </button>
+                              </div>
+                            )}
                             {shift.assigned_count > shift.required_staff &&
                               ` · ${shift.assigned_count - shift.required_staff} extra`}
                           </td>
@@ -831,6 +931,59 @@ export default function Schedule({ weekStart }) {
             <button type="button" onClick={closeReplace} disabled={replaceStatus === 'loading'}>
               Cancel
             </button>
+          </div>
+        </div>
+      )}
+
+      {fillTarget && (
+        <div className="replace-panel" role="alertdialog" aria-label="Assign worker">
+          <h3>Assign a worker to {fillTarget.hall}, {shiftTimeLabel(fillTarget)}?</h3>
+          <p className="table-note">
+            This fills one currently uncovered position. Eligibility is rechecked before saving.
+          </p>
+          {fillCandidates.status === 'loading' && <p>Loading eligible workers...</p>}
+          {fillCandidates.status === 'error' && <p role="alert">Could not load eligible workers.</p>}
+          {fillCandidates.status === 'success' && (
+            <label>
+              Worker
+              <select value={fillChoice} onChange={(event) => setFillChoice(event.target.value)}>
+                <option value="">Choose a worker...</option>
+                {fillCandidates.options.map((candidate) => (
+                  <option key={candidate.employee_code} value={candidate.employee_code}>
+                    {candidate.full_name} ({candidate.employee_code})
+                  </option>
+                ))}
+              </select>
+              {fillCandidates.options.length === 0 && (
+                <p className="table-note">No eligible worker is currently available for this shift.</p>
+              )}
+            </label>
+          )}
+          {fillError && (
+            <p role="alert">
+              {describeError(fillError)}
+              {fillBlocked && ' Confirm assignment is disabled until this is reconciled.'}
+            </p>
+          )}
+          <div className="list-controls">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!fillChoice || fillStatus === 'loading' || fillCandidates.status === 'loading' || fillBlocked}
+              onClick={confirmFill}
+            >
+              {fillStatus === 'loading' ? 'Assigning...' : 'Confirm assignment'}
+            </button>
+            {fillError && (
+              <button
+                type="button"
+                onClick={() => reconcileFill(fillTarget, fillChoice, fillError)}
+                disabled={fillStatus === 'loading'}
+              >
+                Reload
+              </button>
+            )}
+            <button type="button" onClick={closeFill} disabled={fillStatus === 'loading'}>Cancel</button>
           </div>
         </div>
       )}

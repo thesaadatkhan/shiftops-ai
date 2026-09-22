@@ -234,7 +234,7 @@ def run():
         check(status == 200, f"GET /api/employees with no parameter is still 200 ({status})")
         payload = json.loads(body)
         check(
-            payload["week_start"] == "2026-10-05" and payload["week_end"] == "2026-10-11",
+            payload["week_start"] == "2026-09-21" and payload["week_end"] == "2026-09-27",
             f"and keeps the default sample week ({payload['week_start']}, {payload['week_end']})",
         )
         default_codes = {row["employee_code"] for row in payload["employees"]}

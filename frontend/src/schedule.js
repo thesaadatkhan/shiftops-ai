@@ -8,6 +8,7 @@
 const SCHEDULE_WEEKS_URL = 'http://127.0.0.1:8000/api/schedule/weeks'
 const SCHEDULE_PROPOSALS_URL = 'http://127.0.0.1:8000/api/schedule/proposals'
 export const SCHEDULE_REPLACE_URL = 'http://127.0.0.1:8000/api/schedule/assignments/replace'
+export const SCHEDULE_ASSIGN_URL = 'http://127.0.0.1:8000/api/schedule/assignments'
 
 function weekScheduleUrl(weekStart) {
   return `${SCHEDULE_WEEKS_URL}/${encodeURIComponent(weekStart)}`
@@ -314,6 +315,26 @@ export async function replaceAssignment(shiftId, outgoingEmployeeCode, incomingE
       incoming_employee_code: incomingEmployeeCode,
     }),
   })
+}
+
+export async function createAssignment(shiftId, employeeCode) {
+  const data = await requestJson(SCHEDULE_ASSIGN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ shift_id: shiftId, employee_code: employeeCode }),
+  })
+  if (
+    typeof data !== 'object' ||
+    data === null ||
+    Array.isArray(data) ||
+    data.shift_id !== shiftId ||
+    data.incoming_employee_code !== employeeCode ||
+    typeof data.occurred_at !== 'string' ||
+    data.occurred_at.length === 0
+  ) {
+    throw new ResponseValidationError('The assignment response did not match the requested change.')
+  }
+  return data
 }
 
 /** Whether a write's outcome is uncertain and must be reconciled through an

@@ -879,6 +879,28 @@ def _create_assignment_locked(
     }
 
 
+def create_assignment(
+    connection, shift_id, incoming_employee_code, reference_time=None
+):
+    """Atomically fill one currently uncovered shift position.
+
+    This is the supervisor-facing transaction wrapper around the same locked
+    primitive used by agent-proposal approval. It intentionally adds no new
+    validation path: existence, duplicate assignment, current staffing and
+    every hard eligibility rule are checked after ``BEGIN IMMEDIATE`` is
+    acquired, and the assignment plus its audit row commit together.
+    """
+    return _in_transaction(
+        connection,
+        lambda: _create_assignment_locked(
+            connection,
+            shift_id,
+            incoming_employee_code,
+            reference_time=reference_time,
+        ),
+    )
+
+
 def replace_assignment(
     connection, shift_id, outgoing_employee_code, incoming_employee_code, reference_time=None
 ):

@@ -322,7 +322,7 @@ class E2EAgentModel:
                             ToolCallRequest(
                                 id="c1",
                                 name="get_employee_hours",
-                                arguments={"employee_code": s["info"]["employee_code"], "week_start": "2026-10-05"},
+                                arguments={"employee_code": s["info"]["employee_code"], "week_start": "2026-09-21"},
                             )
                         ]
                     ),

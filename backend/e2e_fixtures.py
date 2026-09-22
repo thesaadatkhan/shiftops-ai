@@ -9,8 +9,8 @@ the application itself - this module only exists for test seeding.
 
 from database import create_schema
 
-WEEK_A = "2026-10-05"  # matches frontend/src/weeks.js DEFAULT_WEEK_START
-WEEK_B = "2026-10-12"
+WEEK_A = "2026-09-21"  # matches frontend/src/weeks.js DEFAULT_WEEK_START
+WEEK_B = "2026-09-28"
 
 
 def _add_worker(connection, code, name, weekly_hour_limit=20):

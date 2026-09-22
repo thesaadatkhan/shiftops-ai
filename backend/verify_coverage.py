@@ -2,7 +2,8 @@
 
 Checks, per hall and overall:
 
-1. Total student coverage equals 489 hours/week (docs/PROJECT_SPEC.md).
+1. Total student coverage equals 489 hours in each canonical week
+   (978 across the two-week fixture; docs/PROJECT_SPEC.md).
 2. Shifts do not overlap each other (no unintended double coverage).
 3. Shifts leave no gap inside a required student-coverage period.
 4. No shift covers a period that is not required (professional hours or
@@ -19,12 +20,13 @@ Exits non-zero if any check fails.
 """
 
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from demo_fixture import demo_fixture_connection
 from reporting import InvalidWorkDuration, shift_duration_hours
 from synthetic_data import (
     ALL_HALLS,
+    DEMO_WEEK_STARTS,
     hall_open_periods,
     professional_periods,
     subtract_periods,
@@ -38,7 +40,7 @@ def hours(periods):
     return sum((end - start).total_seconds() for start, end in periods) / 3600
 
 
-def load_shifts_by_hall():
+def load_shifts_by_hall(week_start):
     # A pristine in-memory demo fixture, never the working database: these
     # figures describe the generated dataset, not whatever anyone has since
     # edited through the application.
@@ -48,8 +50,11 @@ def load_shifts_by_hall():
             """
             SELECT hall, start_datetime, end_datetime, required_staff
             FROM shifts
+            WHERE start_datetime >= ? AND start_datetime < ?
             ORDER BY hall, start_datetime
             """
+            , (week_start.strftime("%Y-%m-%d %H:%M"),
+               (week_start + timedelta(days=7)).strftime("%Y-%m-%d %H:%M"))
         ).fetchall()
     finally:
         connection.close()
@@ -77,50 +82,55 @@ def merge(periods):
 
 
 def main():
-    by_hall = load_shifts_by_hall()
-    blocks = professional_periods()
     failures = []
     total_hours = 0
 
-    for hall in ALL_HALLS:
-        required = subtract_periods(hall_open_periods(hall), blocks)
-        shifts = by_hall.get(hall, [])
-        covered = [(start, end) for start, end, _ in shifts]
-        hall_hours = hours(covered)
-        total_hours += hall_hours
+    for week_start in DEMO_WEEK_STARTS:
+        by_hall = load_shifts_by_hall(week_start)
+        blocks = professional_periods(week_start)
+        week_hours = 0
+        for hall in ALL_HALLS:
+            required = subtract_periods(hall_open_periods(hall, week_start), blocks)
+            shifts = by_hall.get(hall, [])
+            covered = [(start, end) for start, end, _ in shifts]
+            hall_hours = hours(covered)
+            week_hours += hall_hours
+            total_hours += hall_hours
 
-        for index in range(1, len(covered)):
-            if covered[index][0] < covered[index - 1][1]:
-                failures.append(f"{hall}: shifts overlap at {covered[index][0]}")
+            for index in range(1, len(covered)):
+                if covered[index][0] < covered[index - 1][1]:
+                    failures.append(f"{week_start:%Y-%m-%d} {hall}: shifts overlap at {covered[index][0]}")
 
-        if merge(covered) != merge(required):
-            failures.append(f"{hall}: covered periods do not match required periods")
+            if merge(covered) != merge(required):
+                failures.append(f"{week_start:%Y-%m-%d} {hall}: covered periods do not match required periods")
 
-        if hall_hours != hours(required):
-            failures.append(
-                f"{hall}: {hall_hours} covered hours != {hours(required)} required"
+            if hall_hours != hours(required):
+                failures.append(
+                    f"{week_start:%Y-%m-%d} {hall}: {hall_hours} covered hours != {hours(required)} required"
+                )
+
+            for start, end, required_staff in shifts:
+                if required_staff != 1:
+                    failures.append(f"{hall}: shift at {start} requires {required_staff} workers")
+                try:
+                    shift_duration_hours(start, end, label=f"at {hall}")
+                except InvalidWorkDuration as error:
+                    failures.append(f"{hall}: {error}")
+
+            crossing = sum(1 for start, end, _ in shifts if start.date() != end.date())
+            print(
+                f"{week_start:%Y-%m-%d} {hall:10s} shifts={len(shifts):3d} "
+                f"hours={hall_hours:6.1f} required={hours(required):6.1f} "
+                f"cross-midnight={crossing}"
             )
-
-        for start, end, required_staff in shifts:
-            if required_staff != 1:
-                failures.append(f"{hall}: shift at {start} requires {required_staff} workers")
-            try:
-                # Work shifts must be a positive whole number of hours.
-                shift_duration_hours(start, end, label=f"at {hall}")
-            except InvalidWorkDuration as error:
-                failures.append(f"{hall}: {error}")
-
-        crossing = sum(1 for start, end, _ in shifts if start.date() != end.date())
-        print(
-            f"{hall:10s} shifts={len(shifts):3d} hours={hall_hours:6.1f} "
-            f"required={hours(required):6.1f} cross-midnight={crossing}"
-        )
+        if week_hours != EXPECTED_TOTAL_HOURS:
+            failures.append(f"{week_start:%Y-%m-%d}: total {week_hours} != {EXPECTED_TOTAL_HOURS}")
 
     print(f"\ntotal student coverage hours: {total_hours}")
-    print(f"expected (PROJECT_SPEC.md):   {EXPECTED_TOTAL_HOURS}")
+    print(f"expected across two weeks:   {EXPECTED_TOTAL_HOURS * 2}")
 
-    if total_hours != EXPECTED_TOTAL_HOURS:
-        failures.append(f"total {total_hours} != expected {EXPECTED_TOTAL_HOURS}")
+    if total_hours != EXPECTED_TOTAL_HOURS * 2:
+        failures.append(f"total {total_hours} != expected {EXPECTED_TOTAL_HOURS * 2}")
 
     if failures:
         print("\nFAILED:")
@@ -128,7 +138,7 @@ def main():
             print(f"  - {failure}")
         return 1
 
-    print("\nAll coverage checks passed: no gaps, no double coverage, 489 hours.")
+    print("\nAll coverage checks passed: no gaps, no double coverage, 489 hours/week.")
     return 0
 
 

@@ -7,8 +7,9 @@ generated workers). That is what makes seeding safely repeatable.
 
 All people, course labels, preferences, and leave periods are fictional.
 
-Sample week: Monday 2026-10-05 through Sunday 2026-10-11 (see D025 for the
-date/time conventions).
+Canonical demo weeks: Monday 2026-09-21 through Sunday 2026-10-04 (see D025
+for the date/time conventions). ``WEEK_START`` remains the default reporting
+week; demo initialization explicitly generates it and the following Monday.
 
 Required shifts are derived from the operating model rather than hard-coded:
 
@@ -32,8 +33,10 @@ import weeks
 
 TIME_FORMAT = "%Y-%m-%d %H:%M"
 
-WEEK_START = datetime(2026, 10, 5)
+WEEK_START = datetime(2026, 9, 21)
 WEEK_END = WEEK_START + timedelta(days=7)
+SECOND_WEEK_START = WEEK_END
+DEMO_WEEK_STARTS = (WEEK_START, SECOND_WEEK_START)
 
 HALLS_24_HOUR = ["Andromeda", "Capella"]
 HALLS_LIMITED = ["Vega", "Helix", "Sirius"]
@@ -53,8 +56,18 @@ MASTERS_COUNT = 10
 # two independent random streams. With a single stream, changing anything
 # about preference generation would shift every later draw and silently
 # rename workers and reshuffle their timetables.
-IDENTITY_SEED = 20261005
-PREFERENCE_SEED = 20261006
+IDENTITY_SEED = 20260921
+PREFERENCE_SEED = 20260922
+LEAVE_SEED = 20260923
+
+# Named constraints anchor two demo stories; the remaining leave periods are
+# fixed-seed background variation. These workers are deliberately unavailable
+# for two of the hand-selected uncovered shifts, making the reason visible in
+# Coverage without making the scenario depend on an RNG draw.
+CANONICAL_LEAVE_OVERRIDES = {
+    "SW-001": ("2026-09-21 17:00", "2026-09-21 22:00"),
+    "SW-002": ("2026-09-28 17:00", "2026-09-28 22:00"),
+}
 
 
 # --------------------------------------------------------------------------
@@ -136,7 +149,7 @@ def split_period(start, end):
 def generate_required_shifts(week_start=None):
     """Every student-covered shift for one Monday week, one worker each.
 
-    Defaults to the sample week (2026-10-05) - the behavior demo
+    Defaults to the first canonical demo week (2026-09-21) - the behavior demo
     initialization, the semester migration's expected timetable, and every
     existing verification script rely on. Passing another value generates
     the identical hall-coverage pattern - same halls, same relative offsets,
@@ -318,14 +331,27 @@ MASTERS_SLOTS = [
     ]
 ]
 
-# Already-approved leave periods for a few generated workers, all inside the
-# sample week. Constructed with more than one week of notional advance notice.
-GENERATED_LEAVE = {
-    "SW-009": ("2026-10-07 17:00", "2026-10-07 23:00"),
-    "SW-014": ("2026-10-10 08:00", "2026-10-11 02:00"),
-    "SW-021": ("2026-10-09 18:00", "2026-10-10 02:00"),
-    "SW-027": ("2026-10-11 08:00", "2026-10-11 20:00"),
-}
+def _generated_leave_periods(workers):
+    """One reproducible, short approved-leave period for every demo worker.
+
+    These are deliberately spread over both canonical weeks and kept to
+    2-4 hours so leave is visible and affects selected shifts without making
+    the workforce broadly unschedulable.
+    """
+    rng = random.Random(LEAVE_SEED)
+    periods = {}
+    for worker in workers:
+        day_offset = rng.randrange(14)
+        start_hour = rng.choice((9, 10, 12, 14, 17, 18))
+        duration = rng.choice((2, 3, 4))
+        start = WEEK_START + timedelta(days=day_offset, hours=start_hour)
+        end = start + timedelta(hours=duration)
+        periods[worker["employee_code"]] = (
+            start.strftime(TIME_FORMAT),
+            end.strftime(TIME_FORMAT),
+        )
+    periods.update(CANONICAL_LEAVE_OVERRIDES)
+    return periods
 
 
 def _overlaps(slot_a, slot_b):
@@ -386,14 +412,12 @@ def _generate_worker(
         )
     ]
 
-    leave = GENERATED_LEAVE.get(employee_code)
-
     return {
         "employee_code": employee_code,
         "full_name": name,
         "student_type": student_type,
         "courses": courses,
-        "approved_leave": [leave] if leave else [],
+        "approved_leave": [],
         "preferences": preferences,
     }
 
@@ -431,6 +455,12 @@ def generate_workers(shifts=None):
                 pattern_pool,
             )
         )
+
+    leave_periods = _generated_leave_periods(workers)
+    workers = [
+        {**worker, "approved_leave": [leave_periods[worker["employee_code"]]]}
+        for worker in workers
+    ]
 
     return workers
 

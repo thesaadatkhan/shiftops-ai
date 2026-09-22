@@ -100,6 +100,8 @@ def check_default_generator_unchanged():
     try:
         expected_shifts = demo.execute(
             "SELECT hall, start_datetime, end_datetime, required_staff FROM shifts"
+            " WHERE start_datetime >= '2026-09-21 00:00'"
+            " AND start_datetime < '2026-09-28 00:00'"
             " ORDER BY start_datetime, hall"
         ).fetchall()
     finally:
@@ -160,7 +162,7 @@ def check_other_monday_shifted():
         b_end = datetime.strptime(b["end_datetime"], TIME_FORMAT)
         if a["hall"] != b["hall"] or a["required_staff"] != b["required_staff"]:
             same_pattern = False
-        if (b_start - a_start).days != 28 or a_start.time() != b_start.time():
+        if (b_start - a_start).days != 42 or a_start.time() != b_start.time():
             same_pattern = False
         if (a_end.date() != a_start.date()) != (b_end.date() != b_start.date()):
             cross_midnight_preserved = False
@@ -611,8 +613,8 @@ def check_assignment_conflicts_surfaced_without_touching_staffing():
 
 def check_list_employees_week_parameter():
     default_payload = main.list_employees()
-    check(default_payload["week_start"] == "2026-10-05", "list_employees() with no argument keeps the default sample week_start")
-    check(default_payload["week_end"] == "2026-10-11", "list_employees() with no argument keeps the default sample week_end")
+    check(default_payload["week_start"] == "2026-09-21", "list_employees() with no argument keeps the default sample week_start")
+    check(default_payload["week_end"] == "2026-09-27", "list_employees() with no argument keeps the default sample week_end")
 
     other_payload = main.list_employees(week_start="2026-11-02")
     check(other_payload["week_start"] == "2026-11-02", "list_employees(week_start=...) echoes the requested week")
