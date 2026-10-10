@@ -1,0 +1,1962 @@
+{
+ "meta": {
+  "description": "Synthetic ShiftOps demo data. All people, schedules, and policies are fictional.",
+  "clock": "Naive local timestamps on one fictional America/Chicago clock; no DST change in these weeks.",
+  "evaluated_week_start": "2026-10-12",
+  "shift_id_format": "HALL-MMDD-CODE where MMDD is the operating date; Andromeda EM/OVN may start the next calendar day."
+ },
+ "workers": [
+  {
+   "id": "W01",
+   "name": "Jordan Lee",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W02",
+   "name": "Alex Chen",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W03",
+   "name": "Alex Rivera",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W04",
+   "name": "Sam Patel",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W05",
+   "name": "Riley Nguyen",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W06",
+   "name": "Morgan Diaz",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W07",
+   "name": "Taylor Brooks",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W08",
+   "name": "Casey Kim",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W09",
+   "name": "Jamie Ortiz",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W10",
+   "name": "Avery Shah",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W11",
+   "name": "Quinn Foster",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W12",
+   "name": "Drew Hassan",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W13",
+   "name": "Reese Wallace",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W14",
+   "name": "Skyler Moreno",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W15",
+   "name": "Parker Huang",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W16",
+   "name": "Rowan Ellis",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W17",
+   "name": "Emerson Price",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W18",
+   "name": "Hayden Cole",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W19",
+   "name": "Finley Adeyemi",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W20",
+   "name": "Sage Turner",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W21",
+   "name": "Dakota Lin",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W22",
+   "name": "Kendall Ruiz",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W23",
+   "name": "Logan Mehta",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W24",
+   "name": "Cameron Okafor",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W25",
+   "name": "Blake Novak",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W26",
+   "name": "Robin Castillo",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W27",
+   "name": "Jesse Park",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W28",
+   "name": "Harper Singh",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W29",
+   "name": "Elliot Ward",
+   "active": true,
+   "weekly_limit_hours": 20
+  },
+  {
+   "id": "W30",
+   "name": "Marley Ibrahim",
+   "active": false,
+   "weekly_limit_hours": 20
+  }
+ ],
+ "timetable_coverage": [
+  {
+   "worker_id": "W01",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W02",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W03",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W04",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W05",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W06",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W07",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W08",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W09",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W10",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W11",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W12",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W13",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W14",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W15",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W16",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W17",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W18",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W19",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W20",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W21",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W22",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W23",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W24",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W25",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W26",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W27",
+   "start_date": "2026-10-15",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W28",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  },
+  {
+   "worker_id": "W29",
+   "start_date": "2026-10-11",
+   "end_date": "2026-10-19",
+   "confirmed_complete": true
+  }
+ ],
+ "shifts": [
+  {
+   "id": "HEL-1001-AFT",
+   "hall": "Helix",
+   "name": "Afternoon",
+   "start": "2026-10-01 13:00",
+   "end": "2026-10-01 18:00",
+   "assigned": "W21"
+  },
+  {
+   "id": "AND-1002-EVE",
+   "hall": "Andromeda",
+   "name": "Evening",
+   "start": "2026-10-02 18:00",
+   "end": "2026-10-02 23:00",
+   "assigned": "W05"
+  },
+  {
+   "id": "SIR-1003-MOR",
+   "hall": "Sirius",
+   "name": "Morning",
+   "start": "2026-10-03 08:00",
+   "end": "2026-10-03 13:00",
+   "assigned": "W29"
+  },
+  {
+   "id": "AND-1006-OVN",
+   "hall": "Andromeda",
+   "name": "Overnight",
+   "start": "2026-10-06 23:00",
+   "end": "2026-10-07 04:00",
+   "assigned": "W05"
+  },
+  {
+   "id": "AND-1008-EVE",
+   "hall": "Andromeda",
+   "name": "Evening",
+   "start": "2026-10-08 18:00",
+   "end": "2026-10-08 23:00",
+   "assigned": "W29"
+  },
+  {
+   "id": "CAP-1010-AFT",
+   "hall": "Capella",
+   "name": "Afternoon",
+   "start": "2026-10-10 13:00",
+   "end": "2026-10-10 18:00",
+   "assigned": "W18"
+  },
+  {
+   "id": "AND-1011-OVN",
+   "hall": "Andromeda",
+   "name": "Overnight",
+   "start": "2026-10-11 23:00",
+   "end": "2026-10-12 04:00",
+   "assigned": "W26"
+  },
+  {
+   "id": "AND-1011-EM",
+   "hall": "Andromeda",
+   "name": "Early Morning",
+   "start": "2026-10-12 04:00",
+   "end": "2026-10-12 08:00",
+   "assigned": "W08"
+  },
+  {
+   "id": "CAP-1012-MOR",
+   "hall": "Capella",
+   "name": "Morning",
+   "start": "2026-10-12 08:00",
+   "end": "2026-10-12 13:00",
+   "assigned": "W20"
+  },
+  {
+   "id": "CAP-1012-AFT",
+   "hall": "Capella",
+   "name": "Afternoon",
+   "start": "2026-10-12 13:00",
+   "end": "2026-10-12 18:00",
+   "assigned": "W10"
+  },
+  {
+   "id": "HEL-1012-MOR",
+   "hall": "Helix",
+   "name": "Morning",
+   "start": "2026-10-12 08:00",
+   "end": "2026-10-12 13:00",
+   "assigned": "W19"
+  },
+  {
+   "id": "HEL-1012-AFT",
+   "hall": "Helix",
+   "name": "Afternoon",
+   "start": "2026-10-12 13:00",
+   "end": "2026-10-12 18:00",
+   "assigned": "W17"
+  },
+  {
+   "id": "VEG-1012-MOR",
+   "hall": "Vega",
+   "name": "Morning",
+   "start": "2026-10-12 08:00",
+   "end": "2026-10-12 13:00",
+   "assigned": "W05"
+  },
+  {
+   "id": "VEG-1012-AFT",
+   "hall": "Vega",
+   "name": "Afternoon",
+   "start": "2026-10-12 13:00",
+   "end": "2026-10-12 18:00",
+   "assigned": "W22"
+  },
+  {
+   "id": "SIR-1012-MOR",
+   "hall": "Sirius",
+   "name": "Morning",
+   "start": "2026-10-12 08:00",
+   "end": "2026-10-12 13:00",
+   "assigned": "W21"
+  },
+  {
+   "id": "SIR-1012-AFT",
+   "hall": "Sirius",
+   "name": "Afternoon",
+   "start": "2026-10-12 13:00",
+   "end": "2026-10-12 18:00",
+   "assigned": "W12"
+  },
+  {
+   "id": "AND-1012-MOR",
+   "hall": "Andromeda",
+   "name": "Morning",
+   "start": "2026-10-12 08:00",
+   "end": "2026-10-12 13:00",
+   "assigned": "W11"
+  },
+  {
+   "id": "AND-1012-AFT",
+   "hall": "Andromeda",
+   "name": "Afternoon",
+   "start": "2026-10-12 13:00",
+   "end": "2026-10-12 18:00",
+   "assigned": "W06"
+  },
+  {
+   "id": "AND-1012-EVE",
+   "hall": "Andromeda",
+   "name": "Evening",
+   "start": "2026-10-12 18:00",
+   "end": "2026-10-12 23:00",
+   "assigned": "W01"
+  },
+  {
+   "id": "AND-1012-OVN",
+   "hall": "Andromeda",
+   "name": "Overnight",
+   "start": "2026-10-12 23:00",
+   "end": "2026-10-13 04:00",
+   "assigned": "W02"
+  },
+  {
+   "id": "AND-1012-EM",
+   "hall": "Andromeda",
+   "name": "Early Morning",
+   "start": "2026-10-13 04:00",
+   "end": "2026-10-13 08:00",
+   "assigned": "W29"
+  },
+  {
+   "id": "CAP-1013-MOR",
+   "hall": "Capella",
+   "name": "Morning",
+   "start": "2026-10-13 08:00",
+   "end": "2026-10-13 13:00",
+   "assigned": "W03"
+  },
+  {
+   "id": "CAP-1013-AFT",
+   "hall": "Capella",
+   "name": "Afternoon",
+   "start": "2026-10-13 13:00",
+   "end": "2026-10-13 18:00",
+   "assigned": "W26"
+  },
+  {
+   "id": "HEL-1013-MOR",
+   "hall": "Helix",
+   "name": "Morning",
+   "start": "2026-10-13 08:00",
+   "end": "2026-10-13 13:00",
+   "assigned": "W06"
+  },
+  {
+   "id": "HEL-1013-AFT",
+   "hall": "Helix",
+   "name": "Afternoon",
+   "start": "2026-10-13 13:00",
+   "end": "2026-10-13 18:00",
+   "assigned": "W15"
+  },
+  {
+   "id": "VEG-1013-MOR",
+   "hall": "Vega",
+   "name": "Morning",
+   "start": "2026-10-13 08:00",
+   "end": "2026-10-13 13:00",
+   "assigned": "W09"
+  },
+  {
+   "id": "VEG-1013-AFT",
+   "hall": "Vega",
+   "name": "Afternoon",
+   "start": "2026-10-13 13:00",
+   "end": "2026-10-13 18:00",
+   "assigned": "W12"
+  },
+  {
+   "id": "SIR-1013-MOR",
+   "hall": "Sirius",
+   "name": "Morning",
+   "start": "2026-10-13 08:00",
+   "end": "2026-10-13 13:00",
+   "assigned": "W04"
+  },
+  {
+   "id": "SIR-1013-AFT",
+   "hall": "Sirius",
+   "name": "Afternoon",
+   "start": "2026-10-13 13:00",
+   "end": "2026-10-13 18:00",
+   "assigned": "W13"
+  },
+  {
+   "id": "AND-1013-MOR",
+   "hall": "Andromeda",
+   "name": "Morning",
+   "start": "2026-10-13 08:00",
+   "end": "2026-10-13 13:00",
+   "assigned": "W07"
+  },
+  {
+   "id": "AND-1013-AFT",
+   "hall": "Andromeda",
+   "name": "Afternoon",
+   "start": "2026-10-13 13:00",
+   "end": "2026-10-13 18:00",
+   "assigned": "W22"
+  },
+  {
+   "id": "AND-1013-EVE",
+   "hall": "Andromeda",
+   "name": "Evening",
+   "start": "2026-10-13 18:00",
+   "end": "2026-10-13 23:00",
+   "assigned": "W23"
+  },
+  {
+   "id": "AND-1013-OVN",
+   "hall": "Andromeda",
+   "name": "Overnight",
+   "start": "2026-10-13 23:00",
+   "end": "2026-10-14 04:00",
+   "assigned": "W18"
+  },
+  {
+   "id": "AND-1013-EM",
+   "hall": "Andromeda",
+   "name": "Early Morning",
+   "start": "2026-10-14 04:00",
+   "end": "2026-10-14 08:00",
+   "assigned": "W25"
+  },
+  {
+   "id": "CAP-1014-MOR",
+   "hall": "Capella",
+   "name": "Morning",
+   "start": "2026-10-14 08:00",
+   "end": "2026-10-14 13:00",
+   "assigned": "W01"
+  },
+  {
+   "id": "CAP-1014-AFT",
+   "hall": "Capella",
+   "name": "Afternoon",
+   "start": "2026-10-14 13:00",
+   "end": "2026-10-14 18:00",
+   "assigned": "W05"
+  },
+  {
+   "id": "HEL-1014-MOR",
+   "hall": "Helix",
+   "name": "Morning",
+   "start": "2026-10-14 08:00",
+   "end": "2026-10-14 13:00",
+   "assigned": "W22"
+  },
+  {
+   "id": "HEL-1014-AFT",
+   "hall": "Helix",
+   "name": "Afternoon",
+   "start": "2026-10-14 13:00",
+   "end": "2026-10-14 18:00",
+   "assigned": "W19"
+  },
+  {
+   "id": "VEG-1014-MOR",
+   "hall": "Vega",
+   "name": "Morning",
+   "start": "2026-10-14 08:00",
+   "end": "2026-10-14 13:00",
+   "assigned": "W13"
+  },
+  {
+   "id": "VEG-1014-AFT",
+   "hall": "Vega",
+   "name": "Afternoon",
+   "start": "2026-10-14 13:00",
+   "end": "2026-10-14 18:00",
+   "assigned": "W21"
+  },
+  {
+   "id": "SIR-1014-MOR",
+   "hall": "Sirius",
+   "name": "Morning",
+   "start": "2026-10-14 08:00",
+   "end": "2026-10-14 13:00",
+   "assigned": "W14"
+  },
+  {
+   "id": "SIR-1014-AFT",
+   "hall": "Sirius",
+   "name": "Afternoon",
+   "start": "2026-10-14 13:00",
+   "end": "2026-10-14 18:00",
+   "assigned": "W04"
+  },
+  {
+   "id": "AND-1014-MOR",
+   "hall": "Andromeda",
+   "name": "Morning",
+   "start": "2026-10-14 08:00",
+   "end": "2026-10-14 13:00",
+   "assigned": "W18"
+  },
+  {
+   "id": "AND-1014-AFT",
+   "hall": "Andromeda",
+   "name": "Afternoon",
+   "start": "2026-10-14 13:00",
+   "end": "2026-10-14 18:00",
+   "assigned": "W15"
+  },
+  {
+   "id": "AND-1014-EVE",
+   "hall": "Andromeda",
+   "name": "Evening",
+   "start": "2026-10-14 18:00",
+   "end": "2026-10-14 23:00",
+   "assigned": "W24"
+  },
+  {
+   "id": "AND-1014-OVN",
+   "hall": "Andromeda",
+   "name": "Overnight",
+   "start": "2026-10-14 23:00",
+   "end": "2026-10-15 04:00",
+   "assigned": "W11"
+  },
+  {
+   "id": "AND-1014-EM",
+   "hall": "Andromeda",
+   "name": "Early Morning",
+   "start": "2026-10-15 04:00",
+   "end": "2026-10-15 08:00",
+   "assigned": "W29"
+  },
+  {
+   "id": "CAP-1015-MOR",
+   "hall": "Capella",
+   "name": "Morning",
+   "start": "2026-10-15 08:00",
+   "end": "2026-10-15 13:00",
+   "assigned": "W18"
+  },
+  {
+   "id": "CAP-1015-AFT",
+   "hall": "Capella",
+   "name": "Afternoon",
+   "start": "2026-10-15 13:00",
+   "end": "2026-10-15 18:00",
+   "assigned": "W23"
+  },
+  {
+   "id": "HEL-1015-MOR",
+   "hall": "Helix",
+   "name": "Morning",
+   "start": "2026-10-15 08:00",
+   "end": "2026-10-15 13:00",
+   "assigned": "W26"
+  },
+  {
+   "id": "HEL-1015-AFT",
+   "hall": "Helix",
+   "name": "Afternoon",
+   "start": "2026-10-15 13:00",
+   "end": "2026-10-15 18:00",
+   "assigned": "W09"
+  },
+  {
+   "id": "VEG-1015-MOR",
+   "hall": "Vega",
+   "name": "Morning",
+   "start": "2026-10-15 08:00",
+   "end": "2026-10-15 13:00",
+   "assigned": "W24"
+  },
+  {
+   "id": "VEG-1015-AFT",
+   "hall": "Vega",
+   "name": "Afternoon",
+   "start": "2026-10-15 13:00",
+   "end": "2026-10-15 18:00",
+   "assigned": "W17"
+  },
+  {
+   "id": "SIR-1015-MOR",
+   "hall": "Sirius",
+   "name": "Morning",
+   "start": "2026-10-15 08:00",
+   "end": "2026-10-15 13:00",
+   "assigned": "W16"
+  },
+  {
+   "id": "SIR-1015-AFT",
+   "hall": "Sirius",
+   "name": "Afternoon",
+   "start": "2026-10-15 13:00",
+   "end": "2026-10-15 18:00",
+   "assigned": "W28"
+  },
+  {
+   "id": "AND-1015-MOR",
+   "hall": "Andromeda",
+   "name": "Morning",
+   "start": "2026-10-15 08:00",
+   "end": "2026-10-15 13:00",
+   "assigned": "W02"
+  },
+  {
+   "id": "AND-1015-AFT",
+   "hall": "Andromeda",
+   "name": "Afternoon",
+   "start": "2026-10-15 13:00",
+   "end": "2026-10-15 18:00",
+   "assigned": "W07"
+  },
+  {
+   "id": "AND-1015-EVE",
+   "hall": "Andromeda",
+   "name": "Evening",
+   "start": "2026-10-15 18:00",
+   "end": "2026-10-15 23:00",
+   "assigned": "W21"
+  },
+  {
+   "id": "AND-1015-OVN",
+   "hall": "Andromeda",
+   "name": "Overnight",
+   "start": "2026-10-15 23:00",
+   "end": "2026-10-16 04:00",
+   "assigned": "W13"
+  },
+  {
+   "id": "AND-1015-EM",
+   "hall": "Andromeda",
+   "name": "Early Morning",
+   "start": "2026-10-16 04:00",
+   "end": "2026-10-16 08:00",
+   "assigned": "W08"
+  },
+  {
+   "id": "CAP-1016-MOR",
+   "hall": "Capella",
+   "name": "Morning",
+   "start": "2026-10-16 08:00",
+   "end": "2026-10-16 13:00",
+   "assigned": "W29"
+  },
+  {
+   "id": "CAP-1016-AFT",
+   "hall": "Capella",
+   "name": "Afternoon",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 18:00",
+   "assigned": "W12"
+  },
+  {
+   "id": "HEL-1016-MOR",
+   "hall": "Helix",
+   "name": "Morning",
+   "start": "2026-10-16 08:00",
+   "end": "2026-10-16 13:00",
+   "assigned": "W24"
+  },
+  {
+   "id": "HEL-1016-AFT",
+   "hall": "Helix",
+   "name": "Afternoon",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 18:00",
+   "assigned": "W19"
+  },
+  {
+   "id": "VEG-1016-MOR",
+   "hall": "Vega",
+   "name": "Morning",
+   "start": "2026-10-16 08:00",
+   "end": "2026-10-16 13:00",
+   "assigned": "W11"
+  },
+  {
+   "id": "VEG-1016-AFT",
+   "hall": "Vega",
+   "name": "Afternoon",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 18:00",
+   "assigned": "W15"
+  },
+  {
+   "id": "SIR-1016-MOR",
+   "hall": "Sirius",
+   "name": "Morning",
+   "start": "2026-10-16 08:00",
+   "end": "2026-10-16 13:00",
+   "assigned": "W18"
+  },
+  {
+   "id": "SIR-1016-AFT",
+   "hall": "Sirius",
+   "name": "Afternoon",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 18:00",
+   "assigned": "W10"
+  },
+  {
+   "id": "AND-1016-MOR",
+   "hall": "Andromeda",
+   "name": "Morning",
+   "start": "2026-10-16 08:00",
+   "end": "2026-10-16 13:00",
+   "assigned": "W06"
+  },
+  {
+   "id": "AND-1016-AFT",
+   "hall": "Andromeda",
+   "name": "Afternoon",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 18:00",
+   "assigned": "W16"
+  },
+  {
+   "id": "AND-1016-EVE",
+   "hall": "Andromeda",
+   "name": "Evening",
+   "start": "2026-10-16 18:00",
+   "end": "2026-10-16 23:00",
+   "assigned": "W07"
+  },
+  {
+   "id": "AND-1016-OVN",
+   "hall": "Andromeda",
+   "name": "Overnight",
+   "start": "2026-10-16 23:00",
+   "end": "2026-10-17 04:00",
+   "assigned": "W03"
+  },
+  {
+   "id": "AND-1016-EM",
+   "hall": "Andromeda",
+   "name": "Early Morning",
+   "start": "2026-10-17 04:00",
+   "end": "2026-10-17 08:00",
+   "assigned": "W25"
+  },
+  {
+   "id": "CAP-1017-MOR",
+   "hall": "Capella",
+   "name": "Morning",
+   "start": "2026-10-17 08:00",
+   "end": "2026-10-17 13:00",
+   "assigned": "W16"
+  },
+  {
+   "id": "CAP-1017-AFT",
+   "hall": "Capella",
+   "name": "Afternoon",
+   "start": "2026-10-17 13:00",
+   "end": "2026-10-17 18:00",
+   "assigned": "W19"
+  },
+  {
+   "id": "HEL-1017-MOR",
+   "hall": "Helix",
+   "name": "Morning",
+   "start": "2026-10-17 08:00",
+   "end": "2026-10-17 13:00",
+   "assigned": "W20"
+  },
+  {
+   "id": "HEL-1017-AFT",
+   "hall": "Helix",
+   "name": "Afternoon",
+   "start": "2026-10-17 13:00",
+   "end": "2026-10-17 18:00",
+   "assigned": "W04"
+  },
+  {
+   "id": "VEG-1017-MOR",
+   "hall": "Vega",
+   "name": "Morning",
+   "start": "2026-10-17 08:00",
+   "end": "2026-10-17 13:00",
+   "assigned": "W10"
+  },
+  {
+   "id": "VEG-1017-AFT",
+   "hall": "Vega",
+   "name": "Afternoon",
+   "start": "2026-10-17 13:00",
+   "end": "2026-10-17 18:00",
+   "assigned": "W12"
+  },
+  {
+   "id": "SIR-1017-MOR",
+   "hall": "Sirius",
+   "name": "Morning",
+   "start": "2026-10-17 08:00",
+   "end": "2026-10-17 13:00",
+   "assigned": "W26"
+  },
+  {
+   "id": "SIR-1017-AFT",
+   "hall": "Sirius",
+   "name": "Afternoon",
+   "start": "2026-10-17 13:00",
+   "end": "2026-10-17 18:00",
+   "assigned": "W08"
+  },
+  {
+   "id": "AND-1017-MOR",
+   "hall": "Andromeda",
+   "name": "Morning",
+   "start": "2026-10-17 08:00",
+   "end": "2026-10-17 13:00",
+   "assigned": "W02"
+  },
+  {
+   "id": "AND-1017-AFT",
+   "hall": "Andromeda",
+   "name": "Afternoon",
+   "start": "2026-10-17 13:00",
+   "end": "2026-10-17 18:00",
+   "assigned": "W15"
+  },
+  {
+   "id": "AND-1017-EVE",
+   "hall": "Andromeda",
+   "name": "Evening",
+   "start": "2026-10-17 18:00",
+   "end": "2026-10-17 23:00",
+   "assigned": "W03"
+  },
+  {
+   "id": "AND-1017-OVN",
+   "hall": "Andromeda",
+   "name": "Overnight",
+   "start": "2026-10-17 23:00",
+   "end": "2026-10-18 04:00",
+   "assigned": "W06"
+  },
+  {
+   "id": "AND-1017-EM",
+   "hall": "Andromeda",
+   "name": "Early Morning",
+   "start": "2026-10-18 04:00",
+   "end": "2026-10-18 08:00",
+   "assigned": "W25"
+  },
+  {
+   "id": "CAP-1018-MOR",
+   "hall": "Capella",
+   "name": "Morning",
+   "start": "2026-10-18 08:00",
+   "end": "2026-10-18 13:00",
+   "assigned": "W23"
+  },
+  {
+   "id": "CAP-1018-AFT",
+   "hall": "Capella",
+   "name": "Afternoon",
+   "start": "2026-10-18 13:00",
+   "end": "2026-10-18 18:00",
+   "assigned": "W25"
+  },
+  {
+   "id": "HEL-1018-MOR",
+   "hall": "Helix",
+   "name": "Morning",
+   "start": "2026-10-18 08:00",
+   "end": "2026-10-18 13:00",
+   "assigned": "W16"
+  },
+  {
+   "id": "HEL-1018-AFT",
+   "hall": "Helix",
+   "name": "Afternoon",
+   "start": "2026-10-18 13:00",
+   "end": "2026-10-18 18:00",
+   "assigned": "W22"
+  },
+  {
+   "id": "VEG-1018-MOR",
+   "hall": "Vega",
+   "name": "Morning",
+   "start": "2026-10-18 08:00",
+   "end": "2026-10-18 13:00",
+   "assigned": "W08"
+  },
+  {
+   "id": "VEG-1018-AFT",
+   "hall": "Vega",
+   "name": "Afternoon",
+   "start": "2026-10-18 13:00",
+   "end": "2026-10-18 18:00",
+   "assigned": "W24"
+  },
+  {
+   "id": "SIR-1018-MOR",
+   "hall": "Sirius",
+   "name": "Morning",
+   "start": "2026-10-18 08:00",
+   "end": "2026-10-18 13:00",
+   "assigned": "W17"
+  },
+  {
+   "id": "SIR-1018-AFT",
+   "hall": "Sirius",
+   "name": "Afternoon",
+   "start": "2026-10-18 13:00",
+   "end": "2026-10-18 18:00",
+   "assigned": "W01"
+  },
+  {
+   "id": "AND-1018-MOR",
+   "hall": "Andromeda",
+   "name": "Morning",
+   "start": "2026-10-18 08:00",
+   "end": "2026-10-18 13:00",
+   "assigned": "W26"
+  },
+  {
+   "id": "AND-1018-AFT",
+   "hall": "Andromeda",
+   "name": "Afternoon",
+   "start": "2026-10-18 13:00",
+   "end": "2026-10-18 18:00",
+   "assigned": "W20"
+  },
+  {
+   "id": "AND-1018-EVE",
+   "hall": "Andromeda",
+   "name": "Evening",
+   "start": "2026-10-18 18:00",
+   "end": "2026-10-18 23:00",
+   "assigned": "W10"
+  },
+  {
+   "id": "AND-1018-OVN",
+   "hall": "Andromeda",
+   "name": "Overnight",
+   "start": "2026-10-18 23:00",
+   "end": "2026-10-19 04:00",
+   "assigned": "W02"
+  },
+  {
+   "id": "AND-1018-EM",
+   "hall": "Andromeda",
+   "name": "Early Morning",
+   "start": "2026-10-19 04:00",
+   "end": "2026-10-19 08:00",
+   "assigned": "W25"
+  }
+ ],
+ "classes": [
+  {
+   "id": 1,
+   "worker_id": "W02",
+   "course": "MATH 241",
+   "start": "2026-10-12 09:00",
+   "end": "2026-10-12 09:50"
+  },
+  {
+   "id": 2,
+   "worker_id": "W08",
+   "course": "SPAN 102",
+   "start": "2026-10-12 10:00",
+   "end": "2026-10-12 10:50"
+  },
+  {
+   "id": 3,
+   "worker_id": "W10",
+   "course": "ACCT 210",
+   "start": "2026-10-12 10:00",
+   "end": "2026-10-12 11:15"
+  },
+  {
+   "id": 4,
+   "worker_id": "W15",
+   "course": "FREN 201",
+   "start": "2026-10-12 11:00",
+   "end": "2026-10-12 11:50"
+  },
+  {
+   "id": 5,
+   "worker_id": "W14",
+   "course": "ANTH 140",
+   "start": "2026-10-12 13:00",
+   "end": "2026-10-12 14:15"
+  },
+  {
+   "id": 6,
+   "worker_id": "W24",
+   "course": "ASTR 101",
+   "start": "2026-10-12 15:00",
+   "end": "2026-10-12 15:50"
+  },
+  {
+   "id": 7,
+   "worker_id": "W09",
+   "course": "CSCI 340",
+   "start": "2026-10-12 16:00",
+   "end": "2026-10-12 17:45"
+  },
+  {
+   "id": 8,
+   "worker_id": "W07",
+   "course": "SOCI 250",
+   "start": "2026-10-12 17:30",
+   "end": "2026-10-12 18:45"
+  },
+  {
+   "id": 9,
+   "worker_id": "W13",
+   "course": "COMM 260",
+   "start": "2026-10-12 18:00",
+   "end": "2026-10-12 19:15"
+  },
+  {
+   "id": 10,
+   "worker_id": "W18",
+   "course": "EDUC 300",
+   "start": "2026-10-12 18:00",
+   "end": "2026-10-12 20:45"
+  },
+  {
+   "id": 11,
+   "worker_id": "W03",
+   "course": "ARTH 310",
+   "start": "2026-10-12 18:30",
+   "end": "2026-10-12 21:00"
+  },
+  {
+   "id": 12,
+   "worker_id": "W23",
+   "course": "CRIM 310",
+   "start": "2026-10-12 18:30",
+   "end": "2026-10-12 21:15"
+  },
+  {
+   "id": 13,
+   "worker_id": "W04",
+   "course": "MKTG 330",
+   "start": "2026-10-12 19:00",
+   "end": "2026-10-12 21:45"
+  },
+  {
+   "id": 14,
+   "worker_id": "W29",
+   "course": "DATA 250",
+   "start": "2026-10-12 19:00",
+   "end": "2026-10-12 21:30"
+  },
+  {
+   "id": 15,
+   "worker_id": "W11",
+   "course": "MUSC 115",
+   "start": "2026-10-12 20:00",
+   "end": "2026-10-12 22:30"
+  },
+  {
+   "id": 16,
+   "worker_id": "W17",
+   "course": "THEA 120",
+   "start": "2026-10-12 21:00",
+   "end": "2026-10-12 22:15"
+  },
+  {
+   "id": 17,
+   "worker_id": "W11",
+   "course": "ECON 202",
+   "start": "2026-10-13 08:00",
+   "end": "2026-10-13 09:15"
+  },
+  {
+   "id": 18,
+   "worker_id": "W05",
+   "course": "PSYC 200",
+   "start": "2026-10-13 09:30",
+   "end": "2026-10-13 10:45"
+  },
+  {
+   "id": 19,
+   "worker_id": "W12",
+   "course": "POLS 230",
+   "start": "2026-10-13 09:30",
+   "end": "2026-10-13 10:45"
+  },
+  {
+   "id": 20,
+   "worker_id": "W17",
+   "course": "MATH 152",
+   "start": "2026-10-13 09:30",
+   "end": "2026-10-13 10:45"
+  },
+  {
+   "id": 21,
+   "worker_id": "W01",
+   "course": "HIST 220",
+   "start": "2026-10-13 10:00",
+   "end": "2026-10-13 11:15"
+  },
+  {
+   "id": 22,
+   "worker_id": "W20",
+   "course": "KINE 180",
+   "start": "2026-10-13 10:00",
+   "end": "2026-10-13 11:15"
+  },
+  {
+   "id": 23,
+   "worker_id": "W13",
+   "course": "BIOL 220",
+   "start": "2026-10-13 11:00",
+   "end": "2026-10-13 12:15"
+  },
+  {
+   "id": 24,
+   "worker_id": "W22",
+   "course": "JOUR 240",
+   "start": "2026-10-13 11:00",
+   "end": "2026-10-13 12:15"
+  },
+  {
+   "id": 25,
+   "worker_id": "W23",
+   "course": "SOCW 200",
+   "start": "2026-10-13 12:00",
+   "end": "2026-10-13 13:30"
+  },
+  {
+   "id": 26,
+   "worker_id": "W25",
+   "course": "ITAL 101",
+   "start": "2026-10-13 13:00",
+   "end": "2026-10-13 14:15"
+  },
+  {
+   "id": 27,
+   "worker_id": "W29",
+   "course": "CSCI 210",
+   "start": "2026-10-13 13:10",
+   "end": "2026-10-13 14:25"
+  },
+  {
+   "id": 28,
+   "worker_id": "W06",
+   "course": "ENGL 205",
+   "start": "2026-10-13 14:00",
+   "end": "2026-10-13 15:15"
+  },
+  {
+   "id": 29,
+   "worker_id": "W21",
+   "course": "ENGR 215",
+   "start": "2026-10-13 14:30",
+   "end": "2026-10-13 15:45"
+  },
+  {
+   "id": 30,
+   "worker_id": "W16",
+   "course": "NURS 210",
+   "start": "2026-10-13 16:00",
+   "end": "2026-10-13 17:15"
+  },
+  {
+   "id": 31,
+   "worker_id": "W26",
+   "course": "MGMT 410",
+   "start": "2026-10-13 18:30",
+   "end": "2026-10-13 21:00"
+  },
+  {
+   "id": 32,
+   "worker_id": "W02",
+   "course": "MATH 241",
+   "start": "2026-10-14 09:00",
+   "end": "2026-10-14 09:50"
+  },
+  {
+   "id": 33,
+   "worker_id": "W09",
+   "course": "PHIL 110",
+   "start": "2026-10-14 09:00",
+   "end": "2026-10-14 10:15"
+  },
+  {
+   "id": 34,
+   "worker_id": "W19",
+   "course": "ARCH 210",
+   "start": "2026-10-14 09:00",
+   "end": "2026-10-14 11:45"
+  },
+  {
+   "id": 35,
+   "worker_id": "W08",
+   "course": "SPAN 102",
+   "start": "2026-10-14 10:00",
+   "end": "2026-10-14 10:50"
+  },
+  {
+   "id": 36,
+   "worker_id": "W10",
+   "course": "ACCT 210",
+   "start": "2026-10-14 10:00",
+   "end": "2026-10-14 11:15"
+  },
+  {
+   "id": 37,
+   "worker_id": "W15",
+   "course": "FREN 201",
+   "start": "2026-10-14 11:00",
+   "end": "2026-10-14 11:50"
+  },
+  {
+   "id": 38,
+   "worker_id": "W14",
+   "course": "ANTH 140",
+   "start": "2026-10-14 13:00",
+   "end": "2026-10-14 14:15"
+  },
+  {
+   "id": 39,
+   "worker_id": "W24",
+   "course": "ASTR 101",
+   "start": "2026-10-14 15:00",
+   "end": "2026-10-14 15:50"
+  },
+  {
+   "id": 40,
+   "worker_id": "W13",
+   "course": "COMM 260",
+   "start": "2026-10-14 18:00",
+   "end": "2026-10-14 19:15"
+  },
+  {
+   "id": 41,
+   "worker_id": "W11",
+   "course": "ECON 202",
+   "start": "2026-10-15 08:00",
+   "end": "2026-10-15 09:15"
+  },
+  {
+   "id": 42,
+   "worker_id": "W28",
+   "course": "LING 200",
+   "start": "2026-10-15 09:00",
+   "end": "2026-10-15 10:15"
+  },
+  {
+   "id": 43,
+   "worker_id": "W05",
+   "course": "PSYC 200",
+   "start": "2026-10-15 09:30",
+   "end": "2026-10-15 10:45"
+  },
+  {
+   "id": 44,
+   "worker_id": "W12",
+   "course": "POLS 230",
+   "start": "2026-10-15 09:30",
+   "end": "2026-10-15 10:45"
+  },
+  {
+   "id": 45,
+   "worker_id": "W17",
+   "course": "MATH 152",
+   "start": "2026-10-15 09:30",
+   "end": "2026-10-15 10:45"
+  },
+  {
+   "id": 46,
+   "worker_id": "W01",
+   "course": "HIST 220",
+   "start": "2026-10-15 10:00",
+   "end": "2026-10-15 11:15"
+  },
+  {
+   "id": 47,
+   "worker_id": "W20",
+   "course": "KINE 180",
+   "start": "2026-10-15 10:00",
+   "end": "2026-10-15 11:15"
+  },
+  {
+   "id": 48,
+   "worker_id": "W13",
+   "course": "BIOL 220",
+   "start": "2026-10-15 11:00",
+   "end": "2026-10-15 12:15"
+  },
+  {
+   "id": 49,
+   "worker_id": "W22",
+   "course": "JOUR 240",
+   "start": "2026-10-15 11:00",
+   "end": "2026-10-15 12:15"
+  },
+  {
+   "id": 50,
+   "worker_id": "W25",
+   "course": "ITAL 101",
+   "start": "2026-10-15 13:00",
+   "end": "2026-10-15 14:15"
+  },
+  {
+   "id": 51,
+   "worker_id": "W06",
+   "course": "ENGL 205",
+   "start": "2026-10-15 14:00",
+   "end": "2026-10-15 15:15"
+  },
+  {
+   "id": 52,
+   "worker_id": "W21",
+   "course": "ENGR 215",
+   "start": "2026-10-15 14:30",
+   "end": "2026-10-15 15:45"
+  },
+  {
+   "id": 53,
+   "worker_id": "W16",
+   "course": "NURS 210",
+   "start": "2026-10-15 16:00",
+   "end": "2026-10-15 17:15"
+  },
+  {
+   "id": 54,
+   "worker_id": "W02",
+   "course": "MATH 241",
+   "start": "2026-10-16 09:00",
+   "end": "2026-10-16 09:50"
+  },
+  {
+   "id": 55,
+   "worker_id": "W08",
+   "course": "SPAN 102",
+   "start": "2026-10-16 10:00",
+   "end": "2026-10-16 10:50"
+  },
+  {
+   "id": 56,
+   "worker_id": "W15",
+   "course": "FREN 201",
+   "start": "2026-10-16 11:00",
+   "end": "2026-10-16 11:50"
+  },
+  {
+   "id": 57,
+   "worker_id": "W01",
+   "course": "CHEM 121 Lab",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 15:50"
+  },
+  {
+   "id": 58,
+   "worker_id": "W03",
+   "course": "PHYS 151 Lab",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 15:50"
+  },
+  {
+   "id": 59,
+   "worker_id": "W07",
+   "course": "BIOL 160 Lab",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 15:50"
+  },
+  {
+   "id": 60,
+   "worker_id": "W13",
+   "course": "CHEM 231 Lab",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 15:50"
+  },
+  {
+   "id": 61,
+   "worker_id": "W14",
+   "course": "ANTH 140",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 14:15"
+  },
+  {
+   "id": 62,
+   "worker_id": "W21",
+   "course": "ENGR 215 Lab",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 15:50"
+  },
+  {
+   "id": 63,
+   "worker_id": "W23",
+   "course": "GEOL 101 Lab",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 15:50"
+  },
+  {
+   "id": 64,
+   "worker_id": "W27",
+   "course": "BIOL 101 Lab",
+   "start": "2026-10-16 13:00",
+   "end": "2026-10-16 15:50"
+  },
+  {
+   "id": 65,
+   "worker_id": "W04",
+   "course": "STAT 301",
+   "start": "2026-10-16 14:00",
+   "end": "2026-10-16 16:45"
+  },
+  {
+   "id": 66,
+   "worker_id": "W11",
+   "course": "GEOG 300",
+   "start": "2026-10-16 14:00",
+   "end": "2026-10-16 16:45"
+  },
+  {
+   "id": 67,
+   "worker_id": "W17",
+   "course": "FINC 320",
+   "start": "2026-10-16 14:00",
+   "end": "2026-10-16 16:45"
+  },
+  {
+   "id": 68,
+   "worker_id": "W20",
+   "course": "CSCI 230",
+   "start": "2026-10-16 14:00",
+   "end": "2026-10-16 16:45"
+  },
+  {
+   "id": 69,
+   "worker_id": "W29",
+   "course": "STAT 200",
+   "start": "2026-10-16 14:00",
+   "end": "2026-10-16 16:45"
+  },
+  {
+   "id": 70,
+   "worker_id": "W24",
+   "course": "ASTR 101",
+   "start": "2026-10-16 15:00",
+   "end": "2026-10-16 15:50"
+  },
+  {
+   "id": 71,
+   "worker_id": "W02",
+   "course": "MATH 241",
+   "start": "2026-10-19 09:00",
+   "end": "2026-10-19 09:50"
+  },
+  {
+   "id": 72,
+   "worker_id": "W08",
+   "course": "SPAN 102",
+   "start": "2026-10-19 10:00",
+   "end": "2026-10-19 10:50"
+  },
+  {
+   "id": 73,
+   "worker_id": "W10",
+   "course": "ACCT 210",
+   "start": "2026-10-19 10:00",
+   "end": "2026-10-19 11:15"
+  },
+  {
+   "id": 74,
+   "worker_id": "W15",
+   "course": "FREN 201",
+   "start": "2026-10-19 11:00",
+   "end": "2026-10-19 11:50"
+  },
+  {
+   "id": 75,
+   "worker_id": "W14",
+   "course": "ANTH 140",
+   "start": "2026-10-19 13:00",
+   "end": "2026-10-19 14:15"
+  },
+  {
+   "id": 76,
+   "worker_id": "W24",
+   "course": "ASTR 101",
+   "start": "2026-10-19 15:00",
+   "end": "2026-10-19 15:50"
+  },
+  {
+   "id": 77,
+   "worker_id": "W09",
+   "course": "CSCI 340",
+   "start": "2026-10-19 16:00",
+   "end": "2026-10-19 17:45"
+  },
+  {
+   "id": 78,
+   "worker_id": "W07",
+   "course": "SOCI 250",
+   "start": "2026-10-19 17:30",
+   "end": "2026-10-19 18:45"
+  },
+  {
+   "id": 79,
+   "worker_id": "W13",
+   "course": "COMM 260",
+   "start": "2026-10-19 18:00",
+   "end": "2026-10-19 19:15"
+  },
+  {
+   "id": 80,
+   "worker_id": "W18",
+   "course": "EDUC 300",
+   "start": "2026-10-19 18:00",
+   "end": "2026-10-19 20:45"
+  },
+  {
+   "id": 81,
+   "worker_id": "W03",
+   "course": "ARTH 310",
+   "start": "2026-10-19 18:30",
+   "end": "2026-10-19 21:00"
+  },
+  {
+   "id": 82,
+   "worker_id": "W23",
+   "course": "CRIM 310",
+   "start": "2026-10-19 18:30",
+   "end": "2026-10-19 21:15"
+  },
+  {
+   "id": 83,
+   "worker_id": "W04",
+   "course": "MKTG 330",
+   "start": "2026-10-19 19:00",
+   "end": "2026-10-19 21:45"
+  },
+  {
+   "id": 84,
+   "worker_id": "W29",
+   "course": "DATA 250",
+   "start": "2026-10-19 19:00",
+   "end": "2026-10-19 21:30"
+  },
+  {
+   "id": 85,
+   "worker_id": "W11",
+   "course": "MUSC 115",
+   "start": "2026-10-19 20:00",
+   "end": "2026-10-19 22:30"
+  },
+  {
+   "id": 86,
+   "worker_id": "W17",
+   "course": "THEA 120",
+   "start": "2026-10-19 21:00",
+   "end": "2026-10-19 22:15"
+  }
+ ],
+ "approved_leave": [
+  {
+   "id": 1,
+   "worker_id": "W20",
+   "start": "2026-10-12 17:00",
+   "end": "2026-10-13 00:00"
+  },
+  {
+   "id": 2,
+   "worker_id": "W28",
+   "start": "2026-10-12 00:00",
+   "end": "2026-10-15 00:00"
+  },
+  {
+   "id": 3,
+   "worker_id": "W05",
+   "start": "2026-10-16 12:00",
+   "end": "2026-10-18 22:00"
+  },
+  {
+   "id": 4,
+   "worker_id": "W09",
+   "start": "2026-10-16 12:00",
+   "end": "2026-10-18 22:00"
+  },
+  {
+   "id": 5,
+   "worker_id": "W14",
+   "start": "2026-10-16 12:00",
+   "end": "2026-10-18 22:00"
+  },
+  {
+   "id": 6,
+   "worker_id": "W28",
+   "start": "2026-10-16 12:00",
+   "end": "2026-10-18 22:00"
+  }
+ ],
+ "preferences": [
+  {
+   "id": 1,
+   "worker_id": "W05",
+   "shift_id": "AND-1012-EVE",
+   "level": "preferred"
+  },
+  {
+   "id": 2,
+   "worker_id": "W14",
+   "shift_id": "AND-1012-EVE",
+   "level": "low"
+  },
+  {
+   "id": 3,
+   "worker_id": "W21",
+   "shift_id": "AND-1012-EVE",
+   "level": "neutral"
+  },
+  {
+   "id": 4,
+   "worker_id": "W08",
+   "shift_id": "AND-1012-EVE",
+   "level": "preferred"
+  },
+  {
+   "id": 5,
+   "worker_id": "W29",
+   "shift_id": "HEL-1013-MOR",
+   "level": "preferred"
+  },
+  {
+   "id": 6,
+   "worker_id": "W21",
+   "shift_id": "HEL-1013-MOR",
+   "level": "low"
+  },
+  {
+   "id": 7,
+   "worker_id": "W27",
+   "shift_id": "AND-1015-OVN",
+   "level": "preferred"
+  },
+  {
+   "id": 8,
+   "worker_id": "W28",
+   "shift_id": "AND-1015-OVN",
+   "level": "low"
+  },
+  {
+   "id": 9,
+   "worker_id": "W27",
+   "shift_id": "VEG-1015-AFT",
+   "level": "low"
+  },
+  {
+   "id": 10,
+   "worker_id": "W14",
+   "shift_id": "SIR-1015-MOR",
+   "level": "preferred"
+  }
+ ],
+ "coverage_requests": [
+  {
+   "id": 1,
+   "worker_id": "W21",
+   "shift_id": "HEL-1001-AFT",
+   "asked_at": "2026-09-30 10:15",
+   "outcome": "completed",
+   "resolved_at": "2026-10-01 18:00"
+  },
+  {
+   "id": 2,
+   "worker_id": "W05",
+   "shift_id": "AND-1002-EVE",
+   "asked_at": "2026-10-01 15:40",
+   "outcome": "completed",
+   "resolved_at": "2026-10-02 23:00"
+  },
+  {
+   "id": 3,
+   "worker_id": "W29",
+   "shift_id": "SIR-1003-MOR",
+   "asked_at": "2026-10-02 19:05",
+   "outcome": "completed",
+   "resolved_at": "2026-10-03 13:00"
+  },
+  {
+   "id": 4,
+   "worker_id": "W05",
+   "shift_id": "AND-1006-OVN",
+   "asked_at": "2026-10-05 21:30",
+   "outcome": "completed",
+   "resolved_at": "2026-10-07 04:00"
+  },
+  {
+   "id": 5,
+   "worker_id": "W14",
+   "shift_id": "AND-1008-EVE",
+   "asked_at": "2026-10-07 16:00",
+   "outcome": "declined",
+   "resolved_at": "2026-10-07 16:30"
+  },
+  {
+   "id": 6,
+   "worker_id": "W29",
+   "shift_id": "AND-1008-EVE",
+   "asked_at": "2026-10-07 16:45",
+   "outcome": "completed",
+   "resolved_at": "2026-10-08 23:00"
+  },
+  {
+   "id": 7,
+   "worker_id": "W14",
+   "shift_id": "CAP-1010-AFT",
+   "asked_at": "2026-10-09 11:20",
+   "outcome": "declined",
+   "resolved_at": "2026-10-09 11:50"
+  },
+  {
+   "id": 8,
+   "worker_id": "W18",
+   "shift_id": "CAP-1010-AFT",
+   "asked_at": "2026-10-09 12:05",
+   "outcome": "completed",
+   "resolved_at": "2026-10-10 18:00"
+  },
+  {
+   "id": 9,
+   "worker_id": "W05",
+   "shift_id": "VEG-1012-MOR",
+   "asked_at": "2026-10-11 21:10",
+   "outcome": "completed",
+   "resolved_at": "2026-10-12 13:00"
+  },
+  {
+   "id": 10,
+   "worker_id": "W14",
+   "shift_id": "AND-1014-EVE",
+   "asked_at": "2026-10-13 12:30",
+   "outcome": "declined",
+   "resolved_at": "2026-10-13 12:45"
+  },
+  {
+   "id": 11,
+   "worker_id": "W24",
+   "shift_id": "AND-1014-EVE",
+   "asked_at": "2026-10-13 13:10",
+   "outcome": "completed",
+   "resolved_at": "2026-10-14 23:00"
+  },
+  {
+   "id": 12,
+   "worker_id": "W27",
+   "shift_id": "HEL-1018-MOR",
+   "asked_at": "2026-10-16 09:00",
+   "outcome": "pending",
+   "resolved_at": null
+  }
+ ]
+}

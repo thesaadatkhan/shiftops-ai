@@ -1,269 +1,255 @@
 # ShiftOps AI
 
-ShiftOps AI is an AI-assisted workforce scheduling and shift coverage platform built as a full-stack web application.
+A terminal agent that helps a housing supervisor decide whom to ask first when a student worker calls out.
 
-The application demonstrates how structured workforce data, constraint-based schedule optimization, and a natural-language AI interface can be combined to support operational scheduling decisions.
+Python works out who is allowed to cover the shift. The model weighs the eligible workers' preferences, recent emergency coverage, and nearby classes, then explains its recommendation so the supervisor can review it. The agent never assigns shifts or contacts anyone.
 
-The AI product is a scheduling agent: ask it to find a replacement
-for a call-out, have it investigate eligible workers and propose a change,
-then approve the change and receive a verified result. Reliable backend rules
-validate every assignment. Provider configuration, the bounded tool-calling
-loop, deterministic tools, proposal persistence, explicit supervisor approval,
-atomic execution, verification, audit history and the chat UI are implemented.
+## Status
 
-## Project Status
+| Part | State |
+| --- | --- |
+| Synthetic data, eligibility rules, replacement tools | Implemented and tested offline |
+| Interactive context and factual schedule lookup | Tested offline and in user-run live sessions: ambiguous Alex clarification, weekly Capella assignments, and an afternoon follow-up. Known query limitations are listed below |
+| Agent loop, guardrails, final validation | Implemented; tested offline with scripted model replies |
+| Live model runs | **Verified 2026-10-10** with `gpt-5.6-luna`. Seven capped runs covered the five demo scenarios, one unfamiliar question, and one repeat. All seven produced Python-validated answers in 2-4 model calls and 5-13 s, and left the database unchanged |
+| Time-range labels, weekly-hours wording, estimated cost | Tested offline (180 tests with scripted replies) and in a fresh virtual environment. **One live smoke run (2026-10-10)** showed time ranges, Python-computed weekly hours, cached-token counts, and numeric per-call and cumulative cost; it reported $0.001983 for 4 model calls. One run is a smoke test, not proof of general reliability |
 
-ShiftOps AI is feature-complete for its local interview demonstration. It currently runs locally only; Azure deployment remains a future phase.
-
-**Implemented:**
-
-- A React application shell (Vite + JavaScript) with sidebar navigation covering all planned sections (Dashboard, Employees, Schedule, Coverage, Workforce Planning, AI Assistant). Every section is functional. Dashboard, Employees, Schedule and Workforce Planning share one reporting-week selection.
-- A cohesive light interface built around a white/slate/blue design system, compact navigation and controls, responsive employee views, hall-by-day schedule grids, and a ChatGPT-inspired AI conversation surface. The visual redesign changed presentation only; scheduling, approval, and data-fetching behavior remained behind the same tested interfaces.
-- Deterministic shift coverage (Phase 6) and a full schedule-generation pipeline (Phase 7): a read-only eligibility engine and Coverage screen; a Google OR-Tools draft optimizer; and a stored proposal/approval workflow so a supervisor must explicitly approve a generated draft, with full revalidation against current data, before any assignment becomes real. Every generated proposal persists its full coverage review (existing/proposed assignments, totals, uncovered reasons) and can be recovered by week after a refresh or navigation, not only for the browser session that generated it. Explicit operations for filling an uncovered position and replacing an assigned worker reuse the same locked eligibility validation and append-only assignment audit trail. The Schedule screen surfaces all of this: preparing a week's required shifts, manually filling an uncovered position with an eligible worker after confirmation, generating and reviewing a proposal with an explicit approval-confirmation step, approving or rejecting it, and replacing an individual assignment.
-- A FastAPI backend whose employee-lifecycle and semester-timetable routes include:
-
-  | Endpoint | Purpose |
-  |---|---|
-  | `GET /api/health` | backend connection check |
-  | `GET /api/employees` | read the workforce with weekly capacity figures |
-  | `GET /api/employees/{employee_code}` | read one worker's stored details, semesters, preferences and leave |
-  | `POST /api/employees` | create a worker |
-  | `PUT /api/employees/{employee_code}` | edit a worker's name and student type |
-  | `POST /api/employees/{employee_code}/deactivate` | make a worker inactive |
-  | `POST /api/employees/{employee_code}/reactivate` | make a worker active again |
-  | `DELETE /api/employees/{employee_code}` | permanently delete a worker |
-  | `POST /api/employees/{code}/semesters` | add a semester with inclusive start and end dates |
-  | `PUT /api/employees/{code}/semesters/{id}` | change a semester's dates |
-  | `DELETE /api/employees/{code}/semesters/{id}` | delete a semester and its classes |
-  | `POST /api/employees/{code}/semesters/{id}/blocks` | add a recurring weekly class |
-  | `PUT /api/employees/{code}/semesters/{id}/blocks/{id}` | change a class's day or times |
-  | `DELETE /api/employees/{code}/semesters/{id}/blocks/{id}` | remove a class |
-
-  Every write returns errors in one consistent `{"detail": ...}` shape.
-- Frontend/backend integration: the Employees section loads the workforce from `GET /api/employees`; the Dashboard and Workforce Planning sections load `GET /api/analytics/weeks/{week_start}` (see Phase 8 below). All three share the same loading, retry-on-error, and malformed-response handling. CORS is configured on the backend for the local frontend origin.
-- **Phase 8 - Dashboard and Workforce Planning analytics**, read-only throughout, built on one endpoint: `GET /api/analytics/weeks/{week_start}`, validated the same way every other week-scoped endpoint validates a Monday. Reading analytics never prepares a week's shifts. It reuses the existing eligibility/reporting rules rather than re-deriving them - the same accepted (confirmed, non-provisional) timetable-readiness rule `eligibility.py` requires, and the same whole-hour, start-week assigned-hours accounting `reporting.py` already established.
-  - **Coverage metrics**: stored shift count; required and filled positions (filled capped per shift at `required_staff`, so overstaffing can never inflate it); uncovered positions; unfilled shift count; excess assignments (the overstaffed remainder, reported rather than dropped); required coverage hours (`sum(duration x required_staff)`); scheduled coverage hours (`sum(duration x min(assigned_count, required_staff))`); recorded assignment hours (uncapped); and a coverage percentage defined as exactly 100% when required hours are zero, rather than an undefined division. Historical coverage is preserved even for an assignment held by a worker who is now inactive.
-  - **Workforce metrics**: total, active, timetable-ready and active-and-timetable-ready worker counts; active theoretical capacity (the sum of active workers' own weekly hour limits - never equated with eligibility, and never reduced by class or leave hours); active assigned hours; theoretical remaining active capacity (`max(0, active capacity - active assigned hours)`); recorded assigned hours across all workers, including inactive ones; and a per-worker utilization row (identity, active/readiness state, weekly limit, assigned hours, remaining capacity, utilization percentage).
-  - **The Dashboard screen** shows both sets of metrics as cards, a coverage progress bar, and a worker-utilization table, for the same App-owned reporting week Employees and Schedule already share. An unprepared week is shown honestly (zero stored shifts, an explicit note), never as an error and never as a reason to prepare one on its own.
-  - **The Workforce Planning screen** shows the current week's actual operational feasibility (coverage percentage and uncovered positions from the real stored schedule) separately from a read-only, aggregate workforce-size scenario calculator: given an explicit hypothetical worker count and weekly hours per worker (both supervisor-entered, never inferred), it reports hypothetical theoretical capacity, the capacity surplus or shortfall against required coverage hours, a theoretical minimum worker count (`ceil(required coverage hours / weekly hours per worker)`, undefined rather than zero when weekly hours is zero), and whether aggregate capacity is sufficient - with a permanent, prominent disclaimer that this is an aggregate lower bound only, never a proof that a feasible schedule exists, and never a hiring/firing recommendation. The scenario math runs entirely client-side against the one already-fetched `required_coverage_hours` figure; it mirrors `backend/analytics.py`'s `workforce_scenario` formula exactly and needs no second network round trip per keystroke.
-- An Employees view listing one summary row per worker: employee ID, name, student type, class-block count, weekly class hours, timetable status, weekly hour limit, and a count of approved leave periods. The details screen shows the records behind those figures and offers semester and class editing, timetable confirmation, shift-preference editing and approved-leave editing.
-- Class timetables are stored as **semester schedules owned by a worker**, each holding recurring weekly class blocks (a weekday plus a start and end time). Course names are no longer needed to run the application. Class-block counts and class hours count only the classes that actually fall inside the displayed week: a Monday class counts only if that Monday is within the worker's semester, so a semester starting on the Wednesday does not retrospectively add the Monday and Tuesday. Class hours stay fractional, because a class is 75 or 165 minutes rather than a whole number of hours.
-- Timetable status describes **the week on screen**, not whether a worker ever had a confirmed timetable. A semester confirmed last spring says nothing about October, so it is not reported as confirmed while October is displayed. There are five states:
-
-  | Status | Meaning |
-  |---|---|
-  | No schedule added | No semester has been entered for this worker at all |
-  | Outside this week | They have a class schedule, but for a different period |
-  | Needs review | Something covers this week, but nobody has checked it |
-  | Partial week | Confirmed for some days of this week, not all seven |
-  | Current | Confirmed for the whole week |
-
-  **Confirmed with no class blocks** means a deliberate "no classes this week", which stays distinct from **No schedule added**. This describes schedule readiness only. It is not shift eligibility - that is a separate backend calculation (see below) - and it is separate from whether a worker is active.
-- **A details view for one worker**, opened with the View details button on their row and closed with Back to employee list. It shows their basic details, every semester timetable stored for them with its recurring class blocks, their shift preferences and their approved leave. Semester dates and class times can be **edited** here, a semester's timetable can be **confirmed**, shift preferences can be **set** on any existing shift, and approved leave can be **added, edited and removed**. This completes Phase 5C's employee-setup editing.
-- **Supervisor entry and editing of semester timetables.** From the details view a supervisor can add a semester with inclusive start and end dates, change those dates, delete a semester behind an explicit confirmation, and add, edit and remove the recurring weekly classes inside it. Entry is entirely structured &mdash; a date picker for the semester, and a weekday plus start and end times for each class. There are no course names, no course IDs, no document uploads and no text for an AI to interpret.
-  - The backend is authoritative and validates everything again: real ISO dates with the start on or before the end; no two of a worker's semesters sharing even one calendar date, because the dates are inclusive; a weekday from Monday to Sunday; real 24-hour times; a class that ends after it starts on the same day; and no class duplicating or overlapping another in the same semester, though one class may start exactly when another ends. Each operation runs in a single transaction, so a failure part-way leaves the database exactly as it was.
-  - **Editing a timetable withdraws its confirmation, and confirming is a separate, deliberate action.** Adding, changing or removing a class, or changing a semester's dates, all clear that semester's confirmation, because a supervisor confirmed the timetable they saw rather than the one it has become; none of those edits, and none of creating a semester or emptying it, ever confirms anything on their own. A "Confirm timetable" control lets a supervisor confirm a populated semester as complete, and a separate, explicitly checked acknowledgement lets them confirm that a semester genuinely has no classes &mdash; the two are worded apart so neither can be mistaken for the other, and a plain or malformed submission cannot confirm either. Confirming also accepts the semester's current dates as correct, clearing a provisional-dates notice the same way editing the dates does. Confirming the same, unchanged content again is accepted, not refused, and simply records that a supervisor checked again.
-  - Semester timetables are listed in date order, with inclusive start and end dates, each semester's **own** confirmation state and timestamp, and its classes as readable weekday, start and end times. A semester's own confirmation is a different question from the Timetable readiness line above it, which describes only the displayed reporting week — a semester confirmed for the spring is genuinely confirmed, and still says nothing about October.
-  - Each semester also says exactly how much of the displayed week **its dates** reach: outside it, part of it, or all seven days of it. That is deliberately three states rather than a yes/no, because a semester beginning on the Wednesday overlaps the week without covering it, and two half-semesters can cover the week between them while neither covers it alone. It is a statement about dates only — separate from whether that semester was confirmed, and separate again from the worker's combined readiness across every semester they have.
-  - Three easily confused situations are worded apart: **no semester at all** (missing information, not a statement that the worker has no classes), **a semester with no classes that nobody has confirmed** (still missing information), and **a confirmed semester with no classes** (a deliberate "this worker has no classes").
-  - Where a timetable was moved across from the older course-based records, the semester dates are labelled **provisional**, because the old records stored no semester dates and the migration had to assume them. That fact is stored on the semester itself, so editing or even deleting every migrated class leaves it standing: losing the last migrated class must not quietly erase the knowledge that nobody chose those dates. Saving the semester's dates is what clears it, because that is a supervisor supplying them. The class days and times themselves were carried across unchanged.
-  - Shift preferences list the hall and the full dated start and end of each shift, so an overnight shift shows both of its dates. Only shifts the worker has a stored preference for are listed: every other shift is neutral, which is stored as the absence of a preference rather than as a third value, and the view says so rather than listing 99 neutral shifts. Preferences are soft — a low-preference shift is still one the worker can be assigned to. **Set a shift preference** opens a picker over every existing shift and a preferred/low/neutral choice; choosing neutral deletes the stored row rather than writing a third value, and each stored row also offers **Change** to revisit it. Nothing here creates a shift or a recurring template.
-  - Approved leave shows the actual dates and times each period covers, with a clear message when none is stored, and can be **added, edited and removed**. A period must end after it starts. This is leave that has already been approved, not a request; there is no approval workflow, and saving does not change or remove any assignment — reconciling leave against assignments is Phase 6 work.
-  - Opening details does not disturb the list: the search text, sort selection and status filter are all exactly as you left them when you go back. While the details view is open it is the only thing you can act on, and while a form or delete confirmation is open you cannot open details — the same one-action-at-a-time rule the write controls already follow.
-- Adding and editing workers from the Employees view: Add asks for a name and student type, Edit also shows the read-only employee ID, backed by `POST /api/employees` and `PUT /api/employees/{employee_code}`. The backend validates required fields, whitespace-only input and supported student types, returning clear validation and not-found errors. Duplicate IDs cannot arise on Add, because the ID is issued by the backend rather than typed. New workers start active with the 20-hour weekly limit, and no classes, preferences, leave or assignments are invented for them. A worker can be added to a completely empty database without seeding.
-- **An employee ID cannot be changed once the worker exists.** Editing shows the ID read-only and offers the name and student type instead; the backend refuses any edit that submits a different ID, including one that differs only in capitalisation. The ID is what identifies a worker in schedules and reports, so renaming it would make one person appear to be two and could leave the old ID free for accidental reuse. Editing a worker's name or student type keeps their ID, their internal database identity, their active status and all of their classes, preferences, leave and assignments exactly as they were.
-- **Employee IDs are assigned by the backend**, not typed in. Adding a worker asks only for their name and student type; the ID is issued when the record is saved and shown in the confirmation. IDs run SW-001, SW-002 and so on, always at least three digits, and simply grow a digit past SW-999. The sequence continues above the highest ID ever used and never fills a gap, so a deleted or edited worker's ID is never handed to anyone else. Existing stored IDs, including any that predate this scheme, are left exactly as they are.
-- Deactivating and reactivating workers from the Employees view, one button per row. Deactivating preserves everything about the worker: their identity, classes, shift preferences, approved leave and past assignments are all left in place, and reactivating restores the same record rather than creating a new one. Deactivation is refused while the worker still has an assigned shift that has not finished — including one already in progress, not only shifts that have yet to start — and the refusal names those shifts and explains that nothing was cancelled. Shifts that have already ended are history and never block. Because the list defaults to the Active filter, a worker you have just deactivated disappears from the table; the confirmation message says to switch the Status filter to Inactive or All to find them again. Search, sorting and the status filter are left exactly as you set them when the list refreshes.
-- Permanently deleting a worker, behind an explicit confirmation that names them, says what will be removed, and warns that it cannot be undone. Deletion removes the worker's profile, semester schedules, class blocks, shift preferences, approved leave and any legacy course rows they still carry, in a single transaction; if any step fails, nothing is removed at all. Shifts are never deleted, because a shift is a residence hall's staffing requirement shared by everyone, and no other worker's records are touched. A worker who has **any** assignment on record cannot be deleted, historical assignments included: that history would otherwise refer to nobody. The backend enforces this, not just the interface, and it checks inside the same transaction that does the deleting, so a shift assigned at the same moment cannot slip past the check. Workers with shift history are deactivated instead.
-- A deleted employee ID is recorded in a retired-ID ledger, and the allocator reads that ledger when working out the next ID. A deleted worker's ID is therefore never reissued, and since IDs can no longer be typed in, there is no way to re-enter one by hand either.
-- While a delete confirmation is open, it is the only thing you can act on: adding, editing, deactivating and deleting anyone else are all unavailable until you cancel or the request finishes. Searching, sorting and filtering still work, because they only change what the table shows.
-- List controls on the Employees view: case-insensitive search across worker name and employee ID; sorting by employee ID, name, student type, course count, weekly class hours or remaining capacity, in either direction, with numeric columns sorted by value; an Active / Inactive / All status filter defaulting to Active; a count of matching workers; a no-results message; and a Reset control. Search, filtering and sorting all combine. They run in the browser over the already-loaded list rather than querying the backend.
-- Remaining weekly capacity per worker, calculated in the backend as `max(0, weekly hour limit - assigned hours for the reporting week)`. Work shifts must be a positive whole number of hours, so assigned hours and remaining capacity are whole hours; a stored shift that breaks that rule produces a clear API error instead of an approximate figure. (Class meetings are not work and keep their 75- and 165-minute lengths.) A shift counts entirely towards the week containing its start, so a Sunday-night-into-Monday shift is not split across two weeks. This is theoretical unused capacity, not shift eligibility or availability: class hours and approved leave are deliberately not subtracted. Workers in the canonical demo have valid background assignments, while a newly created worker starts at the full 20 hours.
-- A SQLite database holding the synthetic dataset, created and populated by scripts in `backend/` so it can be rebuilt from scratch at any time. It stores employees, semester schedules, recurring class blocks, shifts, shift preferences, approved leave, assignments, retired employee IDs and the ID-allocation counter. **Class timetables live in the semester schedules and class blocks.** A database upgraded from the older model also still holds its `courses` and `class_meetings` rows: those are kept as evidence of where the migrated class blocks came from, and nothing reads them to run the application.
-- Canonical deterministic demo data for the five residence halls: 30 student workers with confirmed semester classes, shift preferences, one approved-leave period each and valid background assignments across two prepared weeks (September 21 through October 4, 2026), plus the 198 required shifts derived from the halls' operating hours. Named covered, uncovered, constrained and replacement scenarios are fixed rather than left to random generation. The derivation is checked at 489 student-coverage hours per week with no gaps or double coverage, and several deliberate uncovered shifts each retain at least five eligible candidates.
-- **Phase 9A demo-readiness closeout is complete:** the canonical supervisor journey has been accepted end to end, including manual fill, generated-schedule review, replacement, AI proposal approval, analytics/readback and reload recovery. Its verification uses isolated databases and ports; the managed demo database is never reseeded during normal startup.
-- **Deterministic shift-eligibility logic**, with a Coverage screen in the interface: given a stored shift and worker, it decides whether that worker is eligible using only current stored records, and if not, exactly why. It checks the worker is active; that a CONFIRMED AND ACCEPTED (non-provisional) semester timetable covers every calendar date the shift touches (missing, unconfirmed, provisional/unaccepted or expired information does not establish availability - a schedule migrated with assumed dates is not coverage until a supervisor accepts them by confirming, and a deliberately confirmed, non-provisional "no classes" semester counts as coverage); that no recurring class, approved leave period or existing assignment overlaps the shift; and that adding the shift would not exceed the worker's weekly hour limit for the week its start falls in. Every applicable reason is returned, not just the first, and a preferred/low/neutral preference is reported as a fact, never as a reason a shift is unavailable. A read-only `GET /api/shifts/{shift_id}/coverage` answers "who can cover this shift", returning every worker's result plus the eligible subset, with an optional worker excluded from that subset (for replacing whoever is calling out); `GET /api/shifts` lists every stored shift for the screen's picker.
-- **The Coverage screen itself**, in the sidebar: pick a stored shift through a progressive selector - hall, then a readable weekday/date, then the matching shift's time - rather than scanning or typing a raw id. Times are friendly and 12-hour, a cross-midnight shift shows both of its dates, the stable id stays secondary, and the number of matching shifts is shown once a hall and date are chosen. Choosing a shift shows its eligible and ineligible workers in two separate tables. Ineligible rows show every reason the backend returned, in its own words; eligible rows show preference, assigned hours this week, projected hours if assigned, and the weekly limit, so a low-preference worker who clears every hard rule reads as plainly eligible. An "Exclude worker" picker (for a replacement or call-out) re-requests coverage naming a worker to leave out of the eligible list - it changes no stored record and makes no assignment, and an eligible-but-excluded worker is called out with a note rather than silently disappearing. If the excluded worker no longer exists, the screen offers "Clear exclusion and retry" rather than only a plain Retry that would resend the same refused request. The same hall/day/shift picker is used by Employee Details' general "Set a shift preference" action.
-- **Phase 9 increment 1 - AI scheduling agent backend foundation.** This was the backend-only first increment; the completed chat UI is described below. Provider configuration (`backend/ai_config.py`) reads `OPENAI_API_KEY` and an optional `OPENAI_MODEL` from the environment only, failing clearly before anything is written if the key is missing rather than attempting a request or leaving an orphaned task behind; no key is required to run the test suite. A deterministic tool registry (`backend/agent_tools.py`) wraps existing eligibility/reporting functions - resolving a worker or shift with explicit ambiguity handling, reading shift coverage, ranking eligible replacement candidates (preferred before neutral before low, then lower projected weekly hours, then employee code), inspecting an uncovered shift, and reading employee-hours facts - and exposes exactly one write, creating a PENDING proposal. That write computes its stored explanation entirely from those same deterministic facts (never from the model) and requires the proposed worker to be the authoritative top-ranked eligible candidate; at most one proposal is allowed per task, enforced in code and by a database constraint. There is no tool that can create leave, remove an assignment, edit a worker, or approve/execute anything. A provider-independent bounded tool-calling loop (`backend/agent_service.py`, `backend/agent_model.py`) validates every tool call, stops after a fixed maximum number of steps, and derives its result kind (`answer`/`clarification_required`/`blocked`/`proposal`) from what the tools actually returned rather than the model's own wording. New tables (`agent_tasks`, `agent_messages`, `agent_proposals`) persist the task, its factual transcript, and any proposal it produced. Three endpoints - `POST /api/agent/tasks`, `POST /api/agent/tasks/{id}/messages`, `GET /api/agent/tasks/{id}` - were the entire API surface for that increment.
-- **Phase 9 increment 2 - supervisor approval, atomic execution, audit linkage, and verification.** Two new routes - `POST /api/agent/proposals/{id}/approve` and `POST /api/agent/proposals/{id}/reject` - are the only way a proposal can be decided; no tool, model output, or transcript text can reach them. A third, read-only `GET /api/agent/proposals/{id}` returns that same decision-state shape (including a fresh readback once verified) without deciding or changing anything, for recovering an already-decided proposal's current state after a refresh. Approval requires resubmitting the proposal's exact stored action (a mismatch is a 409, never a silent approval of unseen content) and, inside one atomic transaction, fully revalidates current live state - active status, confirmed timetable coverage, class/leave/assignment conflicts, the weekly-hour limit, and (for an uncovered-shift fill) that a position is still genuinely open - using the SAME validated replacement/creation logic Phase 7's manual replacement already uses (extracted into shared, transaction-internal helpers in `backend/proposals.py`, so the proposal decision, the assignment mutation, and the linked `assignment_audit` row all commit together, exactly once). The original ranking is not re-required at approval time; only the specific approved worker's current standing is rechecked, never silently substituted. Both decisions are idempotent for a repeat of the same outcome, refuse to contradict an already-final decision (409), and stay correct under concurrent or racing requests, including recovering an "applied but never verified" proposal (a process/write failure between the execution commit and the verification write) by running only the missing verification on a later retry - never repeating the assignment mutation, and never automatically re-running an already-recorded verification failure. After a successful write commits, a genuine post-commit readback (through the same deterministic functions the agent's own tools use) verifies the result; a verification failure is recorded separately and is never reported as a failed or rolled-back write, and is never silently retried. `assignment_audit` gained an additive, nullable `agent_proposal_id` column linking Phase 9 execution to the same audit trail Phase 7 already writes to - not a second, parallel history. Employee deletion continues to refuse (with the existing controlled error) when a worker is still referenced by any agent proposal.
-- **Phase 9 increment 3 - the AI Assistant chat frontend.** A chat-style supervisor interface (`frontend/src/AIAssistant.jsx`, `frontend/src/agent.js`) over the existing agent backend: starting and continuing a task, recovering the active task from `localStorage` after a refresh, and rendering the full stored transcript as plain text (never HTML). A pending proposal renders as a structured card - hall, exact date/time, outgoing worker or "Uncovered position", proposed incoming worker, and the server-generated rationale - never model prose standing in for it. Approval and rejection each require an explicit confirmation panel naming the exact action before the real decision endpoint is called; chat input and model output have no path to either endpoint. Every backend response is defensively validated before it reaches the screen (task/proposal identity and ownership, exact shift and worker fields, execution/verification outcomes, readback shape), reusing the same three-way ApiError/ResponseValidationError/NetworkOutcomeUnknownError split and Reload/Reconcile-before-retry discipline Schedule.jsx already established - a network or malformed-response failure is never treated as a silent success, and nothing is ever automatically resent. An applied-but-verification-failed outcome is shown as a distinct warning requiring Reload/Reconcile, never as if the write itself failed. A missing `OPENAI_API_KEY` on the backend surfaces as a clear 503 setup message; no key is ever requested, stored, or displayed in the browser.
-- Agent shift lookup distinguishes a schedule week that has not been prepared from a genuine missing shift inside a prepared week. For an unprepared week it tells the supervisor to prepare that week in the Schedule screen before asking for eligibility; it does not falsely claim that the hall has no shift.
-- **Phase 9 live-provider acceptance is complete.** The full replacement workflow was demonstrated with a real `gpt-5.6-luna` provider call against an isolated database: the agent investigated a call-out, created a pending top-ranked proposal, the supervisor approval endpoint applied it, and the independent readback verified the replacement. No API key or working-database data is committed.
-
-**Not yet implemented:**
-
-- Cloud deployment
-- Active status affects only future eligibility, never past records. Deactivating a worker records that status and hides them from the default list view, and the eligibility logic above excludes inactive workers from eligible candidates for new assignments; it does not touch anything already recorded. Phase 7's schedule generator, proposal approval, and replacement workflow are implemented (see above), and a worker's historical assignments and coverage figures remain visible even after that worker later becomes inactive.
-
-## Running Locally
-
-Requires Python 3.12+ and Node.js. Two terminals.
-
-**Backend** (from `backend/`):
+## How it works
 
 ```
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1        # PowerShell; use source .venv/bin/activate on macOS/Linux
-pip install -r requirements.txt
-python seed.py                       # once, on an empty database: loads the canonical demo data
-python build_canonical_demo.py PATH  # build a separate new file; refuses overwrite/shiftops.db
-python validate_canonical_demo.py PATH # read-only validation before/after an authorized file swap
-uvicorn main:app --reload --port 8000
+question ─▶ agent_steps() ──▶ model: request tools or give a final answer
+                 ▲                    │
+                 │   observations     ▼
+                 └──────────── tools.dispatch() ──▶ SQLite (read-only)
+final JSON ─▶ validate_final() in Python ─▶ printed only if it passes
 ```
 
-The AI scheduling agent (Phase 9) additionally needs `OPENAI_API_KEY` set. Copy `backend/.env.example` to `backend/.env` (gitignored), fill in your own key, and start the backend with `uvicorn main:app --reload --port 8000 --env-file .env` so Uvicorn loads that file. `OPENAI_MODEL` is optional and defaults to `gpt-4o-mini`. Nothing else in the application, and no test, requires this key.
+**Python fetches and checks:**
+- `eligibility.py` applies the hard rules for the whole shift: class, approved-leave, and assignment overlaps; a confirmed class timetable; and an absolute 20-hour weekly cap. Shift lengths come from the stored start and end times, so 4-, 5-, or 7-hour shifts are all handled exactly.
+- `tools.py` provides five replacement fact tools and one read-only schedule tool, with evidence IDs. None ranks workers.
+- `agent.py` binds the run to the shift and worker named in the question. It enforces the limits and checks the final answer against freshly computed eligibility. It also confirms that every cited evidence ID came back from a tool during this run.
+- `pricing.py` estimates cost from the token usage the provider reports.
 
-**Frontend** (from `frontend/`):
+**The model decides:**
+- which context to look up after the eligibility check;
+- whom to ask first among the eligible workers, and who the backup is;
+- how to explain the tradeoff.
 
-```
-npm install
-npm run dev
-```
+The same question can produce different defensible choices on different runs. Three live runs of the Andromeda Oct 12 question picked Riley first twice and Dakota first once.
 
-Then open `http://localhost:5173/`. The backend's interactive API documentation is at `http://127.0.0.1:8000/docs`.
+Facts and hard eligibility must be the same on every run: Python checks that the chosen workers are eligible and that cited evidence was retrieved. Only the weighting of soft tradeoffs may vary, such as preference versus recent emergency burden versus remaining hours. These few runs show the behavior; they don't prove the model is reliable in general.
 
-If uvicorn reports that port 8000 is already in use, an earlier backend is still running. Find and stop that one rather than picking a different port, because the frontend calls `http://127.0.0.1:8000` directly:
+## Files
+
+| File | Responsibility |
+| --- | --- |
+| `agent.py` | `agent_steps()` loop, OpenAI provider, target binding, final validation, terminal trace |
+| `tools.py` | Five replacement fact tools, schedule lookup, and validated dispatch |
+| `eligibility.py` | Time arithmetic, time-range labels, hard eligibility, weekly hours, baseline validation |
+| `database.py` | SQLite schema, seed loading, and safe one-time initialization |
+| `pricing.py` | Verified model rates and the cost-estimate calculation |
+| `data/seed.json` | Synthetic workers, shifts, classes, leave, preferences, and coverage history |
+| `tests/` | Offline tests (`scripted.py` holds the pre-written model replies) |
+
+## Tools
+
+| Tool | Returns |
+| --- | --- |
+| `find_shift` | Matching shifts with their time ranges, and whether the named worker resolves, is ambiguous, or isn't assigned to that shift |
+| `get_eligible_candidates` | Eligible workers in ID order, each with hours assigned now, hours after covering the whole shift, and hours left under the 20h cap; plus every exclusion reason |
+| `get_preferences` | Stored preference levels; a missing preference counts as neutral |
+| `get_coverage_history` | Requests made before the target shift, within a lookback of at most 30 days; outcomes shown only as known at that time |
+| `get_nearby_classes` | Classes ending shortly before or starting shortly after the shift, with exact gaps in minutes |
+| `get_schedule` | Dated assignments in the complete demo week, optionally filtered by hall, period, start time, or actual start date |
+
+The three context tools accept only workers who are eligible for that shift.
+
+## Demo data
+
+- 30 synthetic workers; one (W30) is inactive.
+- Capella, Helix, Vega, and Sirius run 8 AM–6 PM. Andromeda runs 24 hours.
+- The evaluated week is Mon Oct 12 to Sun Oct 18, 2026, on one fictional America/Chicago clock. It contains 91 shifts and 448 hours. `database.py` checks that every operating hour is covered exactly once, with no conflicts and nobody over 20 hours.
+- Shifts are displayed with time ranges generated from their stored timestamps, for example `Oct 12, 6 PM–11 PM`. A shift that crosses midnight shows both dates: `Oct 12, 11 PM–Oct 13, 4 AM`.
+- IDs such as `AND-1012-EVE` stay the internal identity. The ID uses the operating date, so `AND-1012-EM` runs `Oct 13, 4 AM–8 AM`.
+- Weekly hours are charged to the week in which a shift starts.
+
+| Scenario | What the data sets up |
+| --- | --- |
+| Andromeda Oct 12, 6 PM–11 PM (Jordan out) | Four eligible workers. Riley prefers the shift but has covered three recent emergencies. Jamie's class ends 15 minutes before the start. Skyler marked it low but has the most spare hours. Dakota would reach exactly 20h. Casey is excluded (18h assigned + 5h = 23h) |
+| Helix Oct 13, 8 AM–1 PM (Morgan out) | Elliot prefers it, but a class starts 10 minutes after it ends. Dakota marked it low. Skyler has recently declined requests |
+| Capella Oct 16, 1 PM–6 PM (Drew out) | No eligible replacement: fall-break leave, Friday labs, or the hour cap rule out everyone |
+| "Alex" on Andromeda, Sat Oct 17 | Two different Alexes work Andromeda that day, so the agent asks which one |
+| Sam, Capella Oct 13, 1 PM–6 PM | Sam isn't assigned to that shift, so the agent reports the mismatch |
+
+All people, schedules, and policies are fictional.
+
+## Setup (Windows PowerShell)
 
 ```powershell
-Get-NetTCPConnection -LocalPort 8000 -State Listen |
-  ForEach-Object { Get-CimInstance Win32_Process -Filter "ProcessId=$($_.OwningProcess)" } |
-  Select-Object ProcessId, CommandLine
+py -3.12 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+copy .env.example .env      # then set OPENAI_API_KEY and OPENAI_MODEL locally
+.venv\Scripts\python database.py --init-demo
+.venv\Scripts\python -m pytest -q
 ```
 
-Confirm the command line is this project's `uvicorn main:app`, then stop it with `Stop-Process -Id <ProcessId> -Force`. When it was started with `--reload` there are two processes: a reloader parent and a worker child. Stopping only the child makes the parent immediately respawn it, so stop the **parent**, or press Ctrl+C in the terminal running it.
+Initialization happens once: `database.py --init-demo` builds `shiftops.db` from `data/seed.json` and validates it. Every agent run after that reuses the same SQLite file through a read-only connection, so runs never change it.
 
-### About the demo data
+- `--init-demo` refuses to overwrite an existing database. Use `--init-demo --reset` only to rebuild it on purpose.
+- `--check` validates an existing database again.
+- The tests build their own temporary databases and use pre-written replies, so they need no key or network.
 
-The synthetic workforce is **initialized once, explicitly, into an empty database**:
+These steps were verified on 2026-10-10 in a separate temporary copy with a new virtual environment: install, one-time initialization, refusal to overwrite, `--check`, and the full offline suite (176 tests at that time).
 
-```
-python seed.py
-```
+## Run
 
-After that, workers are managed through the application. The records in the database are the source of truth.
-
-Initialization only runs when the database holds no workforce or scheduling records at all. If anything is already there, it refuses, explains what it found, and changes nothing. There is deliberately no repair, reset or force mode, and no "add the demo workers that are missing" behaviour — so re-running it can never overwrite your edits, restore a worker you deleted, or drop demo workers into a database you are managing yourself.
-
-An existing database with the tables created but no rows is still eligible. Emptiness is judged across every workforce table, not just the employee count: a database can hold shifts or assignments with no employees, and that still counts as in use.
-
-Everything is written in one transaction. If any part fails, the whole dataset is rolled back, so there is no half-initialized state.
-
-Starting the backend never seeds. It creates missing tables and applies schema migrations; `CREATE TABLE IF NOT EXISTS` alone cannot update an existing table. Migrations add fields, backfill metadata and, in the case of the semester model, transform existing data. **That semester migration is implemented**: on an upgraded database it moves each stored class meeting into a semester schedule and a recurring class block, keeping the weekday and times unchanged and leaving the legacy rows in place as provenance. It runs inside one transaction, so it either completes or changes nothing, and repeating it moves nothing. Initialization is not a migration mechanism. Records live in `backend/shiftops.db` and persist across restarts. That file is deliberately not committed, so a fresh clone starts empty and can be populated manually or explicitly initialized with demo data.
-
-To initialize a genuinely empty local database, run `python seed.py` once. It refuses any database that already contains workforce or scheduling records. Replacing an established managed database is a separate maintenance action: build and validate a new file, stop the application, preserve the old file in a timestamped non-overwritten backup, then swap files. Neither startup nor the seed command performs that replacement.
-
-### Verification scripts
-
-Run from `backend/` with the virtual environment active:
-
-```
-python verify_coverage.py      # 198 shifts across two weeks, each totalling 489 coverage hours
-python verify_preferences.py   # shift preferences match whole shifts, checked against independently listed expectations
-python verify_seeding.py       # demo initialization: empty-only, atomic, refuses to re-run
-python verify_manual_assignment.py      # validated and audited manual fill transaction
-python verify_manual_assignment_http.py # manual fill route over a real isolated socket
-python verify_migration.py     # schema migrations add columns without losing existing records
-python verify_capacity.py      # assigned hours and remaining capacity, including week boundaries
-python verify_employee_writes.py     # creating and editing workers, validation, and the immutable employee ID
-python verify_employee_status.py     # deactivation and reactivation, and the shifts that block deactivation
-python verify_employee_deletion.py   # permanent deletion, assignment protection, rollback, and retired IDs
-python verify_code_allocation.py     # automatic employee IDs: sequence, reservation, concurrency, rollback
-python verify_employee_api.py        # the endpoints' request/response contract, against a throwaway database
-python verify_semester_migration.py  # migrating class meetings into semester schedules and class blocks
-python verify_timetable_reporting.py # class summaries and timetable readiness for the reporting week
-python verify_employee_details.py    # the details payload: ownership, semesters, preferences, leave
-python verify_details_http.py        # the details route over a real socket: status codes, JSON, CORS
-python verify_timetable_editing.py   # entering, editing and confirming semesters and classes: validation, clashes, rollback, confirmation
-python verify_timetable_editing_http.py # timetable, preference and leave mutation routes over HTTP, including rejected request bodies
-python verify_preference_leave_editing.py # setting shift preferences and editing approved leave: validation, ownership, rollback
-python verify_eligibility.py         # deterministic shift eligibility: every hard rule, boundaries, and the Coverage query
-python verify_eligibility_http.py    # the Coverage route over a real socket: status codes, JSON, CORS
+```powershell
+.venv\Scripts\python agent.py "Jordan called out for Andromeda's October 12 evening shift. Who should I ask first?"
+.venv\Scripts\python agent.py "Morgan can't make the Helix morning shift on October 13. Who should cover?"
+.venv\Scripts\python agent.py "Drew called out of Capella on Friday afternoon. Who can cover?"
+.venv\Scripts\python agent.py "Alex called out of Andromeda on Saturday."
+.venv\Scripts\python agent.py "Sam called out for Capella's October 13 afternoon shift."
 ```
 
-Each script uses its own in-memory or temporary database and never opens
-`backend/shiftops.db`, so they all work on a fresh checkout before any
-database exists.
-The employee API, timetable-reporting, employee-details and timetable-editing
-scripts call endpoint functions against disposable databases; they do not
-exercise HTTP routing, wire serialization, or CORS. `verify_details_http.py`
-and `verify_timetable_editing_http.py` start real Uvicorn servers on
-operating-system-assigned free ports against temporary databases. They cover
-routing, status codes, JSON serialization and CORS for the details route and
-the timetable, confirmation, preference and leave mutation routes. The
-editing checks also verify that non-object JSON and missing bodies receive
-400 with a string `detail` on the create/update routes, without changing
-stored records. Malformed JSON syntax and invalid path-parameter types remain
-FastAPI validation errors (422).
-Migration concurrency checks use separate SQLite connections in threads;
-they cover concurrent execution without guaranteeing a particular interleaving.
+Each command makes paid API calls, bounded by the limits below.
 
-The complete backend verification set currently contains **36 `verify_*.py`
-scripts**. The repository-tracked browser suite is run from `frontend/` with
-`node tests/e2e/run.mjs`; its current acceptance baseline is **135 passing
-checks** against isolated backend/frontend ports, a temporary database and a
-deterministic fake model. A separate 2026-09-22 exploratory pass added 33
-user-style checks across navigation, employee lifecycle/details, Coverage and
-Workforce Planning. All passed. Real-model spot checks also passed factual,
-ambiguity, replacement, no-candidate, direct-fill and authorization-boundary
-scenarios. The known model-routing limitation is documented in the project
-specification: wording a request as a replacement when the named worker is not
-actually assigned can still stop at the failed replacement path instead of
-automatically switching to an uncovered-position fill.
+## The trace
 
-## Implementation Status and Future Extensions
+For follow-up questions, start an interactive session:
 
-Development order: Phase 5B employee lifecycle controls are complete, and
-**Phase 5C - complete employee setup - is functionally complete**: automatic
-employee IDs, the semester/class-block migration, the employee-details view,
-semester/class editing, timetable confirmation, shift-preference editing and
-approved-leave editing are all built. **Phase 6 (deterministic eligibility
-and Coverage) and Phase 7 (schedule optimization, proposal/approval,
-replacement, and the Schedule frontend) are both complete
-as well** - see the bullet list below. **Phase 8 (Dashboard and Workforce
-Planning analytics) is also complete.** Later phases must use the managed
-workforce and confirmed semester data, not fixed demo counts. Full
-checklists live in the project context; public cross-phase requirements are
-in `docs/PROJECT_SPEC.md` section 10.
+```powershell
+.\.venv\Scripts\python.exe .\agent.py --chat
+```
 
-Phase 9 (the AI scheduling agent) is complete: the backend foundation,
-supervisor approval/execution/verification, AI Assistant chat frontend and
-live-provider demonstration are all finished.
+Ask `Alex called out of Andromeda on Saturday`, then answer `Alex Chen` at the next `You>` prompt. You can also ask `Why that worker rather than Riley?` after a recommendation. Context exists only while this process is open; it is not saved to disk. `/new` clears the topic, and `/quit` exits. Steps, tools, tokens, and calculated costs accumulate across the session; `/new` does not reset the spent budget. Each turn has its own request/run timeout, excluding time you spend typing.
 
-The implemented product includes the following capabilities. RAG over fictional reference documents and MCP integration remain optional future extensions rather than claims about the current build.
+Factual schedule questions are supported too: `Which workers are covering all morning shifts at Capella this week?` The schedule tool reads SQLite, and Python displays the complete retrieved assignment list. This is factual lookup, not model judgment. `This week` refers to the synthetic October 12-18 demo week. Broad requests returning more than 16 shifts must be narrowed. A quoted one-shot command still starts an independent conversation.
 
-- Workforce and coverage dashboard
-- Complete employee setup, **built**: supervisor entry of semester dates and recurring class times without course names; explicit confirmation that a timetable is complete, including a deliberate "no classes"; editing shift preferences on any existing shift; and adding, editing and removing approved leave. Incomplete class information will block scheduling until confirmed.
-- Class schedule conflict detection
-- Shift eligibility analysis
-- Automated schedule generation
-- Coverage-gap identification
-- Workforce capacity analysis
-- AI scheduling agent with an approved call-out replacement workflow
-- Optional future extensions: RAG over fictional reference documents and MCP integration
+The terminal prints what happens as it happens:
+- `Step-1`, `Step-2`, and so on (one step per model call);
+- each tool action with its arguments;
+- a concise observation for each tool result;
+- the final answer validated by Python.
 
-## Technology Stack
+It never shows hidden reasoning.
 
-**In use:**
+Output stays left-aligned in a column at most 76 characters wide and adapts to narrower terminals. Each step labels its action and tools. A step may request several tools; each tool has its own arguments and result block. Candidates and evidence appear on separate lines rather than long horizontal lists. The command is unchanged.
 
-- **Frontend:** React, JavaScript, Vite
-- **Backend:** Python, FastAPI, Uvicorn
-- **Database:** SQLite, accessed with Python's standard-library `sqlite3` and plain SQL (no ORM)
-- **API:** REST/JSON (health, workforce and single-worker reads, plus employee create, update, status changes and deletion)
-- **Version Control:** Git and GitHub
+Related metrics and arguments now share lines using `|`, with automatic wrapping. For example: `Tokens: in 1,398 / out 85 | Time: 2.0s`. No usage or eligibility facts are removed.
 
-**In use for completed scheduling and AI workflows:**
+Format example, produced from **scripted** replies (the numbers are illustrative):
 
-- **Optimization:** Google OR-Tools CP-SAT
-- **AI:** OpenAI Chat Completions with validated function tools and backend-enforced approval
+```
+Step-1
+------------------------------------
+Action: Call tools
+Tools: find_shift
+Tokens: in 800 / out 60
+Cache: (cache read 0 / write 0)
+Reserved: 3,138 | Used so far: 860/50,000 tokens
+Time: 0.0s
+est. cost: $0.000232 this call | $0.000232 so far
 
-**Planned:**
+  Action: Identify the shift and outgoing worker
+  Tool: find_shift
+  Arguments:
+    date: 2026-10-12
+    hall: Andromeda
+    worker: Jordan
+  Result: resolved
+    Andromeda | Oct 12, 6 PM–11 PM
+    Shift ID: AND-1012-EVE
+    Assigned: Jordan Lee (W01)
 
-- **Deployment:** Microsoft Azure
+...
 
-## Data and Scenario Disclaimer
+FINAL (recommendation, validated by Python)
+  Shift: Andromeda Evening, Oct 12, 6 PM–11 PM (AND-1012-EVE)
+  Outgoing: W01 Jordan Lee
+  Ask first: W14 Skyler Moreno
+  Backup: W21 Dakota Lin
+  Weekly hours, W14 Skyler Moreno: 5h assigned now -> 10h after covering,
+  10h left of the 20h cap
 
-ShiftOps AI uses a fictional workforce scheduling scenario inspired by general operational scheduling challenges in university housing.
+Why: [The model's explanation, wrapped in the same narrow column.]
 
-All employee records, schedules, shift preferences, leave records, staffing requirements, residence hall names, policies, and operational rules used by the application are synthetic and should not be interpreted as actual University of Texas at Dallas data or policies.
+Run totals
+  Steps: 4 | Tool actions: 5
+  Tokens: 3,900 input + 330 output
+  Time: 0.0s
+Estimated cost: $0.001176 (estimate, not a bill)
+```
 
-See [`docs/PROJECT_SPEC.md`](docs/PROJECT_SPEC.md) for the detailed project specification.
+The weekly-hours lines in the final answer are recomputed by Python; they don't come from the model's wording.
+
+## Estimated cost
+
+`pricing.py` computes an estimate for each model call and a running total from the token usage the provider reports.
+
+The counts are measured, not guessed: the calculation applies the recorded rates to ordinary input, cached reads, cache writes, and output. It remains labeled an estimate because it assumes Standard-tier pricing rather than retrieving your final account bill. OpenAI's Costs API supplies aggregated account costs, not a live billed amount attached to each response.
+
+| | |
+| --- | --- |
+| Source | [OpenAI API pricing](https://developers.openai.com/api/docs/pricing), verified 2026-10-10 |
+| Model / tier | `gpt-5.6-luna`, Standard tier (the agent sets no service tier) |
+| Currency | USD per 1M tokens |
+| Input | $0.20 |
+| Cached input | $0.02 |
+| Cache write | $0.25 |
+| Output | $1.20 |
+| Long context (over 272K input tokens) | $0.40 / $0.04 / $0.50 / $1.80 for the whole request; the 50K-token cap keeps runs far below this |
+
+How the estimate is calculated:
+- Cached and cache-write tokens are parts of the input count and are priced at their own rates.
+- Reasoning tokens are billed as output and are already included in the output count, so they aren't added again.
+- Local Python/SQLite tools have no API charge. Their results are paid for only as input to later model calls.
+- If the price or any needed usage number is missing or inconsistent, the cost shows as `unknown`, never a guess. That includes a missing cache breakdown, a failed request, or an unknown model.
+- Tokens charged conservatively when usage wasn't reported are labeled separately from measured usage.
+- The estimate is display only. Prices can change, so treat it as an estimate rather than a bill. Budgets are always enforced on tokens and calls.
+
+Measured example (live smoke run, 2026-10-10): 4 model calls, 9,946 input tokens (5,845 of them cached reads) and 701 output tokens, estimated at $0.001983.
+- Every call reported both cache counts, which is why the estimates are numbers rather than "unknown".
+- That run happened before the trace printed cache writes. Re-deriving the four printed costs implies the writes equaled each call's uncached input; the trace now shows both reads and writes.
+- Earlier runs used 3,000-12,000 tokens, roughly $0.001-$0.003 each at these rates.
+
+## Guardrails
+
+| Limit | Default |
+| --- | --- |
+| Model calls per run (including repairs) | 10 |
+| Tool executions per run | 12 |
+| Output tokens per call | 1,000 |
+| Total input + output tokens per one-shot run or entire chat session | 50,000 |
+| Request timeout / run deadline | 30 s / 120 s |
+| SDK automatic retries | Disabled |
+| Question / tool arguments / tool result size | 500 / 1,000 / 8,000 characters |
+
+Before every paid request, the agent asks the provider's token counter for the size of the full request. It adds a 10% margin, reserves the maximum output, and stops if that total won't fit in the remaining allowance. On the last allowed call, or once the tool budget is spent, tools are disabled so the model has to answer.
+
+A run stops with an explicit status for any of these: truncated output, unavailable provider, call/tool/token/deadline limits, repeated calls, or a final answer that fails validation after one repair attempt.
+
+Earlier one-shot acceptance used at most 11,991 tokens with a 20,000-token cap. The current allowance is 50,000: a user-run chat resolved an ambiguous Alex call-out in six steps and 21,235 tokens, then reached the separate 10-step cap after further queries. Clear weekly schedule lookup took two steps and 4,367 tokens. These are observed examples, not guarantees for other inputs.
+
+## Limitations
+
+- The primary task is replacement advice for one call-out. Factual schedule lookup is secondary; general workforce-hours reporting is not supported.
+- Ambiguous day-versus-week wording can cause a validation repair or a narrower answer. Use an explicit date or "the week beginning October 12, 2026". Multiple-date ranges require clarification with the current parser.
+- A follow-up asking for each listed worker's total assigned weekly hours lacks an exposed reporting tool and may fail validation rather than produce an hours report. Existing replacement eligibility still calculates weekly hours correctly.
+
+- Evidence checking confirms that cited records were retrieved. It can't prove every free-text claim in the rationale is accurate.
+- The question parser is deliberately limited. It rejects contradictions in supported dates, weekdays, shift names, shift IDs, and time ranges.
+  - Relative dates such as "tonight" require clarification.
+  - Unrelated times such as "has class at 5 PM" may also trigger clarification.
+  - Use an explicit date and shift name, or a shift ID, in demo questions. Class facts come from the tools.
+- The data covers one demo week. Weekday names in questions refer to that week.
+- Not exercised live: the largest eligible pools (up to 16 workers) and a repair turn after a rejected answer.
+- User-run transcripts now show actual cache reads/writes and verified arithmetic. If a provider response omits either cache count, the trace shows `cache breakdown unreported` and the cost shows `unknown`.
+- If the provider reports only one of input or output usage, the trace shows the missing count as unknown, charges its reservation conservatively, and marks the cost unknown.
+- Cost assumes Standard-tier billing; actual account or tier settings can differ.
+- No partial or split coverage, writes, notifications, or saved chat history. Use `--chat` for clarification replies in the same process; separate one-shot invocations have no shared context.
+
+## Security
+
+Keep the API key in the local `.env`. Only the blank `.env.example` is tracked. The key is never printed, logged, or sent to tools. Generated databases, environments, traces, and private course materials are ignored by Git.
+
+See [the project specification](docs/PROJECT_SPEC.md) for the full scope and acceptance criteria.

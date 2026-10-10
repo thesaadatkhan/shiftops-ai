@@ -1,34 +1,52 @@
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/
-
-# Generated SQLite database (recreate with: python database.py && python seed.py)
-*.db
-*.db-journal
-# Isolated test databases (verify_*_http.py / e2e_server.py always use a
-# temp directory, but this is a safety net against a leftover accidental one)
-*.sqlite
-*.sqlite-journal
-
-# Environment variables / secrets
+# Secrets: only the blank example belongs in Git
 .env
 .env.*
 !.env.example
+*.pem
+*.key
 
-# Node
-node_modules/
-dist/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Local AI development context
+# Local agent instructions, course materials, and working context
 .ai/
 CLAUDE.md
 AGENTS.md
-
-# Personal interview notes (local only; never commit)
 /interviewprep.txt
+/Understanding_AI_Agents.docx
+/Class6_Agents_Implementation.pptx
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.uv-cache/
+
+# SQLite is generated from tracked synthetic seed data
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Private/generated run output
+traces/
+logs/
+scratch/
+*.log
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Legacy Node output
+node_modules/
