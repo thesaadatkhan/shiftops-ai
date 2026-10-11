@@ -35,14 +35,14 @@ def test_steps_are_model_calls_and_can_hold_several_actions(conn):
     assert [line.split(" |")[0] for line in text.splitlines() if line.startswith("Step-")] == \
            ["Step-1", "Step-2", "Step-3", "Step-4"]
     step3 = flat(text.split("Step-3")[1].split("Step-4")[0])
-    assert step3.count("action: ") == 3       # three tool actions, one paid model call
-    assert "action: get_preferences | shift_id AND-1012-EVE | worker_ids W05, W09, W14, W21" in step3
+    assert step3.count("==> ACTION: ") == 3       # three tool actions, one paid model call
+    assert "==> ACTION: get_preferences shift_id AND-1012-EVE | worker_ids W05, W09, W14, W21 RESULT:" in step3
 
 
 def test_trace_shows_usage_cost_and_python_facts(conn):
     text = flat(trace(conn, S1_INVESTIGATION + [s1_answer()]))
-    assert "tokens in 800 | out 60 | cache read 0 / write 0" in text
-    assert "est. $0.000232 this step | $0.000232 so far" in text
+    assert "Tokens: in 800 | out 60 Cache: read 0 | write 0" in text
+    assert "Cost: $0.000232 this step | $0.000232 so far" in text
     assert "resolved | Andromeda Evening | Oct 12, 6 PM–11 PM | Jordan Lee" in text
     assert "Dakota Lin (W21) | 15h now -> 20h after | 0h left" in text
     assert "Shift: Andromeda Evening | Mon Oct 12, 6 PM–11 PM | AND-1012-EVE" in text
@@ -59,7 +59,7 @@ def test_overnight_shift_shows_both_dates(conn):
 
 def test_printed_limits_come_from_the_enforced_values(conn):
     text = flat(trace(conn, [final_reply(status="incomplete", explanation="x")], limits={"model_calls": 7, "total_tokens": 9000}))
-    assert "Limits: 7 model calls | 12 tool calls" in text and "9,000 total tokens" in text
+    assert "LIMITS: 7 model calls | 12 tool calls" in text and "9,000 total tokens" in text
 
 
 def test_clarification_and_unknown_cost_are_shown(conn):
@@ -123,9 +123,9 @@ def test_no_candidate_trace_shows_grouped_exclusion_reasons(conn):
             tools_reply(("get_eligible_candidates", {"shift_id": "CAP-1016-AFT"})),
             final_reply(status="no_eligible_candidate", shift_id="CAP-1016-AFT", explanation="Everyone is excluded.")]
     text = flat(trace(conn, drew, question="Drew called out of Capella on Friday afternoon."))
-    assert "0 eligible | 30 excluded" in text   # 29 others + the worker who called out
-    assert "excluded, approved leave: W05, W09, W14, W28" in text
-    assert "excluded, over 20h cap:" in text and "excluded, class overlap:" in text
+    assert "=> 0 Eligible | 30 Excluded" in text   # 29 others + the worker who called out
+    assert "Excluded: Approved Leave: W05, W09, W14, W28" in text
+    assert "Excluded: Over 20h Cap:" in text and "Excluded: Class Overlap:" in text
     assert "NO ELIGIBLE REPLACEMENT (confirmed by Python)" in text
 
 
@@ -167,4 +167,4 @@ def test_overnight_exclusion_lists_each_worker_once(conn):
     import json, tools
     result = tools.run_tool(conn, "get_eligible_candidates", json.dumps({"shift_id": "AND-1015-OVN"}))
     lines = agent.result_lines(conn, "get_eligible_candidates", result)
-    assert "excluded, timetable not confirmed: W30" in lines
+    assert "Excluded: Timetable Not Confirmed: W30" in lines

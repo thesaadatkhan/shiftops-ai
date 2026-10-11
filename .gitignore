@@ -5,13 +5,10 @@
 *.pem
 *.key
 
-# Local agent instructions, course materials, and working context
+# Local agent instructions and working context
 .ai/
 CLAUDE.md
 AGENTS.md
-/interviewprep.txt
-/Understanding_AI_Agents.docx
-/Class6_Agents_Implementation.pptx
 
 # Python environments and generated files
 .venv/
@@ -19,14 +16,6 @@ venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.coverage
-htmlcov/
-.mypy_cache/
-.ruff_cache/
-*.egg-info/
-build/
-dist/
-.uv-cache/
 
 # SQLite is generated from tracked synthetic seed data
 *.db
@@ -47,9 +36,3 @@ scratch/
 .idea/
 .DS_Store
 Thumbs.db
-
-# Legacy Node output
-node_modules/
-
-# Local read-only folder, not part of this project
-/model-risk-agent-app-main/

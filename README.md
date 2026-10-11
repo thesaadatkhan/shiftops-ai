@@ -10,7 +10,11 @@ The agent is read-only: it never assigns a shift or contacts anyone.
 
 ## How it works
 
-```
+The agent uses a handwritten Python loop with OpenAI tool calling. Given a call-out question, the model requests tools, receives their results, and decides what to investigate next. It continues until it can recommend a replacement, ask for clarification, or explain why nobody can cover.
+
+Eligibility is determined by Python rules, not the model. The rules produce an unranked shortlist; the model weighs the softer considerations. For example, one worker may prefer the shift but have covered several recent emergencies, while another has not been asked recently but has a tight transition from class. The recommendation explains that tradeoff, and Python checks the selected workers again before displaying it.
+
+```text
 question ─▶ agent_steps() ──▶ model: asks for tools, or gives a final answer
                  ▲                    │
                  │  tool results      ▼
@@ -18,221 +22,128 @@ question ─▶ agent_steps() ──▶ model: asks for tools, or gives a final 
 final answer ─▶ Python checks it ─▶ printed only if it passes
 ```
 
-The loop in `agent.py` is written by hand. No agent framework is used; the OpenAI SDK only sends requests.
+The loop stops with an explicit status if information is insufficient or a call, tool, token, or time limit is reached.
 
-1. Send the conversation and the five tool schemas to the model.
-2. If the model asks for tools, run them in Python and append each result to the conversation.
-3. If the model gives a final answer, Python checks it. A rejected answer gets one correction attempt.
-4. If the model needs a detail (for example, which Alex), the supervisor can reply. The task continues with the same budget.
-5. Stop at a checked answer, or when a limit is reached.
-
-**Python fetches and checks:**
-- **Hard rules**, applied in `eligibility.py` to the whole shift:
-  - the worker is active and has a confirmed class timetable;
-  - no overlap with a class, approved leave, or another assignment;
-  - an absolute **20-hour weekly cap**.
-- **Shift length** comes from the stored start and end times. Nobody can split or shorten a shift to fit.
-- **The target shift:** Python locks the task to the one shift and outgoing worker the request describes, and never switches silently.
-- **The final answer** must be about that shift, and the chosen workers must pass a fresh eligibility check.
-- **Facts first:** the model must have received the eligible list, and some soft context for each worker it names, before it may recommend.
-- **Display facts:** the shift time ranges and weekly hours shown at the end are computed by Python, not taken from the model's wording.
-
-**The model decides:**
-- which context to look up after the eligibility check;
-- whom to ask first, and an optional backup;
-- how to explain the tradeoff.
-
-Several eligible workers can be defensible choices, and different runs may weigh the tradeoffs differently. Python does **not** verify every sentence of the explanation. It checks the shift, eligibility, and that the facts were retrieved. The supervisor makes the final call.
-
-## Files
-
-| File | Purpose |
+| Stage | What happens |
 | --- | --- |
-| `agent.py` | Limits, system prompt, OpenAI calls, correct-shift check, final-answer check, the `agent_steps()` loop, terminal output, and `main()`. There is no separate `main.py` |
-| `tools.py` | The five read-only tools, their schemas, and `run_tool()`, which allows only these tools and validates arguments |
-| `eligibility.py` | Time arithmetic, time-range labels, weekly hours, and the hard eligibility rules |
-| `database.py` | Builds the SQLite database from the seed and validates it |
-| `pricing.py` | Verified model rates and the cost estimate |
-| `data/seed.json` | The saved synthetic dataset (workers, shifts, classes, leave, preferences, coverage history) |
-| `tests/` | Offline tests; the model is replaced by pre-written replies in `tests/scripted.py` |
+| Question | The supervisor describes the call-out: worker, hall, date, and shift. |
+| Model | Reads the question and any results already returned, then chooses a tool, asks for clarification, or proposes a final answer. |
+| ACTION / Python tool | Python runs only an allowed tool. The tools identify the shift, calculate eligibility, or retrieve preferences, coverage history, and nearby classes. |
+| RESULT / feedback | The tool's facts go back into the conversation so the model can decide what to do next. This repeats as needed within the task's limits. |
+| Final Python check | Ordinary **Python comparisons and database checks**, not another AI call.<br><br>**Correct shift?** `answer["shift_id"] == locked_shift_id`<br>**Eligible choice?** `answer["ask_first"] in eligible_worker_ids`<br>**Different backup, if provided?** `answer["backup"] is None or answer["ask_first"] != answer["backup"]`<br><br>These are simplified examples. Python reruns class, leave, assignment, active-status, timetable, and 20-hour checks for the proposed workers. It confirms that the required tools returned facts and that the answer has the expected fields. It rejects the outgoing worker and checks any no-candidate claim against an empty eligible list. **An invented worker, ineligible choice, or wrong-shift answer is rejected before a recommendation is printed.** |
+| Print or correct | A valid result is printed with Python-calculated shift times and hours. If rejected, the program prints the reason and sends it back to the model for **one correction attempt** within the same call, token, and time budget. Python checks the corrected answer again. If it still fails, or a limit prevents correction, the run stops with an explicit status. Python does not silently pick a different worker. |
+
+The final check verifies eligibility and that supporting facts were retrieved; it does not verify every sentence of the explanation or guarantee the best possible choice.
 
 ## Tools
 
-| Tool | Returns |
+All five tools read SQLite and return facts. None chooses a winner or writes the recommendation.
+
+| Tool | What it does |
 | --- | --- |
-| `find_shift` | The dated shift and whether the named worker holds it: resolved, ambiguous, not assigned, or not found |
-| `get_eligible_candidates` | Eligible workers with hours assigned now, hours after covering, and hours left under the cap; plus every exclusion reason |
-| `get_preferences` | Preferred / neutral / low for this shift; a missing preference counts as neutral |
-| `get_coverage_history` | Emergency requests asked before the shift, with each outcome only as it was known at that time |
-| `get_nearby_classes` | Classes ending shortly before or starting shortly after the shift, with exact gaps |
+| `find_shift` | Finds the exact dated shift and confirms that the named worker holds it. Returns ambiguity or a mismatch when the question cannot be resolved safely. |
+| `get_eligible_candidates` | Checks active status, complete class information, class/leave/assignment overlaps, and the absolute 20-hour weekly cap after adding the whole shift. Returns eligible workers with current/projected hours and exclusion reasons for everyone else. |
+| `get_preferences` | Looks up whether each eligible worker marked this particular shift preferred, neutral, or low. A missing preference is neutral; preferences do not affect hard eligibility. |
+| `get_coverage_history` | Returns recent emergency requests and their pending, declined, accepted, or completed outcomes, using only information known before the target shift starts. |
+| `get_nearby_classes` | Returns non-overlapping classes shortly before or after the shift and the exact time gaps, helping the model consider tight transitions. |
 
-The three context tools accept only workers who are eligible for that shift. No tool ranks workers or writes the explanation.
+## Synthetic data
 
-## Demo data
+The saved dataset in `data/seed.json` models **30 student workers and five residence halls** for **October 12–18, 2026**. One worker is inactive. Each desk shift has one assigned worker, and the baseline is fully staffed: **91 shifts covering 448 hours**.
 
-- 30 synthetic workers; one (W30) is inactive.
-- Capella, Helix, Vega, and Sirius run 8 AM–6 PM. Andromeda runs 24 hours.
-- One fixed demo week, **Monday Oct 12 to Sunday Oct 18, 2026**, on a fictional America/Chicago clock.
-- The week has 91 shifts and 448 hours. `database.py` checks that every operating hour is covered exactly once, with no conflicts and nobody over 20 hours.
-- Weekly hours are charged to the week in which a shift starts.
-- Shift IDs such as `AND-1012-EVE` use the operating date. So `AND-1012-EM` runs Oct 13, 4 AM–8 AM, and screens always show the actual dated time range.
+### The halls and their shifts
 
-| Scenario | What the data sets up |
+| Hall | Desk hours | Usual shifts |
+| --- | --- | --- |
+| Capella | 8 AM–6 PM daily | 8 AM–1 PM; 1 PM–6 PM |
+| Helix | 8 AM–6 PM daily | 8 AM–1 PM; 1 PM–6 PM |
+| Vega | 8 AM–6 PM daily | 8 AM–1 PM; 1 PM–6 PM |
+| Sirius | 8 AM–6 PM daily | 8 AM–1 PM; 1 PM–6 PM |
+| Andromeda | 24 hours, from 8 AM to the next day's 8 AM | 8 AM–1 PM; 1 PM–6 PM; 6 PM–11 PM; 11 PM–4 AM; 4 AM–8 AM |
+
+Most shifts are five hours; Andromeda's 4 AM–8 AM shift is four hours. These are schedule patterns, not fixed-duration eligibility rules: Python uses each stored shift's actual dates and times, including midnight crossings.
+
+The story starts with a normal, covered schedule. A worker then calls out, and the supervisor asks for a replacement. Several workers may pass the hard checks, but their preferences, recent emergency coverage, and class transitions differ. The agent investigates those facts and proposes whom to ask first. The original assignment remains intact while this read-only investigation runs.
+
+### What SQLite stores
+
+| Table | Facts stored |
 | --- | --- |
-| Andromeda Oct 12, 6 PM–11 PM (Jordan out) | Four eligible workers. Riley prefers the shift but covered three recent emergencies. Jamie's class ends 15 minutes before it. Skyler marked it low but has the most hours left. Dakota would reach exactly 20h |
-| Helix Oct 13, 8 AM–1 PM (Morgan out) | Elliot prefers it, but a class starts 10 minutes after it ends. Dakota marked it low. Skyler recently declined requests |
-| Capella Oct 16, 1 PM–6 PM (Drew out) | Nobody is eligible: fall-break leave, Friday labs, or the hour cap rule everyone out |
-| "Alex" on Andromeda, Sat Oct 17 | Alex Chen and Alex Rivera both work Andromeda that day, so the agent asks which one |
-| Sam, Capella Oct 13, 1 PM–6 PM | Sam doesn't hold that shift, so the agent asks whether you meant the worker who does |
+| `workers` | Worker IDs, names, active status, and weekly hour limits |
+| `timetable_coverage` | Dates for which a worker's class timetable is confirmed complete |
+| `shifts` | Hall, shift name, and exact start/end timestamps |
+| `assignments` | Which worker is scheduled for each shift; used to calculate weekly hours |
+| `classes` | Each worker's dated class intervals |
+| `approved_leave` | Dated leave intervals that prevent coverage |
+| `preferences` | Preferred, neutral, or low preference for a particular shift |
+| `coverage_requests` | Emergency requests, when they were made, outcomes, and when outcomes became known |
 
-All people, schedules, and policies are fictional.
+Supporting historical and adjacent-week records allow coverage-history and overnight checks. All people, schedules, and policies are fictional.
+
+`database.py --init-demo` builds `shiftops.db` from this fixed seed once. Normal runs reuse it through a read-only connection; they do not regenerate synthetic data. Shift durations come from actual timestamps, and a replacement must cover the entire shift without exceeding 20 weekly hours. Exactly 20 hours is allowed.
 
 ## Setup
 
-You need **Python 3.10 or newer** (tested with 3.12). Install Python yourself; pip installs the three dependencies from `requirements.txt`.
+Install **Python 3.10+** (tested with 3.12). Live runs also require internet access and your own OpenAI API key with access to the configured model. SQLite comes with Python; the SDK, dotenv, and test dependencies are pinned in `requirements.txt`.
+
+Run these steps in **Windows PowerShell**. The example uses Python 3.12; substitute another supported interpreter if needed. No environment activation is required.
 
 ```powershell
-# Windows PowerShell. On macOS/Linux use: python3 -m venv .venv  and  source .venv/bin/activate
+# 1. Download the project. If using a ZIP, extract it and open its folder instead.
+git clone https://github.com/thesaadatkhan/shiftops-ai.git
+cd shiftops-ai
+
+# 2. Create a local Python environment and install the pinned dependencies.
 py -3.12 -m venv .venv
-.venv\Scripts\activate
-python -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 
-copy .env.example .env           # then put your own OPENAI_API_KEY and OPENAI_MODEL in .env
+# 3. First-time configuration: copy the blank example and edit your local .env.
+# Set OPENAI_API_KEY to your own key and OPENAI_MODEL to gpt-5.6-luna.
+# Leave OPENAI_REASONING_EFFORT blank for the model default. Save and close Notepad.
+# Skip the copy if you already have .env; never overwrite your existing key.
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+notepad .env
 
-python database.py --init-demo   # build shiftops.db once from data/seed.json
-python database.py --check       # optional: validate the database again
-python -m pytest -q              # offline tests: no API key or network needed
+# 4. Build the synthetic SQLite database once, then validate it.
+# Skip initialization if shiftops.db already exists; it refuses to overwrite it.
+.\.venv\Scripts\python.exe .\database.py --init-demo
+.\.venv\Scripts\python.exe .\database.py --check
+
+# 5. Optional: check that the program's rules and safeguards work.
+# These tests try situations where we already know the correct outcome:
+# - 18 hours already assigned + a 5-hour shift must be rejected.
+# - A class overlapping the shift must prevent that worker from covering.
+# - An invalid AI choice must be caught before a recommendation is printed.
+# The tests use temporary data and pre-written AI replies, not paid AI calls.
+# They need no API key or internet and do not change your demo database.
+# "Passed" means the program behaved as expected in the tested situations.
+# It does not prove the real AI will always make the best recommendation.
+# You can skip this step and still run the agent.
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-`data/seed.json` is the saved synthetic dataset. `database.py --init-demo` turns it into `shiftops.db` and validates it. You only do this once; every agent run reuses the same file through a read-only connection.
+For macOS/Linux, create the environment with `python3 -m venv .venv`, use `.venv/bin/python` in place of the Windows interpreter, copy the example with `cp .env.example .env`, and edit it in your preferred text editor. Keep your key local; `.env` is ignored by Git.
 
-`--init-demo` refuses to overwrite an existing database. Use `--init-demo --reset` only when you deliberately want to rebuild it.
-
-The project was configured and tested with `gpt-5.6-luna`. Another model must support tool calling and structured output. Cost estimates show `unknown` for a model without verified rates in `pricing.py`.
-
-## Running it
-
-Ask one replacement question in quotes:
+## Run
 
 ```powershell
-python agent.py "Jordan called out for Andromeda on October 12, 2026, from 6 PM to 11 PM. Who should I ask first, and why?"
+# 1. From the project folder, ask one call-out question in quotes.
+# This makes paid model calls and prints the steps, tool results, and recommendation.
+.\.venv\Scripts\python.exe .\agent.py "Morgan called out for Helix's morning shift on October 13, 2026. Who should we ask first?"
+
+# 2. If the agent asks a clarification, type your reply at 'Your reply>' and press Enter.
+# Keep output in the terminal for interactive replies; do not redirect it to a file.
+
+# Optional: show usage without making an API call.
+.\.venv\Scripts\python.exe .\agent.py --help
 ```
 
-The terminal prints each step as it happens:
-- **`Step-N`** is one paid model call. It shows the input/output tokens, cache reads and writes, and estimated cost.
-- **`action:`** is a tool call with its arguments; several can sit under one step.
-- **Below each action**, a short summary of the tool result.
-- **At the end**, the checked answer, Python-computed weekly hours, and the totals.
+On macOS/Linux, use `.venv/bin/python agent.py` with the same question.
 
-Hidden reasoning is never printed. Output stays within 76 columns, or narrower on narrow terminals.
-
-Each command makes a few paid API calls, bounded by the limits below.
-
-### Example questions
-
-| Situation | Question |
-| --- | --- |
-| Clear request | `Morgan called out for Helix's morning shift on October 13, 2026. Who should we ask first?` |
-| Ambiguous worker | `Alex called out of Andromeda on Saturday. Who should I ask first?` The agent asks "Alex Chen or Alex Rivera?"; reply `Alex Chen` |
-| No eligible replacement | `Drew called out for Capella's afternoon shift on Friday, October 16, 2026. Who can cover?` |
-| Wrong worker for the shift | `Sam called out for Capella's afternoon shift on October 13, 2026.` Sam doesn't hold that shift, so the agent asks whether you meant the worker who does |
-| Overnight shift | `Reese can't make the Andromeda overnight shift from 11 PM to 4 AM on Thursday, October 15, 2026. Who should we ask first?` |
-
-End of a live run of the overnight example:
-
-```
-RECOMMENDATION (checked by Python)
-  Shift: Andromeda Overnight | Thu Oct 15, 11 PM–Oct 16, 4 AM | AND-1015-OVN
-  Called out: Reese Wallace (W13)
-  Ask first: Jesse Park (W27) | 0h now -> 5h after | 15h left of 20h
-  Backup: Riley Nguyen (W05) | 10h now -> 15h after | 5h left of 20h
-```
-
-### Clarification
-
-When a detail is missing or ambiguous, the agent asks one short question.
-- **At a terminal**, you can reply up to **two** times within the same task. Your reply only replaces what it mentions: answering `Alex Chen` keeps the original hall and day.
-- **Shared budget:** replies share the task's budget for model calls, tools, and tokens, and nothing is reset.
-- **Typing time** doesn't count toward the execution deadline.
-- **When a reply is offered:** only when both input and output are a terminal. If you redirect output to a file or run non-interactively, the agent prints its question and finishes.
-- **Stopping:** an empty reply, Ctrl+C, or end of input stops the task honestly. So does a third question.
-
-Each run handles one call-out. There is no general chat, schedule reporting, or saved conversation history.
-
-## What the agent understands
-
-Python reads these explicit forms in a question and refuses to lock onto a shift that contradicts them:
-
-| Kind | Supported forms |
-| --- | --- |
-| Worker | ID (`W02`), full name (`Alex Chen`), or first name (`Alex`; several workers may match) |
-| Hall / shift ID | `Andromeda`, `Capella`, `Helix`, `Vega`, `Sirius`; IDs such as `AND-1012-EVE` |
-| Date | `2026-10-12`; `Oct 12`, `October 12th`, `October 12, 2027`; `10/12`, `10/12/2027`; weekday names (`Monday`... `Sunday`, `Mon`–`Fri`) meaning that day of the demo week |
-| Period | morning, afternoon, evening, overnight, early morning, night (evening or overnight) |
-| Time | `6 PM`, `6:30 p.m.`, `18:00`, noon, midnight; ranges such as `6-11 PM`, `6 PM to 11 PM`, `18:00-23:00`; `starting at 6 PM`, `until 11 PM` |
-
-How these forms are used:
-- A date matches a shift's start date or its operating day. Andromeda runs 24 hours, so "October 12 early morning" can mean either of two shifts.
-- A range must match both ends of the shift.
-- A first name is enough when only one assignment fits the request.
-
-These need a clarification instead of a guess:
-- vague dates ("tonight", "tomorrow");
-- two different dates;
-- a range without AM/PM ("7 to 11");
-- a request that fits more than one assignment;
-- an unrelated time in the question, such as "has class at 5 PM".
+The terminal prints numbered steps, tool actions/results, token usage, estimated cost, and the final recommendation. If the request is ambiguous, you can answer up to two clarification questions when both input and output are terminals. Redirected runs print the question and finish.
 
 ## Limits
 
-All limits live in one `LIMITS` dictionary in `agent.py`, and the terminal header is printed from it.
+Each task is capped at 10 model calls, 12 tool executions, and 50,000 total tokens. Defaults are in `LIMITS` in `agent.py`. Live calls are paid; displayed costs are estimates.
 
-| Limit | Value |
-| --- | --- |
-| Model calls per task (including the final answer and any correction) | 10 |
-| Tool executions per task | 12 |
-| Output tokens per model call | 1,000 |
-| Input + output tokens per task | 50,000 |
-| Provider request timeout | 30 s |
-| Execution deadline (waiting for your reply excluded) | 120 s |
-| Clarification replies | 2 |
-| Correction attempts after a rejected answer | 1 |
-| Automatic SDK retries | none |
-
-Before each paid request:
-1. The agent counts the full request with the provider's token counter.
-2. It adds a 10% margin and reserves the maximum output.
-3. It stops if that total would exceed what's left.
-
-On the last allowed call, or once the tool budget is used, tools are turned off and the model must answer. It may honestly answer `incomplete`. If the provider doesn't report usage, the agent charges the reservation, labels it as unmeasured, and shows the cost as `unknown`.
-
-Every run ends with a clear status:
-- **Answers:** `recommendation`, `clarification`, `no_eligible_candidate`, or `incomplete`.
-- **Stops:** a limit; an unavailable provider; truncated output; a rejected answer; an unanswered clarification; or a reply that points to a different shift.
-
-## Estimated cost
-
-`pricing.py` calculates an **estimated API cost** for each model call, and a running total, from the token usage the provider reports.
-
-| | |
-| --- | --- |
-| Source | [OpenAI API pricing](https://developers.openai.com/api/docs/pricing), verified 2026-10-10 |
-| Model / tier | `gpt-5.6-luna`, Standard tier (the agent sets no service tier) |
-| Per 1M tokens (USD) | input $0.20, cached input $0.02, cache write $0.25, output $1.20 |
-| Over 272K input tokens | $0.40 / $0.04 / $0.50 / $1.80; the 50K-token cap keeps runs far below this |
-
-How the estimate is calculated:
-- **Cache tokens:** cached reads and cache writes are parts of the input count and are priced at their own rates.
-- **Reasoning tokens** are already included in output tokens, so they are not counted twice.
-- **Local tools** have no API charge. Their results cost money only as input to later model calls.
-- **Unknown:** if the price or a needed usage number is missing, the cost shows `unknown` rather than a guess.
-
-Live test runs cost about $0.0003–$0.002 each. This is an estimate, not an invoice. Your account's tier and current prices decide the actual bill, and OpenAI reports billed costs only as account-level aggregates.
-
-## Data and security
-
-All workers, schedules, classes, preferences, and coverage history are synthetic; the policies are fictional.
-
-Keep your API key only in the local `.env` file, which Git ignores; only the blank `.env.example` is published. The key is never printed or passed to tools. The generated database, virtual environment, caches, and saved traces are also ignored.
-
-See [docs/PROJECT_SPEC.md](docs/PROJECT_SPEC.md) for the detailed specification.
+Use explicit demo dates and one call-out per run. Python validates the target, eligibility, and required fact retrieval, but does not verify every sentence of the explanation. Different eligible choices can be defensible. All data and policies are fictional.

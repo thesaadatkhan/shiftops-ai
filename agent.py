@@ -713,8 +713,10 @@ def result_lines(conn, name, result):
         return lines
     if name == "get_eligible_candidates":
         s = result["shift"]
-        lines = [f"{len(result['eligible'])} eligible | {len(result['excluded'])} excluded | "
+        lines = [f"=> {len(result['eligible'])} Eligible | {len(result['excluded'])} Excluded | "
                  f"{s['hall']} {s['name']} {s['time_range']} | {eligibility.format_minutes(s['duration_minutes'])}"]
+        if result["eligible"]:
+            lines.append("Hours: assigned now -> assigned after covering | remaining under 20h")
         lines += [f"{c['name']} ({c['worker_id']}) | {hours_text(c)}" for c in result["eligible"]]
         groups = {}
         for x in result["excluded"]:
@@ -722,13 +724,17 @@ def result_lines(conn, name, result):
                 label = next((label for start, label in EXCLUSION_LABELS if reason.startswith(start)), reason)
                 if x["worker_id"] not in groups.setdefault(label, []):  # an overnight shift can repeat a reason
                     groups[label].append(x["worker_id"])
-        lines += [f"excluded, {label}: {', '.join(ids)}" for label, ids in groups.items()]
+        if groups:
+            lines.append("")
+        lines += [f"Excluded: {label.title().replace('20H', '20h')}: {', '.join(ids)}" for label, ids in groups.items()]
         return lines
     if name == "get_preferences":
-        return [" | ".join(f"{p['name'].split()[0]} {p['level']}" for p in result["preferences"])]
+        return [" | ".join(f"{p['name'].split()[0]}: {p['level']}" for p in result["preferences"])]
     if name == "get_coverage_history":
         lines = []
         for w in result["workers"]:
+            if lines:
+                lines.append("")
             c = w["counts"]
             lines.append(f"{w['name']} | asked {c['asked']} | completed {c['completed']} | accepted {c['accepted']} | "
                          f"declined {c['declined']} | pending {c['pending']}")
@@ -758,27 +764,30 @@ def render(event, conn, width=WIDTH):
     kind = event["type"]
     if kind == "start":
         l = event["limits"]
-        return wrap([("", f"Limits: {l['model_calls']} model calls | {l['tool_calls']} tool calls | "
+        return wrap([("", ""), ("", "LIMITS:"), ("  ", f"{l['model_calls']} model calls | {l['tool_calls']} tool calls | "
                           f"{l['output_tokens']:,} output tokens/call | {l['total_tokens']:,} total tokens | "
                           f"{l['request_seconds']}s/request | {l['run_seconds']}s/run | "
                           f"{l['clarifications']} clarification replies"),
-                     ("", pricing.describe(event["rates"]) + ". Estimates only.")], width)
+                     ("", ""), ("", "ESTIMATED PRICING:"),
+                     ("  ", pricing.describe(event["rates"]) + ". Estimates only.")], width)
     if kind == "model_call":
         r, u = event["reply"], event["usage"]
         tokens = (f"in {r.input_tokens:,}" if r.input_tokens is not None else "in unknown") + " | " + \
                  (f"out {r.output_tokens:,}" if r.output_tokens is not None else "out unknown")
-        cache = (f"cache read {r.cached_tokens:,} / write {r.cache_write_tokens:,}"
-                 if r.cached_tokens is not None and r.cache_write_tokens is not None else "cache unreported")
+        cache = (f"read {r.cached_tokens:,} | write {r.cache_write_tokens:,}"
+                 if r.cached_tokens is not None and r.cache_write_tokens is not None else "unreported")
         extra = f" | reasoning {r.reasoning_tokens:,} (in out)" if r.reasoning_tokens else ""
         forced = " | tools off: must answer" if not event["tools_allowed"] else ""
         return wrap([("", ""), ("", f"Step-{event['step']} | model call | {event['seconds']}s{forced}"),
-                     ("  ", f"tokens {tokens} | {cache}{extra}"),
-                     ("  ", f"run {u['input_tokens'] + u['output_tokens']:,} tokens | est. "
-                            f"{pricing.format_usd(event['cost'])} this step | "
-                            f"{money(u['cost_usd'], u['cost_unknown_calls'])} so far")], width)
+                     ("  ", f"Tokens: {tokens}"),
+                     ("  ", f"Cache: {cache}{extra}"),
+                     ("  ", f"Cost: {pricing.format_usd(event['cost'])} this step | "
+                            f"{money(u['cost_usd'], u['cost_unknown_calls'])} so far"),
+                     ("  ", f"Tokens used: {u['input_tokens'] + u['output_tokens']:,}")], width)
     if kind == "tool":
-        lines = [("  ", f"action: {event['name']} | {arguments_text(event['arguments'])}")]
-        lines += [("    ", line) for line in result_lines(conn, event["name"], event["result"])]
+        lines = [("", ""), ("", f"==> ACTION: {event['name']}"),
+                 ("  ", arguments_text(event["arguments"])), ("", ""), ("", "RESULT:")]
+        lines += [("  ", line) for line in result_lines(conn, event["name"], event["result"])]
         return wrap(lines, width)
     if kind == "rejected":
         return wrap([("  ", "Python rejected the answer: " + "; ".join(event["problems"]))], width)
@@ -812,9 +821,10 @@ def render(event, conn, width=WIDTH):
         lines.append(("  ", f"Question: {answer['question']}"))
         lines.append(("  ", "Run again with that detail in the question."))
     if answer["explanation"]:
+        lines.append(("", ""))
         lines.append(("  ", f"Why: {answer['explanation']}"))
     lines.append(("  ", "Read-only: nothing was assigned and nobody was contacted."))
-    return wrap(lines + totals_lines(event["usage"], width), width)
+    return wrap(lines + [("", "")] + totals_lines(event["usage"], width), width)
 
 
 def ask_supervisor(question):
@@ -846,7 +856,8 @@ def main(argv=None, ask=None):
     # question would be invisible while the program waited (and waiting does not count toward the deadline).
     if ask is None and sys.stdin.isatty() and sys.stdout.isatty():
         ask = ask_supervisor
-    print(wrap([("", f"ShiftOps advisor | model {model} | read-only database"), ("", f"Question: {question}")], width))
+    print(wrap([("", f"ShiftOps advisor | model {model} | read-only database"),
+                ("", ""), ("", "QUESTION:"), ("  ", question)], width))
     status = None
     for event in agent_steps(question, conn, provider, rates=pricing.rates_for(model), ask=ask):
         print(render(event, conn, width), flush=True)
