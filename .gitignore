@@ -50,3 +50,6 @@ Thumbs.db
 
 # Legacy Node output
 node_modules/
+
+# Local read-only folder, not part of this project
+/model-risk-agent-app-main/

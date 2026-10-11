@@ -1,4 +1,4 @@
-"""SCRIPTED provider for deterministic tests. These replies are pre-written, not real model output."""
+"""SCRIPTED provider for offline tests. These replies are pre-written, not real model output."""
 
 import copy
 import json
@@ -32,9 +32,37 @@ def tools_reply(*calls, input_tokens=800, output_tokens=60, cached_tokens=0, cac
 
 
 def final_reply(**fields):
-    final = {"status": "recommendation", "shift_id": None, "outgoing_worker_id": None, "recommended_worker_id": None,
-             "backup_worker_id": None, "rationale": "", "tradeoff": "", "clarification_question": None,
-             "evidence_refs": []}
-    final.update(fields)
-    return ModelReply(status="completed", text=json.dumps(final), input_tokens=1500, output_tokens=150,
+    answer = {"status": "recommendation", "shift_id": None, "ask_first": None, "backup": None,
+              "explanation": None, "question": None}
+    answer.update(fields)
+    return ModelReply(status="completed", text=json.dumps(answer), input_tokens=1500, output_tokens=150,
                       cached_tokens=0, cache_write_tokens=0)
+
+
+# ----- the Andromeda Oct 12, 6 PM-11 PM scenario (Jordan calls out), as scripted model replies -----
+
+S1 = "AND-1012-EVE"
+S1_IDS = ["W05", "W09", "W14", "W21"]
+S1_QUESTION = "Jordan called out for Andromeda's October 12 evening shift. Who should I ask first?"
+
+
+def find_args(**fields):
+    args = {"shift_id": None, "date": None, "hall": None, "shift_name": None, "start_time": None, "worker": None}
+    args.update(fields)
+    return args
+
+
+S1_FIND = tools_reply(("find_shift", find_args(date="2026-10-12", hall="Andromeda", shift_name="Evening", worker="Jordan")))
+S1_ELIGIBLE = tools_reply(("get_eligible_candidates", {"shift_id": S1}))
+S1_CONTEXT = tools_reply(("get_preferences", {"shift_id": S1, "worker_ids": S1_IDS}),
+                         ("get_coverage_history", {"shift_id": S1, "worker_ids": S1_IDS, "lookback_days": 14}),
+                         ("get_nearby_classes", {"shift_id": S1, "worker_ids": S1_IDS, "window_minutes": 120}))
+S1_INVESTIGATION = [S1_FIND, S1_ELIGIBLE, S1_CONTEXT]
+
+
+def s1_answer(**fields):
+    answer = {"shift_id": S1, "ask_first": "W14", "backup": "W21",
+              "explanation": "Skyler has no recent emergency coverage and the most spare hours; Riley prefers "
+                             "the shift but completed three emergency covers recently."}
+    answer.update(fields)
+    return final_reply(**answer)
